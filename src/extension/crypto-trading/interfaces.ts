@@ -46,15 +46,33 @@ export interface CryptoPlaceOrderRequest {
   price?: number;
   leverage?: number;
   reduceOnly?: boolean;
+  /** Stable idempotency key for cross-process dedupe and exchange-side client order ID. */
+  idempotencyKey?: string;
 }
+
+export type CryptoOrderStatus =
+  | 'pending'
+  | 'partially_filled'
+  | 'filled'
+  | 'cancelled'
+  | 'rejected';
 
 export interface CryptoOrderResult {
   success: boolean;
   orderId?: string;
   error?: string;
   message?: string;
+  orderStatus?: CryptoOrderStatus;
+  requestedSize?: number;
+  remainingSize?: number;
   filledPrice?: number;
   filledSize?: number;
+  averageFillPrice?: number;
+  firstFillAtMs?: number;
+  completedAtMs?: number;
+  exchangeUpdateTs?: number;
+  idempotencyKey?: string;
+  retryOfOrderId?: string;
 }
 
 export interface CryptoOrder {
@@ -66,9 +84,15 @@ export interface CryptoOrder {
   price?: number;
   leverage?: number;
   reduceOnly?: boolean;
-  status: 'pending' | 'filled' | 'cancelled' | 'rejected';
+  status: CryptoOrderStatus;
   filledPrice?: number;
   filledSize?: number;
+  requestedSize?: number;
+  remainingSize?: number;
+  averageFillPrice?: number;
+  firstFillAtMs?: number;
+  completedAtMs?: number;
+  exchangeUpdateTs?: number;
   filledAt?: Date;
   createdAt: Date;
   rejectReason?: string;
@@ -98,6 +122,8 @@ export interface CryptoAccountInfo {
   equity: number;
   realizedPnL: number;
   totalPnL: number;
+  realizedPnlSource?: "balance_payload" | "closed_trades_ledger" | "derived_fallback";
+  realizedPnlConfidence?: number;
 }
 
 // ==================== Precision ====================

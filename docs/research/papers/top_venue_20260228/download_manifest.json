@@ -1,0 +1,110 @@
+[
+  {
+    "id": "1905.03222",
+    "name": "CQR_NeurIPS2019",
+    "url": "https://arxiv.org/pdf/1905.03222.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/CQR_NeurIPS2019.pdf",
+    "ok": true,
+    "bytes": 1430567,
+    "error": ""
+  },
+  {
+    "id": "2202.07282",
+    "name": "AdaptiveConformal_TS_2022",
+    "url": "https://arxiv.org/pdf/2202.07282.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/AdaptiveConformal_TS_2022.pdf",
+    "ok": true,
+    "bytes": 1187757,
+    "error": ""
+  },
+  {
+    "id": "1904.06019",
+    "name": "Conformal_CovariateShift_ICML2020",
+    "url": "https://arxiv.org/pdf/1904.06019.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/Conformal_CovariateShift_ICML2020.pdf",
+    "ok": true,
+    "bytes": 423685,
+    "error": ""
+  },
+  {
+    "id": "JePfAI8fah",
+    "name": "iTransformer_ICLR2024",
+    "url": "https://openreview.net/pdf?id=JePfAI8fah",
+    "file": "docs/research/papers/top_venue_20260228/pdf/iTransformer_ICLR2024.pdf",
+    "ok": true,
+    "bytes": 6180839,
+    "error": ""
+  },
+  {
+    "id": "2211.14730",
+    "name": "PatchTST_ICLR2023",
+    "url": "https://arxiv.org/pdf/2211.14730.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/PatchTST_ICLR2023.pdf",
+    "ok": true,
+    "bytes": 4027069,
+    "error": ""
+  },
+  {
+    "id": "2205.14415",
+    "name": "NonstationaryTransformer_NeurIPS2022",
+    "url": "https://arxiv.org/pdf/2205.14415.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/NonstationaryTransformer_NeurIPS2022.pdf",
+    "ok": true,
+    "bytes": 3211246,
+    "error": ""
+  },
+  {
+    "id": "2106.13008",
+    "name": "Autoformer_NeurIPS2021",
+    "url": "https://arxiv.org/pdf/2106.13008.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/Autoformer_NeurIPS2021.pdf",
+    "ok": true,
+    "bytes": 12212707,
+    "error": ""
+  },
+  {
+    "id": "1808.03668",
+    "name": "DeepLOB_2018",
+    "url": "https://arxiv.org/pdf/1808.03668.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/DeepLOB_2018.pdf",
+    "ok": true,
+    "bytes": 640497,
+    "error": ""
+  },
+  {
+    "id": "RFS_33_5_2223",
+    "name": "EmpiricalAssetPricing_RFS2020",
+    "url": "https://academic.oup.com/rfs/article-pdf/33/5/2223/33457320/hhz134.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/EmpiricalAssetPricing_RFS2020.pdf",
+    "ok": false,
+    "bytes": 0,
+    "error": "HTTP Error 403: Forbidden"
+  },
+  {
+    "id": "w29330",
+    "name": "VirtueComplexity_NBER29330",
+    "url": "https://www.nber.org/system/files/working_papers/w29330/w29330.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/VirtueComplexity_NBER29330.pdf",
+    "ok": true,
+    "bytes": 673938,
+    "error": ""
+  },
+  {
+    "id": "w30265",
+    "name": "HFTPredictability_NBER30265",
+    "url": "https://www.nber.org/system/files/working_papers/w30265/w30265.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/HFTPredictability_NBER30265.pdf",
+    "ok": true,
+    "bytes": 2091719,
+    "error": ""
+  },
+  {
+    "id": "zhao22d",
+    "name": "CalibratedSharpUncertainty_ICML2022",
+    "url": "https://proceedings.mlr.press/v162/zhao22d/zhao22d.pdf",
+    "file": "docs/research/papers/top_venue_20260228/pdf/CalibratedSharpUncertainty_ICML2022.pdf",
+    "ok": true,
+    "bytes": 29201684,
+    "error": ""
+  }
+]

@@ -30,7 +30,12 @@ export interface Operation {
 // ==================== Operation Result ====================
 
 /** Operation execution status */
-export type OperationStatus = 'filled' | 'pending' | 'rejected' | 'cancelled';
+export type OperationStatus =
+  | 'filled'
+  | 'partially_filled'
+  | 'pending'
+  | 'rejected'
+  | 'cancelled';
 
 /** Operation execution result */
 export interface OperationResult {
@@ -38,9 +43,13 @@ export interface OperationResult {
   success: boolean;
   orderId?: string;
   status: OperationStatus;
+  requestedSize?: number;
+  remainingSize?: number;
   // Fill information (when filled)
   filledPrice?: number;
   filledSize?: number;
+  firstFillAtMs?: number;
+  completedAtMs?: number;
   // Error information (when rejected)
   error?: string;
   // Raw response (preserves complete information)
@@ -103,6 +112,7 @@ export interface PushResult {
   message: string;
   operationCount: number;
   filled: OperationResult[];
+  partiallyFilled: OperationResult[];
   pending: OperationResult[];
   rejected: OperationResult[];
 }
@@ -154,6 +164,10 @@ export interface OrderStatusUpdate {
   currentStatus: OperationStatus;
   filledPrice?: number;
   filledSize?: number;
+  previousFilledSize?: number;
+  currentFilledSize?: number;
+  remainingSize?: number;
+  exchangeUpdateTs?: number;
 }
 
 /** sync() return value */

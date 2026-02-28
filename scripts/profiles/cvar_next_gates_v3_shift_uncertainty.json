@@ -1,0 +1,53 @@
+{
+  "profileName": "gates_v3_shift_uncertainty",
+  "mainOrder": ["H0", "H7", "H8", "H9"],
+  "mainConfigs": {
+    "H0": {
+      "calibration_method": "sigmoid",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {}
+    },
+    "H7": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--min-confidence": "0.65",
+        "--min-expected-return-pct": "0.06",
+        "--conformal-alpha": "0.08",
+        "--decision-use-conformal-lower-bound": "true"
+      }
+    },
+    "H8": {
+      "calibration_method": "sigmoid",
+      "regime_method": "kmeans",
+      "regime_scheme": "kmeans_v1",
+      "regime_schema_version": "v1_kmeans_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--conformal-alpha": "0.10",
+        "--conformal-shift-weight-clip-min": "0.50",
+        "--conformal-shift-weight-clip-max": "3.0",
+        "--decision-use-conformal-lower-bound": "true"
+      }
+    },
+    "H9": {
+      "calibration_method": "sigmoid",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost,ridge",
+      "extra_args": {
+        "--labeling-mode": "next_return_sign",
+        "--model-safety-min-robust-cost-aware-utility": "0.05",
+        "--model-safety-min-cost-aware-utility": "0.02",
+        "--model-safety-min-net-return-pct-after-cost": "5.0"
+      }
+    }
+  }
+}

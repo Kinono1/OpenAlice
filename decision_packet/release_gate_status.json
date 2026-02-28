@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "generatedAt": "2026-02-25T12:01:19.574Z",
+  "allowPaperTrading": false,
+  "allowLiveTrading": false,
+  "failedChecks": [
+    "paper_pass_ratio",
+    "significance_pass_ratio",
+    "mean_pbo",
+    "mean_dsr_probability"
+  ],
+  "warningChecks": [
+    "positive_lift_ratio"
+  ],
+  "sourceReportPath": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/logs/research/replay_v2_sanity_full_btc_20260225T005/matrix/p_exchange_regime__r_kmeans_v1__g_stage2__t_16/report/completion_replay.json",
+  "expiresAt": "2026-03-04T12:01:19.574Z"
+}

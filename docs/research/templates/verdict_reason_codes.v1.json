@@ -1,0 +1,92 @@
+{
+  "version": "v1",
+  "namingRule": "SEVERITY_SUBJECT_CONDITION (UPPER_SNAKE_CASE)",
+  "canonicalOnly": true,
+  "codes": [
+    {
+      "code": "HARD_MISSING_ARTIFACT",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "必需证据工件缺失。",
+      "descriptionEn": "Required evidence artifact is missing."
+    },
+    {
+      "code": "HARD_REASON_CODE_UNKNOWN",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "发现未注册或已废弃的 reason code。",
+      "descriptionEn": "An unknown or deprecated reason code was found."
+    },
+    {
+      "code": "HARD_FREEZE_MANIFEST_INVALID",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "freeze manifest 校验失败。",
+      "descriptionEn": "Freeze manifest validation failed."
+    },
+    {
+      "code": "HARD_HARD_GATE_CHECK_FAILED",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "至少一个 hardGateChecks 条目失败。",
+      "descriptionEn": "At least one hardGateChecks item failed."
+    },
+    {
+      "code": "HARD_METRIC_MISSING",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "阈值对比所需指标缺失。",
+      "descriptionEn": "A required metric for threshold evaluation is missing."
+    },
+    {
+      "code": "HARD_THRESHOLD_BREACH",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "至少一个硬阈值被突破。",
+      "descriptionEn": "At least one hard threshold was breached."
+    },
+    {
+      "code": "HARD_RELEASE_GATE_BLOCKED",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "release gate 不允许 live。",
+      "descriptionEn": "Release gate does not allow live trading."
+    },
+    {
+      "code": "HARD_RELEASE_GATE_EXPIRED",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "release gate 已过期或状态过旧。",
+      "descriptionEn": "Release gate is expired or status is stale."
+    },
+    {
+      "code": "HARD_CONSTRAINTS_INVALID",
+      "severity": "HARD",
+      "hardGate": true,
+      "descriptionZh": "GO_WITH_CONSTRAINTS 缺必要字段或无效。",
+      "descriptionEn": "GO_WITH_CONSTRAINTS is missing required fields or is invalid."
+    },
+    {
+      "code": "WARN_CONSTRAINTS_PRESENT",
+      "severity": "WARN",
+      "hardGate": false,
+      "descriptionZh": "存在上线约束条款。",
+      "descriptionEn": "Deployment constraints are present."
+    },
+    {
+      "code": "INFO_VALIDATION_PASSED",
+      "severity": "INFO",
+      "hardGate": false,
+      "descriptionZh": "所有校验通过。",
+      "descriptionEn": "All validations passed."
+    }
+  ],
+  "deprecatedAliases": [
+    {
+      "alias": "HARD_ARTIFACT_MISSING",
+      "canonical": "HARD_MISSING_ARTIFACT",
+      "status": "deprecated",
+      "strictReject": true
+    }
+  ]
+}

@@ -6,6 +6,10 @@ import type { Heartbeat } from '../task/heartbeat/index.js'
 import type { Config } from './config.js'
 import type { Engine } from './engine.js'
 import type { EventLog } from './event-log.js'
+import type { DecisionTicketStore } from '../extension/crypto-trading/decision-ticket.js'
+import type { IntentLedger } from '../extension/crypto-trading/intent-ledger.js'
+import type { KillSwitch } from '../extension/crypto-trading/kill-switch.js'
+import type { PnLTracker } from '../extension/crypto-trading/pnl-tracker.js'
 
 export type { Config }
 
@@ -24,6 +28,16 @@ export interface EngineContext {
   eventLog: EventLog
   heartbeat: Heartbeat
   cronEngine: CronEngine
+  /** Whether the system is shutting down (middleware returns 503). */
+  stopped: boolean
+  /** Decision ticket store for trade approval. */
+  ticketStore?: DecisionTicketStore
+  /** Intent ledger for trade audit trail. */
+  intentLedger?: IntentLedger
+  /** Per-symbol kill switch. */
+  killSwitch?: KillSwitch
+  /** Dual-track PnL tracker (AvgCost authoritative, FIFO audit). */
+  pnlTracker?: PnLTracker
 }
 
 /** A media attachment collected from tool results (e.g. browser screenshots). */

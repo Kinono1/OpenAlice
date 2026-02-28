@@ -27,6 +27,12 @@ Thumbs.db
 # Test
 coverage/
 
+# Python ML runtime
+.venv/
+__pycache__/
+*.pyc
+catboost_info/
+
 # Claude Code
 CLAUDE.md
 .claude/

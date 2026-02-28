@@ -7,6 +7,10 @@
 import type { ICryptoTradingEngine } from './interfaces';
 import type { Config } from '../../core/config';
 import { CcxtTradingEngine } from './providers/ccxt/index';
+import {
+  assertSafeTradingMode,
+  assertTradingInterfaceAuthToken,
+} from './trading-guard.js';
 
 export interface CryptoTradingEngineResult {
   engine: ICryptoTradingEngine;
@@ -31,6 +35,11 @@ export async function createCryptoTradingEngine(
       return null;
 
     case 'ccxt': {
+      assertTradingInterfaceAuthToken(process.env);
+      assertSafeTradingMode({
+        sandbox: providerConfig.sandbox,
+        demoTrading: providerConfig.demoTrading,
+      }, process.env);
       const apiKey = process.env.EXCHANGE_API_KEY;
       const apiSecret = process.env.EXCHANGE_API_SECRET;
       const password = process.env.EXCHANGE_PASSWORD;

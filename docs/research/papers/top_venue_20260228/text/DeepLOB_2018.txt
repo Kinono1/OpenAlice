@@ -1,0 +1,902 @@
+                                            JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                1
+
+
+
+
+                                                DeepLOB: Deep Convolutional Neural Networks
+                                                          for Limit Order Books
+                                                                                        Zihao Zhang, Stefan Zohren, and Stephen Roberts
+
+
+
+
+                                               Abstract—We develop a large-scale deep learning model to                      everyday, it is natural to employ more modern data-driven
+                                            predict price movements from limit order book (LOB) data                         machine learning techniques to extract such features.
+                                            of cash equities. The architecture utilises convolutional filters                    In addition, limit order data, like any other financial time-
+                                            to capture the spatial structure of the limit order books as
+
+
+
+
+arXiv:1808.03668v6 [q-fin.CP] 23 Jan 2020
+                                            well as LSTM modules to capture longer time dependencies.                        series data is notoriously non-stationary and dominated by
+                                            The proposed network outperforms all existing state-of-the-art                   stochastics. In particular, orders at deeper levels of the LOB
+                                            algorithms on the benchmark LOB dataset [1]. In a more                           are often placed and cancelled in anticipation of future price
+                                            realistic setting, we test our model by using one year market                    moves and are thus even more prone to noise. Other problems,
+                                            quotes from the London Stock Exchange and the model delivers                     such as auction and dark pools [6], also add additional difficul-
+                                            a remarkably stable out-of-sample prediction accuracy for a
+                                            variety of instruments. Importantly, our model translates well to                ties, bringing ever more unobservability into the environment.
+                                            instruments which were not part of the training set, indicating                  The interested reader is referred to [7] in which a number of
+                                            the model’s ability to extract universal features. In order to                   these issues are reviewed.
+                                            better understand these features and to go beyond a “black                           In this paper we design a novel deep neural network
+                                            box” model, we perform a sensitivity analysis to understand the                  architecture that incorporates both convolutional layers as well
+                                            rationale behind the model predictions and reveal the components
+                                            of LOBs that are most relevant. The ability to extract robust                    as Long Short-Term Memory (LSTM) units to predict future
+                                            features which translate well to other instruments is an important               stock price movements in large-scale high-frequency LOB
+                                            property of our model which has many other applications.                         data. One advantage of our model over previous research [8]
+                                                                                                                             is that it has the ability to adapt for many stocks by extracting
+                                                                                                                             representative features from highly noisy data.
+                                                                      I. I NTRODUCTION                                           In order to avoid the limitations of handcrafted features, we
+                                                                                                                             use a so-called Inception Module [9] to wrap convolutional and
+                                            I   N today’s competitive financial world more than half of the
+                                                markets use electronic Limit Order Books (LOBs) [2] to
+                                            record trades [3]. Unlike traditional quote-driven marketplaces,
+                                                                                                                             pooling layers together. The Inception Module helps to infer
+                                                                                                                             local interactions over different time horizons. The resulting
+                                            where traders can only buy or sell an asset at one of the prices                 feature maps are then passed into LSTM units which can
+                                            made publicly by market makers, traders now can directly                         capture dynamic temporal behaviour. We test our model on
+                                            view all resting limit orders1 in the limit order book of an                     a publicly available LOB dataset, known as FI-2010 [1], and
+                                            exchange. Because limit orders are arranged into different                       our method remarkably outperforms all existing state-of-the-
+                                            levels based on their submitted prices, the evolution in time of                 art algorithms. However, the FI-2010 dataset is only made up
+                                            a LOB represents a multi-dimensional problem with elements                       of 10 consecutive days of down-sampled pre-normalised data
+                                            representing the numerous prices and order volumes/sizes at                      from a less liquid market. While it is a valuable benchmark set,
+                                            multiple levels of the LOB on both the buy and sell sides.                       it is arguable not sufficient to fully verify the robustness of an
+                                               A LOB is a complex dynamic environment with high di-                          algorithm. To ensure the generalisation ability of our model,
+                                            mensionality, inducing modelling complications that make tra-                    we further test it by using one year order book data for 5
+                                            ditional methods difficult to cope with. Mathematical finance is                 stocks from the London Stock Exchange (LSE). To minimise
+                                            often dominated by models of evolving price sequences. This                      the problem of overfitting to backtest data, we carefully opti-
+                                            leads to a range of Markov-like models with stochastic driving                   mise any hyper-parameter on a separate validation set before
+                                            terms, such as the vector autoregressive model (VAR) [4] or                      moving to the out-of-sample test set. Our model delivers robust
+                                            the autoregressive integrated moving average model (ARIMA)                       out-of-sample prediction accuracy across stocks over a test
+                                            [5]. These models, to avoid excessive parameter spaces, often                    period of three months.
+                                            rely on handcrafted features of the data. However, given                             As well as presenting results on out-of-sample data (in a
+                                            the billions of electronic market quotes that are generated                      timing sense) from stocks used to form the training set, we
+                                                                                                                             also test our model on out-of-sample (in both timing and
+                                               The authors are with the Oxford-Man Institute of Quantitative Finance,        data stream sense) stocks that are not part of the training set.
+                                            Department of Engineering Science, University of Oxford (e-mail: zi-             Interestingly, we still obtain good results over the whole testing
+                                            hao@robots.ox.ac.uk).
+                                               Github: https://github.com/zcakhaa                                            period. We believe this observation shows not only that the
+                                               1 Limit orders are orders that do not match immediately upon submission       proposed model is able to extract robust features from order
+                                            and are also called passive orders. This is opposed to orders that match         books, but also indicates the existence of universal features
+                                            immediately, so-called aggressive orders, such as a market order. A LOB
+                                            is simply a record of all resting/outstanding limit orders at a given point in   in the order book that modulate stock demand and price. The
+                                            time.                                                                            ability to transfer the model to new instruments opens up a
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                  2
+
+
+
+number of possibilities that we consider for future work.                         Linear Discriminant Analysis (LDA) in the work of [24]. How-
+   To show the practicability of our model we use it in a simple                  ever these extraction methods are static pre-processing steps,
+trading simulation. We focus on sufficiently liquid stocks                        which are not optimised to maximise the overall objective
+so that slippage and market impact are small. Indeed, these                       of the model that observes them. In the work of [25, 24],
+stocks are generally harder to predict than less liquid ones.                     the Bag-of-Features model (BoF) is expressed as a neural
+Since our trading simulation is mainly meant as a method of                       layer and the model is trained end-to-end using the back-
+comparison between models we assume trading takes place at                        propagation algorithm, leading to notably better results on the
+mid-price2 and compare gross profits before fees. The former                      FI-2010 dataset [1]. These works suggest the importance of a
+assumption is equivalent to assuming that one side of the                         data driven approach to extract representative features from a
+trade may be entered into passively and the latter assumes                        large amout of data. In our work, we advocate the end-to-end
+that different models trade similar volumes and would thus be                     training and show that the deep neural network by itself not
+subject to similar fees. Our focus here is using a simulation as                  only leads to even better results but also transfers well to new
+a measure of the relative value of the model predictions in a                     instruments (not part of the training set) - indicating the ability
+trading setting. Under these simplifications, our model delivers                  of networks to extract “universal” features from the raw data.
+significantly positive returns with a relatively small risk.                         Arguably, one of the key contributions of modern deep
+   Although our network achieves good performance, a com-                         learning is the addition of feature extraction and representation
+plex “black box” system, such as a deep neural network,                           as part of the learned model. The Convolutional Neural Net-
+has limited use for financial applications without some un-                       work (CNN) [30] is a prime example, in which information
+derstanding of the rationale behind the model predictions.                        extraction, in the form of filter banks, is automatically tuned to
+Here we exploit the model-agnostic LIME method [10] to                            the utility function that the entire network aims to optimise.
+highlight highly relevant components in the order book to gain                    CNNs have been successfully applied to various application
+a better understanding between our predictions and model in-                      domains, for example, object tracking [31], object-detection
+puts. Reassuringly, these conform to sensible (though arguably                    [32] and segmentation [33]. However, there have been but
+unusual) patterns of activity in both price and volume within                     a few published works that adopt CNNs to analyse finan-
+the order book.                                                                   cial microstructure data [34, 35, 26] and the existing CNN
+     Outline: The remainder of the paper is as follows.                           architectures are rather unsophisticated and lack of thorough
+Section II introduces background and related work. Section                        investigation. Just like when moving from “AlexNet” [36] to
+III describes limit order data and the various stages of data                     “VGGNet” [37], we show that a careful design of network
+preparation. We present our network architecture in Section IV                    archiecture can lead to better results compared with all existing
+and give justifications behind each component of the model. In                    methods.
+Section V we compare our work with a large group of popular                          The Long Short-Term Memory (LSTM) [38] was originally
+methods. Section VI summarises our findings and considers                         proposed to solve the vanishing gradients problem [39] of
+extensions and future work.                                                       recurrent neural networks, and has been largely used in ap-
+                                                                                  plications such as language modelling [40] and sequence to
+            II. BACKGROUND AND R ELATED W ORK                                     sequence learning [41]. Unlike CNNs which are less widely
+   Research on the predictability of stock markets has a long                     applied in financial markets, the LSTM has been popular in
+history in the financial literature e.g., [11, 12]. Although opin-                recent years, [42, 28, 43, 44, 45, 46, 47, 20] all utilising
+ions differ regarding the efficiency of markets, many widely                      LSTMs to analyse financial data. In particular, [20] uses
+accepted studies show that financial markets are to some extent                   limit order data from 1000 stocks to test a four layer LSTM
+predictable [13, 14, 15, 16]. Two major classes of work which                     model. Their results show a stable out-of-sample prediction
+attempt to forecast financial time-series are, broadly speaking,                  accuracy across time, indicating the potential benefits of deep
+statistical parametric models and data-driven machine learn-                      learning methods. To the best of our knowledge, there is no
+ing approaches [17]. Traditional statistical methods generally                    work that combines CNNs with LSTMs to predict stock price
+assume that the time-series under study are generated from                        movements and this is the first extensive study to apply a
+a parametric process [18]. There is, however, agreement that                      nested CNN-LSTM model to raw market data. In particular,
+stock returns behave in more complex ways, typically highly                       the usage of the Inception Model in this context is novel and is
+nonlinearly [19, 20]. Machine learning techniques are able to                     essential in inferring the optimal “decay rates” of the extracted
+capture such arbitrary nonlinear relationships with little, or no,                features.
+prior knowledge regarding the input data [21].
+   Recently, there has been a surge of interest to predict                               III. DATA , N ORMALISATION AND L ABELLING
+limit order book data by using machine learning algorithms                        A. Limit Order Books
+[1, 22, 23, 24, 25, 26, 27, 20, 28, 29]. Among many machine
+learning techniques, pre-processing or feature extraction is of-                     We first introduce some basic definitions of limit order
+ten performed as financial time-series data is highly stochastic.                 books (LOBs). For classical references on market microstruc-
+Generic feature extraction approches have been implemented,                       ture the reader is referred to [48, 49] and for a short review
+such as the Principal Component Analysis (PCA) and the                            on LOBs in particular we refer to [7]. Here we follow the
+                                                                                  conventions of [7]. A LOB has two types of orders: bid orders
+  2 The average of the best buy and best sell prices in the market at the time.   and ask orders. A bid (ask) order is an order to buy (sell) an
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                   3
+
+
+
+                                        Volume                                      is severe and we often expect a signal to be consistent over a
+                    Bid                                Ask
+                                                                                    few months.
+         L4    L3         L2      L1        L1    L2      L3    L4                     To address the above concerns, we train and test our model
+                                  -
+                                  Bi                                                on limit order book data of one year length for Lloyds Bank,
+                                  d                                                 Barclays, Tesco, BT and Vodafone. These five instruments are
+                                                                                    among the most liquid stocks listed on the London Stock
+                                                                          time: t
+                                                                                    Exchange. It is generally more difficult to train models on
+                                                                                    more liquid stocks, but at the same time, those instruments
+         20.2 20.3 20.4 20.5                20.6 20.7 20.8 20.9 Price/$             are easier to trade without price impact so making the simple
+                                      ($)   ($)
+                                  !' (&) !" (&)
+                                                                                    trading simulation used to assess performance more realistic.
+                                                                                    The data includes all LOB updates for the above names.
+         L4    L3         L2      L1                      L1    L2                  It spans all trading days from 3rd January 2017 to 24th
+                                  -
+                                  Bi                                                December 2017 and we restrict it to the interval between
+                                  d                                                 08:30:00 and 16:00:00, so that only normal trading activities
+                                                                      time: t+1
+                                                                                    occur and no auction takes place. Each state of the LOB
+                                                                                    contains 10 levels on each side and each level contains
+                                                                                    information on both price and volume. Therefore, we have
+         20.2 20.3 20.4 20.5                20.6 20.7 20.8 20.9 Price/$
+                                ($)                     ($)                         a total of 40 features at each timestamp. Note that the FI-
+                               !' (& + 1)              !" (& + 1)
+                                                                                    2010 dataset is actually downsampled limit order book data
+Figure 1. A slice of LOB at time t and t + 1. L1 represents the respective
+                                                                                    because the authors followed [50] to create additional features
+                                  (1)
+first level, L2 the second, etc. pa (t) is the lowest ask price (best ask) and      by using every non-overlapping block of 10 events. We did
+  (1)
+pb (t) is the highest bid price (best bid) at time t.                               not perform any processing on our data and only feed raw
+                                                                                    order book information to our algorithm.
+                                                                                       Overall, our LSE dataset is made up of 12 months, and has
+asset at or below (above) a specified price. The bid orders have                    more than 134 million samples. On average, there are 150,000
+prices Pb (t) and sizes/volumes Vb (t), and the ask orders have                     events per day per stock. The events are irregularly spaced
+prices Pa (t) and sizes/volumes    Volume
+                                         Va (t). Both P(t) and V(t) are                      The time interval, ∆k,k+1 , between two events can
+                                                                                    in time.Volume
+vectors representing values at different price levels of an asset.                  vary considerably from a fraction of a second to seconds, and
+   Figure 1 illustrates the above concepts. The upper plot                          ∆k,k+1 is on average 0.192 seconds in the dataset. We take the
+shows a slice of a LOB at time t. Each square in the                                first 6 months as training data, the next 3 months as validation
+plot represents an order of nominal size 1. This is done                            data and the last 3 months as test data. In the context of high-
+for simplicity, in reality different orders can be of different                     frequency data, 3 months test data corresponds to millions of
+sizes. The blue bars represent bid orders and the yellow bars                       observations and therefore provides sufficient scope for testing
+represent ask orders. Orders are sorted into different levels                       model performance and estimating model accuracy.
+                                                           Price/$
+based on their submitted prices, where L1 represents the first
+level and20.2so20.25
+                 on.20.26
+                       Each20.27level
+                                   20.28contains
+                                         20.29 20.30two
+                                                     20.31values: price     and 20.26 20.27 20.28 20.29 20.30
+                                                                     20.24 20.25
+volume. On theBid    bid side, Pb (t) andAsk   Vb (t) are 4-vectors in this   Bid C. Data Normalisation
+                                                                                                      Ask       and Labelling
+                        (1)
+example. We use pb (t) to denote the highest available price
+for a buying order (first bid level).
+                                                                 (1)
+                                                 Similarly, pa (t) is the              The FI-2010 dataset [1] provides 3 different normalised
+                                              Ask                                   dataset:    z-score, min-max and decimal precision normali-
+lowest available selling order (first ask level). The        Bid bottom plot
+shows the action of an incoming market order to buy 5 shares                        sation.    We
+                                                                                           Price
+                                                                                                    used data normalised by z-score without any
+at time t + 1. As a result, the entire first and second ask-levels                  emendation     and  found subtle difference when using the other
+                                                (1)
+are executed against that order and pa (t + 1) moved to 20.8                        two  normalisation    schemes. For the LSE dataset, we again use
+from 20.6 at time t.                                                                standardisation    (z-score)   to normalise our data, but use the
+                                                                                    mean and standard deviation of the previous 5 days’ data to
+                                                                                    normalise the current day’s data (with a separate normalisation
+B. Input Data                                                                       for each instrument). We want to emphasize the importance
+   We test our model on two datasets: the FI-2010 dataset of normalisation because the performance of machine learning
+[1] and one year length of limit order book data from the algorithms often depends it. As financial time-series usually
+London Stock Exchange (LSE). The FI-2010 dataset [1] is the experiences regime shifts, using a static normalisation scheme
+first publicly available benchmark dataset of high-frequency is not appropriate for a dataset of one year length. The above
+limit order data and extracted time series data for five stocks method is dynamic and the normalised data often falls into
+from the Nasdaq Nordic stock market for a time period of a reasonable range. We use the 100 most recent states of the
+10 consecutive days. Many earlier algorithms are tested on LOB as an input to our model for both datasets. Specifically, a
+this dataset and we use it to establish a fair comparison to single input is defined as X = [x1 , x2 , · · · , xt , · · · , x100 ]T ∈
+                                                                                                               (i)      (i)    (i)    (i)
+other algorithms. However, 10 days is an insufficient amount R100×40 , where xt = [pa (t), va (t), pb (t), vb (t)]n=10                      i=1 . p
+                                                                                                                                                    (i)
+                                                                                           (i)
+of data to fully test the robustness and generalisation ability and v denote the price and volume size at i-th level of a
+of an algorithm as the problem of overfitting to backtest data limit order book.
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                            4
+
+
+
+  After normalising the limit order data, we use the mid-price        26.30                                                              pt
+                                                                      26.25
+                             (1)         (1)                          26.20
+                            pa (t) + pb (t)                           26.15
+                     pt =                   ,                (1)      26.10
+                                   2
+                                                                              0         200        400         600         800        1000
+to create labels that represent the direction of price changes.       26.30                                                              pt
+Although no order can transact exactly at the mid-price,              26.25
+                                                                      26.20
+it expresses a general market value for an asset and it is            26.15
+frequently quoted when we want a single number to represent           26.10
+an asset price.                                                               0         200        400         600         800        1000
+   Because financial data is highly stochastic, if we simply       Figure 2. An example of two smoothed labelling methods based on a same
+compare pt and pt+k to decide the price movement, the              threshold (α) and same prediction horizon (k). Green shading represents a +1
+resulting label set will be noisy. In the works of [1] and [26],   signal and red a -1. Top: [1]’s method and Bottom: [26]’s method.
+two smoothing labelling methods are introduced. We briefly
+recall the two methods here. First, let m− denote the mean
+                                                                                      IV. M ODEL A RCHITECTURE
+of the previous k mid-prices and m+ denote the mean of the
+next k mid-prices:                                                 A. Overview
+                                                                      We here detail our network architecture, which comprises
+                                     k
+                               1X                                  three main building blocks: standard convolutional layers, an
+                      m− (t) =       pt−i
+                               k i=0                               Inception Module and a LSTM layer, as shown in Figure 3.
+                                     k
+                                                             (2)   The main idea of using CNNs and Inception Modules is to
+                               1X                                  automate the process of feature extraction as it is often difficult
+                      m+ (t) =       pt+i
+                               k i=1                               in financial applications since financial data is notoriously
+                                                                   noisy with a low signal-to-noise ratio. Technical indicators
+where pt is the mid-price defined in Equation (1) and k is the     such as MACD and the Relative Strength Index are included as
+prediction horizon. Both methods use the percentage change         inputs and preprocessing mechanisms such as principal com-
+(lt ) of the mid-price to decide directions. We can now define     ponent analysis (PCA) [51] are often used to transform raw
+                                                                   inputs. However, none of these processes is trivial, they make
+                               m+ (t) − pt
+                        lt =                                 (3)   tacit assumptions and further, it is questionable if financial
+                                   pt                              data can be well-described with parametric models with fixed
+                                                                   parameters. In our work, we only require the history of LOB
+                            m+ (t) − m− (t)
+                     lt =                                    (4)   prices and sizes as inputs to our algorithm. Weights are learned
+                                m− (t)                             during inference and features, learned from a large training set,
+Both are methods to define the direction of price movement         are data-adaptive, removing the above constraints. A LSTM
+at time t, where the former, Equation 3, was used in [1] and       layer is then used to capture additional time dependencies
+the latter, Equation 4, in [26].                                   among the resulting features. We note that very short time-
+   The labels are then decided based on a threshold (α) for        dependencies are already captured in the convolutional layer
+the percentage change (lt ). If lt > α or lt < −α, we define       which takes “space-time images” of the LOB as inputs.
+it as up (+1) or down (−1). For anything else, we consider
+it as stationary (0). Figure 2 provides a graphical illustration   B. Details of Each Component
+of two labelling methods on the same threshold (α) and the               a) Convolutional Layer: Recent development of elec-
+same prediction horizon (k). All the labels classified as down     tronic trading algorithms often submit and cancel vast numbers
+(−1) are shown as red areas and up (+1) as green areas. The        of limit orders over short periods of time as part of their
+uncoloured (white) regions correspond to stationary (0) labels.    trading strategies [52]. These actions often take place deep
+   The FI-2010 dataset [1] adopts the method in Equation 3         in a LOB and it is seen [7] that more than 90% of orders end
+and we directly used their labels for fair comparison to other     in cancellation rather than matching, therefore practitioners
+methods. However, the produced labels are less consistent as       consider levels further away from best bid and ask levels to
+shown on the top of Figure 2 because this method fits closer       be less useful in any LOB. In addition, the work of [53]
+to real prices as smoothing is only applied to future prices.      suggests that the best ask and best bid (L1-Ask and L1-Bid)
+This is essentially detrimental for designing trading algorithms   contribute most to the price discovery and the contribution
+as signals are not consistent here leading to many redundant       of all other levels is considerably less, estimated at as little
+trading actions thus incurring larger transaction costs.           as 20%. As a result, it would be otiose to feed all level
+   Further, the FI-2010 dataset was collected in 2010 and          information to a neural network as levels deep in a LOB are
+the instruments were less liquid compared to now. We ex-           less useful and can potentially even be misleading. Naturally,
+perimented with this approach in [1] on our data from the          we can smooth these signals by summarising the information
+London Stock Exchange and found the resulting labels are           contained in deeper levels. We note that convolution filters
+rather stochastic, therefore we adopt the method in Equation 4     used in any CNN architecture are discrete convolutions, or
+for our LSE dataset to produce more consistent signals.            finite impulse response (FIR) filters, from the viewpoint of
+                 JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                  5
+
+
+
+                                                                                                    because the kernel filter moves by one step, which is obviously
+                                                      Input
+                                                                                                    wrong as price and volume form different dynamic behaviors.
+   Conv
+1x2@16 (1,2)                                                                                           Because the first layer only captures information at each
+  4x1@16                                             Conv
+  4x1@16                                       1x2@16 (stride = 1x2)                                order book level, we would expect representative features to be
+                                                    4x1@16                                          extracted when integrating information across multiple order
+ 1x10@16                                            4x1@16
+  4x1@16                                                                                            book levels. We can do this by utilising another convolutional
+  4x1@16
+                                               1x2@16 (stride = 1x2)                                layer with filter size (1 × 2) and stride (1 × 2). The resulting
+ 1x10@16                                            4x1@16
+  4x1@16 Conv                                       4x1@16                                          feature maps actually form the micro-price defined by [55]:
+  4x1@16 1x10@16
+                                                                                                                                                      (1)
+          4x1@16
+          4x1@16
+                                                    1x10@16                                                       pmicro price = Ip(1)
+                                                                                                                                   a + (1 − I)pb
+                                                    4x1@16
+                                                    4x1@16                                                                                (1)
+                                                                                                                                                                  (7)
+                                                                                                                                      vb
+                                                                                                                             I=     (1)         (1)
+                                                                                                                                  va + vb
+                                                  Inception@32
+         Conv
+       1x10@16                                                                                      The weight I is called the imbalance. The micro-price is an
+        4x1@16                                                                                      important indicator as it considers volumes on bid and ask side,
+        4x1@16
+                                                 LSTM@64 Units                                      and the imbalance between bid and ask size is a very strong
+                                                                                                    indicator of the next price move. This feature of imbalances
+                                                                                                    has been reported by a variety of researchers [56, 57, 58, 59,
+                                                                                                    60]. Unlike the micro-price where only the first order book
+                                                                                                    level is considered, we utilise convolutions to form micro-
+                 Figure 3. Model architecture schematic. Here 1x2@16 represents a convolu-
+                 tional layer with 16 filters of size (1 × 2). ‘1’ convolves through time indices   prices for all levels of a LOB so the resulting features maps
+                 and ‘2’ convolves different limit order book levels.                               are of size (100, 10) after two layers with strides. Finally, we
+                                                                                                    integrate all information by using a large filter of size (1 × 10)
+                                                                                                    and the dimension of our feature maps before the Inception
+                 signal processing [54]. FIR filters are popular smoothing
+                                                                                                    Module is (100, 1).
+                 techniques for denoising target signals and they are simple
+                                                                                                       We apply zero padding to every convolutional layer so the
+                 to implement and work with. We can write any FIR filter in
+                                                                                                    time dimension of our inputs does not change and Leaky Rec-
+                 the following form:
+                                                                                                    tifying Linear Units (Leaky-ReLU) [61] are used as activation
+                                                    M
+                                                    X                                               functions. The hyper-parameter (the small gradient when the
+                                         y(n) =           bk x(n − k)                        (5)    unit is not active) of the Leaky-ReLU is set to 0.01, evaluated
+                                                    k=0
+                                                                                                    by grid search on the validation set.
+                 where the output signal y(n) at any time is a weighted sum                            Another important property of convolution is that of equiv-
+                 of a finite number of past values of the input signal x(n). The                    ariance to translation [62]. Specifically, a function f (x) is
+                 filter order is denoted as M and bk is the filter coefficient.                     equivariant to a function g if f (g(x)) = g(f (x)). For example,
+                 In a convolutional neural network, the coefficients of the                         suppose that there exists a main classification feature m
+                 filter kernel are not obtained via a statistical objective from                    located at (xm , ym ) of an image I(x, y). If we shift every
+                 traditional signal filtration theory, but are left as degrees of                   pixel of I one unit to the right, we get a new image I 0
+                 freedom which the network infers so as to extremise its value                      where I 0 (x, y) = I(x − 1, y). We can still obtain the main
+                 function at output.                                                                classification feature m0 in I 0 and m = m0 , while the location
+                     The details of the first convolutional layer inevitably need                   of m0 will be at (xm0 , ym0 ) = (xm − 1, ym ). This is important
+                 some consideration. As convolutional layers operate a small                        to time-series data, because convolution can find universal
+                 kernel to “scan” through input data, the layout of limit order                     features that are decisive to final outputs. In our case, suppose
+                 book information is vital. Recall that we take the most 100                        a feature that studies imbalance is obtained at time t. If the
+                 recent updates of an order book to form a single input and                         same event happens later at time t0 in the input, the exact
+                 there are 40 features per time stamp, so the size of a single                      feature can be extracted later at t0 .
+                 input is (100 × 40). We organise the 40 features as following:                        We do not use any pooling layer except in the Inception
+                                                        (i)        (i)                              Modules. Although pooling layers help us find representations
+                                 {p(i)     (i)                   n=10
+                                   a (t), va (t), pb (t), vb (t)}i=1                         (6)
+                                                                                                    invariant to translations of the input, the smoothing nature
+                 where i denotes the i-th level of a limit order book. The                          of pooling can cause under-fitting. Common pooling layers
+                 size of our first convolutional filter is (1 × 2) with stride of                   are designed for image processing tasks, and they are most
+                 (1 × 2). The first layer essentially summarises information                        powerful when we only care if certain features exist in the
+                 between price and volume {p(i) , v (i) } at each order book                        inputs instead of where they exist [62]. Time-series data
+                 level. The usage of stride is necessary here as an important                       has different characteristics from images and the location of
+                 property of convolutional layers is parameter sharing. This                        representative features is important. Our experiences show
+                 property is attractive as less parameters are estimated, largely                   that pooling layers in the convolutional layer, at least, cause
+                 avoiding overfitting problems. However, without strides, we                        under-fitting problems to the LOB data. However, we think
+                 would apply same parameters to {p(i) , v (i) } and {v (i) , p(i+1) }.              pooling is important and new pooling methods should be
+                 In other words, p(i) and v (i) would share same parameters                         designed to process time-series data as it is a promising
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                        6
+
+
+
+                                                                          to be estimated, not to mention multiple layers. In order
+                                                                          to capture temporal relationship that exist in the extracted
+             Conv               Conv             Maxpool                  features, we replace the fully connected layers with LSTM
+            1x1@32             1x1@32             3x1                     units. The activation of a LSTM unit is fed back to itself
+                                                                          and the memory of past activations is kept with a separate
+             Conv               Conv               Conv                   set of weights, so the temporal dynamics of our features can
+            3x1@32             5x1@32             1x1@32                  be modelled. We use 64 LSTM units in our work, resulting in
+                                                                          about 60,000 parameters, leading to 10 times fewer parameters
+                                                                          to be estimated. The last output layer uses a softmax activation
+         Inception@32           Concat                                    function and hence the final output elements represent the
+                                                                          probability of each price movement class at each time step.
+
+                                                                                          V. E XPERIMENTAL R ESULTS
+Figure 4. The Inception Module used in the model. For example, 3 × 1@32
+represents a convolutional layer with 32 filters of size (3 × 1).         A. Experiments Settings
+                                                                             We apply the same architecture to all our experiments in
+                                                                          this section and the proposed model is denoted as DeepLOB.
+solution to extract invariant features.
+                                                                          We learn the parameters by minimising the categorical cross-
+                                                      3x1@32              entropy loss. The Adaptive Moment Estimation algorithm,
+      b) Inception Module: We note that all filters of a stan-            ADAM [65], is utilised and we set the parameter “epsilon” to
+dard convolutional layer have fixed size. If, for example, we             1 and the learning rate to 0.01. The learning is stopped when
+employ filters of size (4 × 1),5x1@32we capture local   interactions
+                                                     1x1@32               validation accuracy does not improve for 20 more epochs. This
+amongst data over four time steps. However, we can capture                is about 100 epochs for the FI-2010 dataset and 40 epochs for
+dynamic behaviours over multiple timescales by using Incep-               the LSE dataset.
+tion Modules to wrap several convolutions
+                                    Concat       together. We find
+                                                                             We train with mini-batches of size 32. We choose a small
+that this offers a performance improvement to the resultant
+                                                                          mini-batch size due to the findings in [66] in which they sug-
+model.
+                                                                          gest that large-batch methods tend to converge to narrow deep
+   The idea of the Inception Module can be also considered as             minima of the training functions, but small-batch methods
+using different moving averages   Input
+                                      in technical analysis. Practi-      consistently converge to shallow broad minima. All models
+tioners often use moving averages with different decay weights            are built using Keras [67] based on the TensorFlow backend
+to observe time-series momentum [63]. If a large decay weight                                                        100*40 Tesla P100
+                                                                          [68], and we train them using a single NVIDIA
+is adopted, we get a smoother time-series that well represents            GPU.
+the long-term1x1@16             1x1@16
+                trend, but we could                1x1@16 that are
+                                      miss small variations
+important in high-frequency data. In practice, it is a daunting
+task to set the right decay weights. Instead, we can use                  B. Experiments on the FI-2010 Dataset
+              3x40@16
+Inception Modules      and the 10x40@16
+                                weights are then 20x40@16
+                                                    learned during            There are two experimental setups using the FI-2010
+back-propagation.                                                         dataset. Following the convention of [24], we denote them
+   In our case, we split the input into a small set of lower-             as Setup 1 and Setup 2. Setup 1 splits the dataset into 9 folds
+dimensional representations Concat
+                                 by using 1 × 1 convolutions,             based on a day basis (a standard anchored forward split). In
+transform the representations by a set of filters, here 3 × 1             the i-th fold, we train our model on the first i days and test it
+and 5 × 1, and then merge the outputs. A max-pooling layer                on the (i + 1)-th day where i = 1, · · · , 9. The second setting,
+is used inside the Inception Module, with stride 1 and zero               Setup 2, originates from the works [26, 28, 27, 25] in which
+padding. “Inception@32” represents one module and indicates               deep network architectures were evaluated. As deep learning
+               1x1@16
+all convolutional    layers have1x1@16             1x1@16
+                                   32 filters in this  module, and        techniques often require a large amount of data to calibrate
+the approach is depicted schematically in Figure 4. The 1 × 1             weights, the first 7 days are used as the train data and the last
+convolutions form the Network-in-Network approach proposed                3 days are used as the test data in this setup. We evaluate our
+               3x1@16
+in [64]. Instead   of applying a10x1@16           20x1@16
+                                 simple convolution     to our data,      model in both setups here.
+the Network-in-Network method uses a small neural network                     Table I shows the results of our model compared to other
+to capture non-linear properties of our data. We find this                methods in Setup 1. Performance is measured by calculating
+method to be effective and itConcat gives us an improvement on            the mean accuracy, recall, precision, and F1 score over all
+prediction accuracy.                                                      folds. As the FI-2010 dataset is not well balanced, [1] suggests
+      c) LSTM Module and Output: In general, a fully con-                 to focus on F1 score performance as fair comparisons. We have
+nected layer is used to classify the input data. However, all             compared our model to all existing experimental results in-
+                                Maxpool
+inputs to the fully connected layer    are assumed independent of         cluding Ridge Regression (RR) [1], Single-Layer-Feedforward
+each other unless multiple fully connected layers are used. Due           Network (SLFN) [1], Linear Discriminant50*1     Analysis (LDA)
+to the usage of Inception Module in our work, we have a large             [22], Multilinear Discriminant Analysis (MDA) [22], Mul-
+number of features at end. Just using one fully connected layer           tilinear Time-series Regression (MTR) [22], Weighted Mul-
+with 64 units1x1@16
+                 would result in1x1@16             1x1@16
+                                   more than 630,000     parameters       tilinear Time-series Regression (WMTR) [22], Multilinear
+
+
+               3x1@16            10x1@16           20x1@16
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                         7
+
+
+
+                               Table I                                                             Table II
+      S ETUP 1: E XPERIMENT R ESULTS FOR THE FI-2010 DATASET              S ETUP 2: E XPERIMENT R ESULTS FOR THE FI-2010 DATASET
+
+   Model           Accuracy %     Precision %     Recall %   F1 %       Model           Accuracy %      Precision %     Recall %   F1 %
+                      Prediction Horizon k = 10                                             Prediction Horizon k = 10
+   RR [1]          48.00          41.80           43.50      41.00      SVM [28]        -               39.62           44.92      35.88
+   SLFN [1]        64.30          51.20           36.60      32.70      MLP [28]        -               47.81           60.78      48.27
+   LDA [22]        63.83          37.93           45.80      36.28      CNN-I [26]      -               50.98           65.54      55.21
+   MDA [22]        71.92          44.21           60.07      46.06      LSTM [28]       -               60.77           75.92      66.33
+   MCSDA [23]      83.66          46.11           48.00      46.72      CNN-II [27]     -               56.00           45.00      44.00
+   MTR [22]        86.08          51.68           40.81      40.14      B(TABL) [25]    78.91           68.04           71.21      69.20
+   WMTR [22]       81.89          46.25           51.29      47.87      C(TABL) [25]    84.70           76.95           78.44      77.63
+   BoF [24]        57.59          39.26           51.44      36.28      DeepLOB         84.47           84.00           84.47      83.40
+   N-BoF [24]      62.70          42.28           61.41      41.63
+   B(TABL) [25]    73.62          66.16           68.81      67.12                          Prediction Horizon k = 20
+   C(TABL) [25]    78.01          72.03           74.04      72.84      SVM [28]        -               45.08           47.77      43.20
+   DeepLOB         78.91          78.47           78.91      77.66      MLP [28]        -               51.33           65.20      51.12
+                      Prediction Horizon k = 50                         CNN-I [26]      -               54.79           67.38      59.17
+                                                                        LSTM [28]       -               59.60           70.52      62.37
+   RR [1]          43.90          43.60           43.30      42.70      CNN-II [27]     -               -               -          -
+   SLFN [1]        47.30          46.80           46.40      45.90      B(TABL) [25]    70.80           63.14           62.25      62.22
+   BoF [24]        50.21          42.56           49.57      39.56      C(TABL) [25]    73.74           67.18           66.94      66.93
+   N-BoF [24]      56.52          47.20           58.17      46.15      DeepLOB         74.85           74.06           74.85      72.82
+   B(TABL) [25]    69.54          69.12           68.84      68.84
+   C(TABL) [25]    74.81          74.58           74.27      74.32                          Prediction Horizon k = 50
+   DeepLOB         75.01          75.10           75.01      74.96      SVM [28]        -               46.05           60.30      49.42
+                     Prediction Horizon k = 100                         MLP [28]        -               55.21           67.14      55.95
+                                                                        CNN-I [26]      -               55.58           67.12      59.44
+   RR [1]          42.90          42.90           42.90      41.60      LSTM [28]       -               60.03           68.58      61.43
+   SLFN [1]        47.70          45.30           43.20      41.00      CNN-II [27]     -               56.00           47.00      47.00
+   BoF [24]        50.97          42.48           47.84      40.84      B(TABL) [25]    75.58           74.58           73.09      73.64
+   N-BoF [24]      56.43          47.27           54.99      46.86      C(TABL) [25]    79.87           79.05           77.04      78.44
+   B(TABL) [25]    69.31          68.95           69.41      68.86      DeepLOB         80.51           80.38           80.51      80.35
+   C(TABL) [25]    74.07          73.51           73.80      73.52
+   DeepLOB         76.66          76.77           76.66      76.58
+                                                                                                Table III
+                                                                        AVERAGE C OMPUTATION T IME OF S TATE -O F -T HE -A RT M ODELS
+
+Class-specific Discriminant Analysis (MCSDA) [23], Bag-of-                   Models           Forward (ms)      Number of parameters
+Feature (BoF) [24], Neural Bag-of-Feature (N-BoF) [24], and
+                                                                             BoF [24]         0.972             86k
+Attention-augmented-Bilinear-Network with one hidden layer                   N-BoF [24]       0.524             12k
+(B(TABL)) and two hidden layers (C(TABL)) [25]. More                         CNN-I [26]       0.025             768k
+methods such as PCA and Autoencoder (AE) are actually                        LSTM [28]        0.061             -
+                                                                             C(TABL) [25]     0.229             -
+tested in their works but, for simplicity, we only report their              DeepLOB          0.253             60k
+best results and our model achieves better performance.
+   However, the Setup 1 is not ideal for training deep learning
+models as we mentioned that deep network often requires
+                                                                     C. Experiments on the London Stock Exchange (LSE)
+a large amount of data to calibrate weights. This anchored
+forward setup leads to only one or two days’ training data for          As we suggested, the FI-2010 dataset is not sufficient to
+the first few folds and we observe worse performance in the          verify a prediction model - it is far too short, downsampled
+first few days. As training data grows, we observe remarkably        and taken from a less liquid market. To perform a meaningful
+better results as shown in Table II which shows the results          evaluation that can hold up to modern applications, we further
+of our network compared to other methods in Setup 2. In              test our method on stocks from the LSE of one year length
+particular, the important difference between our model and           with a testing period of three months. As mentioned in Section
+CNN-I [26] and CNN-II [27] is due to network architecture            III, we train our model on five stocks: Lloyds Bank (LLOY),
+and we can see huge improvements on performance here. In             Barclays (BARC), Tesco (TSCO), BT and Vodafone (VOD).
+Table III, we compare the parameter sizes of DeepLOB with            Recent work of [20] suggests that deep learning techniques
+CNN-I [26]. Although our model has many more layers, there           can extract universal features for limit order data. To test this
+are far fewer parameters in our network due to the usage of          universality, we directly apply our model to five more stocks
+LSTM layers instead of fully connected layers.                       that were not part of the training data set (transfer learning).
+   We also report the computation time (forward pass) in             We select HSBC, Glencore (GLEN), Centrica (CNA), BP and
+milliseconds (ms) for available algorithms in Table III. Due         ITV for transfer learning because they are also among the most
+to the development of GPUs, training deep networks is now            liquid stocks in the LSE. The testing period is the same three
+feasible and it is swift to make predictions, making it possible     months as before, and the classes are roughly balanced.
+for high frequency trading. We will discuss this more in the            Table IV presents the results of our model for all stocks on
+next section.                                                        different prediction horizons. To better investigate the results,
+ JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                                   8
+
+
+
+                                     Table IV                                                     0.80
+                    E XPERIMENT R ESULTS FOR THE LSE DATASET                                      0.75
+                                                                                                  0.70
+                                                                                           Accuracy
+    Prediction Horizon         Accuracy %        Precision %      Recall %      F1 %
+                    Results on LLOY, BARC, TSCO, BT and VOD
+                                                                                                  0.65
+                                                                                                  0.60
+    k=20                       70.17             70.17            70.17         70.15                       k=20
+    k=50                       63.93             63.43            63.93         63.49             0.55      k=50
+    k=100                      61.52             60.73            61.52         60.65             0.50      k=100
+          Results on Transfer Learning (GLEN, HSBC, CNA, BP, ITV)                                        LLOY         BARC          TSCO           BT          VOD
+                                                                                                                                    Stock
+    k=20                       68.62             68.64            68.63         68.48
+    k=50                       63.44             62.81            63.45         62.84             0.80      k=20
+                                                                                                            k=50
+    k=100                      61.46             60.68            61.46         60.77
+                                                                                                  0.75      k=100
+
+                                                                                           Accuracy
+                                                                                                  0.70
+              9667343 2532164 907266    9546221 3069960 889661   9996056 2650105 673195           0.65
+ Sta
+                                                                                                  0.60
+     tio D
+              2910692 10879399 2570201 3603711 7524565 4373401 4999538 6688453 4162581            0.55
+Up nary own
+                                                                                                         GLEN         HSBC           CNA           BP           ITV
+              1177182 2617167 9364113   652603 2776885 10169020 900722 2996586 9506291                                              Stock
+               Down Stationary Up       Down Stationary Up       Down Stationary Up          Figure 6. Boxplots of daily accuracy for the different prediction horizons.
+                                                                                             Top: results on LLOY, BARC, TSCO, BT and VOD; Bottom: results on
+              14188991 3414391 1189903 14673322 4028731 975993 14718401 4289685 940541       transfer learning (GLEN, HSBC, CNA, BP, ITV).
+ Sta
+     tio D
+              5234454 15298391 4761173 6493267 10999252 6046319 7111634 9936780 5968307
+
+Up nary own   1532771 3627615 13738088 1095414 4376190 14277789 1284541 4662741 14021147
+                                                                                             (taking slippage into account), and hold until −1 appears to
+                                                                                             sell all µ shares (we do nothing if 0 appears). We apply the
+               Down Stationary Up       Down Stationary Up       Down Stationary Up          same rule to short selling and repeat the process during a day.
+                                                                                             All positions are closed by the end of the day, so we hold no
+ Figure 5. Confusion matrices. Top: results on LLOY, BARC, TSCO, BT and                      stocks overnight. We make sure no trades take place at the
+ VOD. From the left to right, prediction horizon (k) equals 20, 50 and 100;
+ Bottom: results on transfer learning (GLEN, HSBC, CNA, BP, ITV).                            time of auction, so no abnormal profits are generated.
+                                                                                                As the focus of our work is on predictions and the above
+                                                                                             simple simulation is a way of showing that this prediction is in
+ we display the confusion matrices in Figure 5 and calculate                                 principle monetisable. In particular, our aim is not to present
+ the accuracy for every day and for every stock across the                                   a fully developed, stand-alone trading strategy. Realistic high-
+ testing period. We use the boxplots in Figure 6 to present                                  frequency strategies often require a combination of various
+ this information and we can observe consistent and robust                                   trading signals in particular to time the exact entry and exit
+ performance, with narrow interquartile range (IQR) and few                                  points of the trade. For the purpose of the above simulation we
+ outliers, for all stocks across the testing period. The ability                             use mid-prices without transaction costs. While in particular
+ of our model that generalises well to data not in the training                              the second assumption is not a reasonable assumption for a
+ set indicates that the CNN block in the algorithms, acting to                               standalone strategy, we argue that (i) it is enough for a relative
+ extract features from the LOB, can capture universal patterns                               comparison of the above models and (ii) it is a good indicator
+ that relate to the price formation mechanism. We find this                                  of the relative value of the above predictor to a more complex
+ observation most interesting.                                                               high-frequency trading model. Regarding the first assumption,
+                                                                                             a mid-mid simulation, we note that in high-frequency trading,
+ D. Performance of the Model in a Simple Trading Simulation                                  many participants are involved in market making, as it is
+    A simple trading simulation is designed to test the practica-                            difficult to design profitable fully aggressive strategies with
+ bility of our results. We set the number of shares per trade, µ,                            such short holding periods. If we assume that we are able
+ to one both for simplicity and to minimise the market impact,                               to enter the trade passively, while we exit it aggressively,
+ ensuring orders to be executed at the best price. Although                                  crossing the spread, then this is effectively equivalent to a
+ µ can be optimised to maximise the returns, for example,                                    mid-mid trade. Such a situation arises naturally for example
+ prediction probabilities are used to size the orders in [69], we                            in investment banks which are involved in client market
+ would like to show that our algorithm can work even under                                   making. Regarding the second assumption, careful timing of
+ this simple set-up.                                                                         the entry points as well as more elaborate trading rules, such
+    To reduce the number of trades, we use following rules                                   as including position upsizing, should be able to account for
+ to take actions. At each time-step, our model generates a                                   additional profits to cover the transaction costs. In any case,
+ signal from the network outputs (−1, 0, +1) to indicate the                                 as merely a metric of testing predictability of our model, the
+ price movements in k steps. Signals (−1, 0, +1) correspond                                  above simple simulation suffices.
+ to actions (sell, wait and buy). Suppose our model produces a                                  Figure 7 presents the boxplots for normalised daily profits
+ prediction of +1 at time t, we then buy µ shares at time t + 5                              (profits divided by number of trades in that day) for different
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                   9
+
+
+
+
+                               0.03     k=20
+                                        k=50
+                               0.02     k=100
+                      Profit   0.01
+                               0.00
+                               0.01
+                                      LLOY BARC TSCO              BT       VOD      GLEN HSBC           ITV        BP          CNA
+                                   50    k=20
+                                   40    k=50
+                                         k=100
+                                   30
+                         t-score   20
+                                   10
+                                    0
+                                   10 LLOY BARC TSCO              BT       VOD GLEN HSBC                ITV        BP          CNA
+                                                                              Stock
+Figure 7. Boxplots for normalised daily profits and t-statistics for different stocks and prediction horizons (k). Profits are in GBX (= GBP/100).
+
+
+                      k=20             0.4       k=20             0.8       k=20             1.0       k=20             0.35         k=20
+            0.20                                                                             0.8                        0.30
+            0.15
+                      k=50             0.3       k=50             0.6       k=50                       k=50             0.25         k=50
+                      k=100
+                                       0.2
+                                                 k=100
+                                                                  0.4
+                                                                            k=100            0.6       k=100            0.20         k=100
+            0.10                                                                             0.4                        0.15
+            0.05                       0.1                        0.2                        0.2                        0.10
+                                                                                                                        0.05
+            0.00                       0.0                        0.0                        0.0                        0.00
+                       LLOY                      BARC                       TSCO                         BT                          VOD
+             1.2      k=20             0.8       k=20             0.8       k=20             0.7       k=20              0.7         k=20
+             1.0      k=50             0.6       k=50             0.6       k=50             0.6       k=50              0.6         k=50
+             0.8      k=100                      k=100                      k=100            0.5       k=100             0.5         k=100
+             0.6                       0.4                        0.4                        0.4                         0.4
+             0.4                                                                             0.3                         0.3
+             0.2                       0.2                        0.2                        0.2                         0.2
+                                                                                             0.1                         0.1
+             0.0                       0.0                        0.0                        0.0                         0.0
+                       GLEN                      HSBC                         ITV                        BP                           CNA
+Figure 8.   Normalised cumulative profits for test periods for different stocks and prediction horizons (k). Profits are in GBX(= GBP/100).
+
+
+
+stocks and prediction horizons. We use a t-test to check if                    better than other network architectures such as CNN-I [26].
+the profits are statistically greater than 0. The t-statistics is              LIME uses an interpretable model to approximate the predic-
+essentially the same as Sharpe ratios but a more consistent                    tion of a complex model on a given input. It locally perturbs
+evaluation metric for high frequency trading. Figure 8 shows                   the input and observes variations in the model’s predictions,
+the cumulative profits across the testing period. We can ob-                   thus providing some measure of information regarding input
+serve consistent profits and significant t-values over the testing             importance and sensitivity.
+period for all stocks. Although we obtain worse accuracy for                      Figure 9 presents an example that shows how DeepLOB
+longer prediction horizons, the cumulative profits are actually                and CNN-I [26] react to a given input. In the figure we
+higher as a more robust signal is generated.                                   show the top 10 areas of pros (in green) and cons (in red)
+                                                                               for the predicted class (yellow being the boundary). Not
+E. Sensitivity Analysis                                                        coloured areas represent the components of inputs that are
+                                                                               less influential on the predicted results or “unimportant”. We
+   Trust and risk are fundamental in any financial application.
+                                                                               note that most components of the input are inactive for CNN-
+If we take actions based on predictions, it is always important
+                                                                               I [26]. We believe that this is due to two max-pooling layers
+to understand the reasons behind those predictions. Neural
+                                                                               used in that architecture. Because [26] used large-size filters
+networks are often considered as “black boxes” which lack
+                                                                               in the first convolutional layer, any representation deep in the
+interpretability. However, if we understand the relationship
+                                                                               network actually represents information gleaned from a large
+between the inputs’ components (e.g. words in text, patches in
+                                                                               portion of inputs. Our experiments applying LIME to many
+an image) and the model’s prediction, we can compare those
+                                                                               examples indicate this observation is a common feature.
+relationships with our domain knowledge to decide if we can
+accept or reject a prediction.
+   The work of [10] proposes a method, which they call LIME,                                             VI. C ONCLUSION
+to obtain such explanations. In our case, we use LIME to reveal                   In this paper, we introduce the first hybrid deep neural net-
+components of LOBs that are most important for predictions                     work to predict stock price movements using high frequency
+and to understand why the proposed model DeepLOB works                         limit order data. Unlike traditional hand-crafted models, where
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                                                        10
+
+
+
+                  L10-AskSize                                                                forcement Learning, which are based on the feature extraction
+                                                                                             performed by DeepLOB.
+                  L10-BidSize                                    Real label = Stationary
+                  L10-AskPrice                                                                                  ACKNOWLEDGEMENTS
+                                                                                                The authors would like to thank members of Machine
+                  L10-BidPrice                                                               Learning Research Group at the University of Oxford for their
+                                 t=1                    t=100 Time
+   Ref: P(Down) = 0.27           Ref: P(Stationary) = 0.46          Ref: P(Up) = 0.27        helpful comments on drafts of this paper. We are most grateful
+   CNN-I[24]: P(Down)=0.27       CNN-I[24]: P(Stationary)=0.46     CNN-I[24]: P(Up)=0.27
+                                                                                             to the Oxford-Man Institute of Quantitative Finance, who pro-
+                                                                                             vided limit order data and other support. Computation for our
+                                                                                             work was supported by Arcus Phase B and JADE HPC at the
+                                                                                             University of Oxford and Hartree national computing facilities,
+                                                                                             U.K. We also thank the Royal Academy of Engineering U.K.
+   DeepLOB:
+   DeepLOB: P(Down) = 0.27
+            P(Down)=0.27         DeepLOB:
+                                 DeepLOB: P(Stationary) = 0.71
+                                          P(Stationary)=0.71         DeepLOB:P(Up)=0.04
+                                                                    DeepLOB:  P(Up) = 0.04   for their support.
+
+                                                                                                                     R EFERENCES
+                                                                                              [1] A. Ntakaris, M. Magris, J. Kanniainen, M. Gabbouj,
+                                                                                                  and A. Iosifidis, “Benchmark dataset for mid-price fore-
+                                                                                                  casting of limit order book data with machine learning
+Figure 9. LIME plots. x-axis represents time stamps and y-axis represents                         methods,” Journal of Forecasting, vol. 37, no. 8, pp. 852–
+levels of the LOB, as labelled in the top image. Top: Original image.
+Middle: Importance regions for CNN-I [26]. Bottom: Importance regions
+                                                                                                  866, 2018.
+for DeepLOB model. Regions supportive for prediction are shown in green,                      [2] C. A. Parlour and D. J. Seppi, “Limit order markets:
+and regions against in red. The boundary is shown in yellow.                                      A survey,” Handbook of financial intermediation and
+                                                                                                  banking, vol. 5, pp. 63–95, 2008.
+                                                                                              [3] I. Rosu et al., “Liquidity and information in order driven
+features are carefully designed, we utilise a CNN and an                                          markets,” Tech. Rep., 2010.
+Inception Module to automate feature extraction and use                                       [4] E. Zivot and J. Wang, “Vector autoregressive models for
+LSTM units to capture time dependencies.                                                          multivariate time series,” Modeling Financial Time Series
+   The proposed method is evaluated against several baseline                                      with S-PLUS R , pp. 385–429, 2006.
+methods on the FI-2010 benchmark dataset and the results                                      [5] A. A. Ariyo, A. O. Adewumi, and C. K. Ayo, “Stock
+show that our model performs better than other techniques in                                      price prediction using the ARIMA model,” in Computer
+predicting short term price movements. We further test the                                        Modelling and Simulation (UKSim), 2014 UKSim-AMSS
+robustness of our model by using one year of limit order                                          16th International Conference on. IEEE, 2014, pp. 106–
+data from the LSE with a testing period of three months. An                                       112.
+interesting observation from our work is that the proposed                                    [6] C. Carrie, “The new electronic trading regime of dark
+model generalises well to instruments that did not form part                                      books, mashups and algorithmic trading,” Trading, vol.
+of the training data. This suggests the existence of universal                                    2006, no. 1, pp. 14–20, 2006.
+features that are informative for price formation and our model                               [7] M. D. Gould, M. A. Porter, S. Williams, M. McDonald,
+appears to capture these features, learning from a large data                                     D. J. Fenn, and S. D. Howison, “Limit order books,”
+set including several instruments. A simple trading simulation                                    Quantitative Finance, vol. 13, no. 11, pp. 1709–1742,
+is used to further test our model and we obtain good profits                                      2013.
+that are statistically significant.                                                           [8] W.-C. Chiang, D. Enke, T. Wu, and R. Wang, “An
+   To go beyond the often-criticised “black box” nature of                                        adaptive stock index trading decision support system,”
+deep learning models, we use LIME, a method for sensitivity                                       Expert Systems with Applications, vol. 59, pp. 195–207,
+analysis, to indicate the components of inputs that contribute to                                 2016.
+predictions. A good understanding of the relationship between                                 [9] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed,
+the input’s components and the model’s prediction can help                                        D. Anguelov, D. Erhan, V. Vanhoucke, and A. Rabi-
+us decide if we can accept a prediction. In particular, we see                                    novich, “Going deeper with convolutions,” in Proceed-
+how the information of prices and sizes on different levels and                                   ings of the IEEE conference on computer vision and
+horizons contribute to the prediction which is in accordance                                      pattern recognition, 2015, pp. 1–9.
+with our econometric understanding.                                                          [10] M. T. Ribeiro, S. Singh, and C. Guestrin, “Why should I
+   In a recent extension of this work we have modified the                                        trust you?: Explaining the predictions of any classifier,”
+DeepLOB model to use Bayesian neural networks [69]. This                                          in Proceedings of the 22nd ACM SIGKDD international
+allows to provide uncertainty measures on the network’s                                           conference on knowledge discovery and data mining.
+outputs which for example can be used to upsize positions                                         ACM, 2016, pp. 1135–1144.
+as demonstrated in [69].                                                                     [11] A. Ang and G. Bekaert, “Stock return predictability: Is it
+   In subsequent continuations of this work we would like                                         there?” The Review of Financial Studies, vol. 20, no. 3,
+to investigate more detailed trading strategies, using Rein-                                      pp. 651–707, 2006.
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                             11
+
+
+
+[12] P. Bacchetta, E. Mertens, and E. Van Wincoop, “Pre-           [26] A. Tsantekidis, N. Passalis, A. Tefas, J. Kanniainen,
+     dictability in financial markets: What do survey expec-            M. Gabbouj, and A. Iosifidis, “Forecasting stock prices
+     tations tell us?” Journal of International Money and               from the limit order book using convolutional neural
+     Finance, vol. 28, no. 3, pp. 406–426, 2009.                        networks,” in Business Informatics (CBI), 2017 IEEE
+[13] T. Bollerslev, J. Marrone, L. Xu, and H. Zhou, “Stock              19th Conference on, vol. 1. IEEE, 2017, pp. 7–12.
+     return predictability and variance risk premia: Statistical   [27] ——, “Using Deep Learning for price prediction by
+     inference and international evidence,” Journal of Finan-           exploiting stationary limit order book features,” arXiv
+     cial and Quantitative Analysis, vol. 49, no. 3, pp. 633–           preprint arXiv:1810.09965, 2018.
+     661, 2014.                                                    [28] ——, “Using deep learning to detect price change in-
+[14] M. A. Ferreira and P. Santa-Clara, “Forecasting stock              dications in financial markets,” in Signal Processing
+     market returns: The sum of the parts is more than the              Conference (EUSIPCO), 2017 25th European. IEEE,
+     whole,” Journal of Financial Economics, vol. 100, no. 3,           2017, pp. 2511–2515.
+     pp. 514–537, 2011.                                            [29] M. Dixon, D. Klabjan, and J. H. Bang, “Classification-
+[15] B. Mandelbrot and R. L. Hudson, The Misbehavior of                 based financial markets prediction using deep neural
+     Markets: A fractal view of financial turbulence. Basic             networks,” Algorithmic Finance, vol. 6, no. 3-4, pp. 67–
+     books, 2007.                                                       77, 2017.
+[16] B. B. Mandelbrot, “How Fractals Can Explain What’s            [30] Y. LeCun, Y. Bengio et al., “Convolutional networks for
+     Wrong with Wall Street,” Scientific American, vol. 15,             images, speech, and time series,” The handbook of brain
+     no. 9, p. 2008, 2008.                                              theory and neural networks, vol. 3361, no. 10, p. 1995,
+[17] J. Agrawal, V. Chourasia, and A. Mittra, “State-of-the-            1995.
+     art in stock prediction techniques,” International Journal    [31] N. Wang and D.-Y. Yeung, “Learning a deep compact
+     of Advanced Research in Electrical, Electronics and                image representation for visual tracking,” in Advances in
+     Instrumentation Engineering, vol. 2, no. 4, pp. 1360–              neural information processing systems, 2013, pp. 809–
+     1366, 2013.                                                        817.
+[18] R. C. Cavalcante, R. C. Brasileiro, V. L. Souza, J. P.        [32] R. Girshick, J. Donahue, T. Darrell, and J. Malik, “Rich
+     Nobrega, and A. L. Oliveira, “Computational intelligence           feature hierarchies for accurate object detection and
+     and financial markets: A survey and future directions,”            semantic segmentation,” in Proceedings of the IEEE
+     Expert Systems with Applications, vol. 55, pp. 194–211,            conference on computer vision and pattern recognition,
+     2016.                                                              2014, pp. 580–587.
+[19] Q. Cao, K. B. Leggio, and M. J. Schniederjans, “A com-        [33] J. Long, E. Shelhamer, and T. Darrell, “Fully convolu-
+     parison between Fama and French’s model and artificial             tional networks for semantic segmentation,” in Proceed-
+     neural networks in predicting the Chinese stock market,”           ings of the IEEE Conference on Computer Vision and
+     Computers Operations Research, vol. 32, no. 10, pp.                Pattern Recognition, 2015, pp. 3431–3440.
+     2499–2512, 2005.                                              [34] J.-F. Chen, W.-L. Chen, C.-P. Huang, S.-H. Huang, and
+[20] J. Sirignano and R. Cont, “Universal features of price             A.-P. Chen, “Financial time-series data analysis using
+     formation in financial markets: perspectives from deep             deep convolutional neural networks,” in Cloud Com-
+     learning,” arXiv preprint arXiv:1803.06917, 2018.                  puting and Big Data (CCBD), 2016 7th International
+[21] G. S. Atsalakis and K. P. Valavanis, “Surveying stock              Conference on. IEEE, 2016, pp. 87–92.
+     market forecasting techniques–Part II: Soft computing         [35] J. Doering, M. Fairbank, and S. Markose, “Convolu-
+     methods,” Expert Systems with Applications, vol. 36,               tional neural networks applied to high-frequency market
+     no. 3, pp. 5932–5941, 2009.                                        microstructure forecasting,” in Computer Science and
+[22] D. T. Tran, M. Magris, J. Kanniainen, M. Gabbouj,                  Electronic Engineering (CEEC), 2017. IEEE, 2017, pp.
+     and A. Iosifidis, “Tensor representation in high-frequency         31–36.
+     financial data for price change prediction,” in Computa-      [36] A. Krizhevsky, I. Sutskever, and G. E. Hinton, “Imagenet
+     tional Intelligence (SSCI), 2017 IEEE Symposium Series             classification with deep convolutional neural networks,”
+     on. IEEE, 2017, pp. 1–7.                                           in Advances in neural information processing systems,
+[23] D. T. Tran, M. Gabbouj, and A. Iosifidis, “Multilinear             2012, pp. 1097–1105.
+     class-specific discriminant analysis,” Pattern Recognition    [37] K. Simonyan and A. Zisserman, “Very Deep Convolu-
+     Letters, vol. 100, pp. 131–136, 2017.                              tional Networks for Large-Scale Image Recognition,” in
+[24] N. Passalis, A. Tefas, J. Kanniainen, M. Gabbouj, and              International Conference on Learning Representations,
+     A. Iosifidis, “Temporal bag-of-features learning for pre-          2015.
+     dicting mid price movements using high frequency limit        [38] S. Hochreiter and J. Schmidhuber, “Long short-term
+     order book data,” IEEE Transactions on Emerging Topics             memory,” Neural computation, vol. 9, no. 8, pp. 1735–
+     in Computational Intelligence, 2018.                               1780, 1997.
+[25] D. T. Tran, A. Iosifidis, J. Kanniainen, and M. Gabbouj,      [39] Y. Bengio, P. Simard, and P. Frasconi, “Learning long-
+     “Temporal attention-augmented bilinear network for fi-             term dependencies with gradient descent is difficult,”
+     nancial time-series data analysis,” IEEE transactions on           IEEE transactions on neural networks, vol. 5, no. 2, pp.
+     neural networks and learning systems, 2018.                        157–166, 1994.
+JOURNAL OF LATEX CLASS FILES, VOL. XX, NO. XX, XXX                                                                            12
+
+
+
+[40] M. Sundermeyer, R. Schlüter, and H. Ney, “LSTM neural           learning for optimized trade execution,” in Proceedings
+     networks for language modeling,” in Thirteenth Annual            of the 23rd international conference on Machine learn-
+     Conference of the International Speech Communication             ing. ACM, 2006, pp. 673–680.
+     Association, 2012.                                          [57] M. Avellaneda, J. Reed, and S. Stoikov, “Forecasting
+[41] I. Sutskever, O. Vinyals, and Q. V. Le, “Sequence to             prices from Level-I quotes in the presence of hidden
+     sequence learning with neural networks,” in Advances in          liquidity,” Algorithmic Finance, vol. 1, no. 1, pp. 35–43,
+     neural information processing systems, 2014, pp. 3104–           2011.
+     3112.                                                       [58] Y. Burlakov, M. Kamal, and M. Salvadore, “Optimal
+[42] W. Bao, J. Yue, and Y. Rao, “A deep learning framework           limit order execution in a simple model for market
+     for financial time series using stacked autoencoders and         microstructure dynamics,” 2012.
+     long-short term memory,” PloS one, vol. 12, no. 7, p.       [59] L. Harris, “Maker-taker pricing effects on market quo-
+     e0180944, 2017.                                                  tations,” USC Marshall School of Business Work-
+[43] S. Selvin, R. Vinayakumar, E. Gopalakrishnan, V. K.              ing Paper. Avalable at http://bschool. huji. ac. il/.
+     Menon, and K. Soman, “Stock price prediction using               upload/hujibusiness/Maker-taker. pdf, 2013.
+     LSTM, RNN and CNN-sliding window model,” in Ad-             [60] A. Lipton, U. Pesavento, and M. G. Sotiropoulos, “Trade
+     vances in Computing, Communications and Informatics              arrival dynamics and quote imbalance in a limit order
+     (ICACCI), 2017 International Conference on. IEEE,                book,” arXiv preprint arXiv:1312.0514, 2013.
+     2017, pp. 1643–1647.                                        [61] A. L. Maas, A. Y. Hannun, and A. Y. Ng, “Rectifier
+[44] T. Fischer and C. Krauss, “Deep learning with long short-        nonlinearities improve neural network acoustic models,”
+     term memory networks for financial market predictions,”          in Proc. icml, vol. 30, no. 1, 2013, p. 3.
+     European Journal of Operational Research, vol. 270,         [62] I. Goodfellow, Y. Bengio, and A. Courville, Deep Learn-
+     no. 2, pp. 654–669, 2018.                                        ing. MIT Press, 2016,
+[45] L. Di Persio and O. Honchar, “Artificial neural networks         http://www.deeplearningbook.org.
+     architectures for stock price prediction: Comparisons and   [63] T. J. Moskowitz, Y. H. Ooi, and L. H. Pedersen, “Time
+     applications,” International Journal of Circuits, Systems        series momentum,” Journal of financial economics, vol.
+     and Signal Processing, vol. 10, pp. 403–413, 2016.               104, no. 2, pp. 228–250, 2012.
+[46] M. Dixon, “Sequence classification of the limit order       [64] M. Lin, Q. Chen, and S. Yan, “Network in network,” in
+     book using recurrent neural networks,” Journal of com-           International Conference on Learning Representations,
+     putational science, vol. 24, pp. 277–286, 2018.                  2014.
+[47] D. M. Nelson, A. C. Pereira, and R. A. de Oliveira,         [65] D. Kingma and J. Ba, “Adam: A method for stochastic
+     “Stock market’s price movement prediction with LSTM              optimization,” Proceedings of the International Confer-
+     neural networks,” in Neural Networks (IJCNN), 2017               ence on Learning Representations 2015, 2015.
+     International Joint Conference on.        IEEE, 2017, pp.   [66] N. S. Keskar, D. Mudigere, J. Nocedal, M. Smelyanskiy,
+     1419–1426.                                                       and P. T. P. Tang, “On large-batch training for deep
+[48] L. Harris, Trading and exchanges: Market microstructure          learning: Generalization gap and sharp minima,” in Inter-
+     for practitioners. Oxford University Press, USA, 2003.           national Conference on Learning Representations, 2017.
+[49] M. O’Hara, Market microstructure theory. Blackwell          [67] F. Chollet et al., “Keras,” https://keras.io, 2015.
+     Publishers Cambridge, MA, 1995, vol. 108.                   [68] M. Abadi, A. Agarwal, P. Barham, E. Brevdo, Z. Chen,
+[50] A. N. Kercheval and Y. Zhang, “Modelling high-                   C. Citro, G. S. Corrado, A. Davis, J. Dean, M. Devin,
+     frequency limit order book dynamics with Support Vector          S. Ghemawat, I. Goodfellow, A. Harp, G. Irving,
+     Machines,” Quantitative Finance, vol. 15, no. 8, pp.             M. Isard, Y. Jia, R. Jozefowicz, L. Kaiser, M. Kudlur,
+     1315–1329, 2015.                                                 J. Levenberg, D. Mané, R. Monga, S. Moore, D. Murray,
+[51] A. Abraham, B. Nath, and P. K. Mahanti, “Hybrid intelli-         C. Olah, M. Schuster, J. Shlens, B. Steiner, I. Sutskever,
+     gent systems for stock market analysis,” in International        K. Talwar, P. Tucker, V. Vanhoucke, V. Vasudevan,
+     Conference on Computational Science. Springer, 2001,             F. Viégas, O. Vinyals, P. Warden, M. Wattenberg,
+     pp. 337–345.                                                     M. Wicke, Y. Yu, and X. Zheng, “TensorFlow: Large-
+[52] T. Hendershott, C. M. Jones, and A. J. Menkveld, “Does           scale machine learning on heterogeneous systems,”
+     algorithmic trading improve liquidity?” The Journal of           2015, software available from tensorflow.org. [Online].
+     Finance, vol. 66, no. 1, pp. 1–33, 2011.                         Available: https://www.tensorflow.org/
+[53] C. Cao, O. Hansch, and X. Wang, “The information            [69] Z. Zhang, S. Zohren, and S. Roberts, “BDLOB: Bayesian
+     content of an open limit-order book,” Journal of futures         Deep Convolutional Neural Networks for Limit Order
+     markets, vol. 29, no. 1, pp. 16–41, 2009.                        Books,” in Third workshop on Bayesian Deep Learning
+[54] S. J. Orfanidis, Introduction to signal processing.              (NeurIPS 2018), 2018.
+     Prentice-Hall, Inc., 1995.
+[55] J. Gatheral and R. C. Oomen, “Zero-intelligence realized
+     variance estimation,” Finance and Stochastics, vol. 14,
+     no. 2, pp. 249–283, 2010.
+[56] Y. Nevmyvaka, Y. Feng, and M. Kearns, “Reinforcement
+

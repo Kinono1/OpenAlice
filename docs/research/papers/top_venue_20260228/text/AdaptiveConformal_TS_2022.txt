@@ -1,0 +1,2213 @@
+                                                                Adaptive Conformal Predictions for Time Series
+                                                Margaux Zaffran* ,1,2,3 , Aymeric Dieuleveut3 , Olivier Féron1,4 , Yannig Goude1 , and Julie Josse2,5
+                                                                              1
+                                                                             Eletrcicité De France R&D, Palaiseau, France
+                                                                              2
+                                                                             INRIA Sophia-Antipolis, Montpellier, France
+                                                                        3
+                                                                          CMAP, Ecole Polytechnique, IP Paris, Palaiseau, France
+                                                                                         4
+                                                                                           FiME, Palaiseau, France
+                                                                                      5
+                                                                                        IDESP, Montpellier, France
+
+
+
+
+arXiv:2202.07282v1 [stat.ML] 15 Feb 2022
+                                                                                                February 16, 2022
+
+                                           Abstract                                                              padopoulos et al., 2002) is a promising framework to over-
+                                                                                                                 come both issues. It is a general procedure to build predictive
+                                           Uncertainty quantification of predictive models is crucial            intervals for any (black box) predictive model, such as neu-
+                                           in decision-making problems. Conformal prediction is a                ral networks, which are valid (i.e. achieve nominal marginal
+                                           general and theoretically sound answer. However, it requires          coverage) in finite sample and without any distributional
+                                           exchangeable data, excluding time series. While recent                assumptions except that the data are exchangeable.
+                                           works tackled this issue, we argue that Adaptive Conformal
+                                           Inference (ACI, Gibbs and Candès, 2021), developed for               Thereby, CP has received increasing attention lately, favored
+                                           distribution-shift time series, is a good procedure for time          by the development of split conformal prediction (SCP, Lei
+                                           series with general dependency. We theoretically analyse the          et al., 2018, reformulated from inductive CP, Papadopoulos
+                                           impact of the learning rate on its efficiency in the exchange-        et al., 2002). More formally, suppose we have n training
+                                           able and auto-regressive case. We propose a parameter-free            samples (xi , yi ) ∈ Rd × R, i ∈ J1, nK, realizations of
+                                           method, AgACI, that adaptively builds upon ACI based on               random variables (X1 , Y1 ) . . . , (Xn , Yn ), and that we aim
+                                           online expert aggregation. We lead extensive fair simula-             at predicting a new observation yn+1 at xn+1 . Given a
+                                           tions against competing methods that advocate for ACI’s               miscoverage rate α ∈ [0, 1] fixed by the user (typically 0.1
+                                           use in time series. We conduct a real case study: electricity         or 0.05) the aim is to build a predictive interval Cα such that:
+                                           price forecasting. The proposed aggregation algorithm pro-
+                                           vides efficient prediction intervals for day-ahead forecasting.                       P {Yn+1 ∈ Cα (Xn+1 )} ≥ 1 − α,                 (1)
+                                           All the code and data to reproduce the experiments is made
+                                           available.                                                            with Cα as small as possible, in order to be informative. For
+                                                                                                                 the sequel, we call a valid interval an interval satisfying
+                                                                                                                 equation (1) and an efficient interval when it is as small as
+                                           1    Introduction                                                     possible (Vovk et al., 2005; Shafer and Vovk, 2008).
+                                           The increasing use of renewable intermittent energies leads           To achieve this, SCP first splits the n points of the training
+                                           to more dependent and volatile energy markets. Therefore,             set in two sets Tr, Cal ⊂ J1, nK, to create a proper training
+                                           an accurate electricity price forecasting is required to stabi-       set, Tr, and a calibration set, Cal. On the proper training
+                                           lize energy production planning, gathering loads of research          set a regression model µ̂ (chosen by the user) is fitted, and
+                                           works as evidenced by recent substantial reviews (Weron,              then used to predict on the calibration set. A conformity
+                                           2014; Lago et al., 2018, 2021). Furthermore, probabilistic            score is applied to assess the conformity between the cali-
+                                           forecasts are needed to develop risk-based strategies (Gail-          bration’s response values and the predicted values, giving
+                                           lard et al., 2016; Maciejowska et al., 2016; Nowotarski and           SCal = {(si )i∈Cal }. In regression, usually the absolute
+                                           Weron, 2018; Uniejewski and Weron, 2021). On the one                  value of the residuals is used, i.e. si = |µ̂(xi )−yi |. Finally, a
+                                           hand, the lack of uncertainty quantification of predictive            corrected1 (1− α̂)-th quantile of these scores Q  b 1−α̂ (SCal ) is
+                                           models is a major barrier to the adoption of powerful ma-             computed to define the size of the interval, which, in its sim-
+                                           chine learning methods. On the other hand, probabilistic              plest form, is centered on the predicted value: Cα (xn+1 ) =
+                                           forecasts are only valid asymptotically or upon strong as-
+                                                                                                                 Cbα̂ (xn+1 ) := [µ̂(xn+1 )± Qb 1−α̂ (SCal )]. These steps are de-
+                                           sumptions on the data.
+                                                                                                                 tailed in Appendix A. More details on CP, including beyond
+                                           Conformal prediction (CP, Vovk et al., 1999, 2005; Pa-                1
+                                                                                                                     The correction α → α̂ is needed because of the inflation of
+                                               * Corresponding author: margaux.zaffran@inria.fr                      quantiles in finite sample (see Lemma 2 in Romano et al. (2019)
+                                                                                                                     or Section 2 in Lei et al. (2018)).
+
+                                                                                                             1
+regression, are given in Vovk et al. (2005); Angelopoulos                                                                               We argue in this work that the design and guarantees of
+and Bates (2021).                                                                                                                       ACI can be beneficial for dependent data without distribu-
+                                                                                                                                        tion shifts. We illustrate this on a toy example in Figure 1,
+The cornerstone of SCP validity results is the exchange-
+                                                                                                                                        assuming that the fitted regression model produces AR(1)
+ability assumption of the data (see Lei et al., 2018, and
+                                                                                                                                        residuals. The two ACI versions (γ=0.01 and 0.05 intervals)
+Appendix A.2). However, this assumption is not met in time
+                                                                                                                                        adapt better to the data than classical online SCP (γ = 0).
+series forecasting problems. Despite the lack of theoretical
+guarantees, several works have applied CP to time series. Da-                                                                           Contributions. We propose to analyse ACI (Gibbs and
+shevskiy and Luo (2008, 2011) apply original (inductive) CP                                                                             Candès, 2021) in the context of time series with general
+(Papadopoulos et al., 2002) to both simulated (using Auto-                                                                              dependency and make the following contributions:
+Regressive Moving Average (ARMA) processes) and real
+                                                                                                                                        • Relying on an asymptotic analysis of ACI’s behaviour for
+network traffic data and obtain valid intervals. Wisniewski
+                                                                                                                                        simple time series distribution, we prove that ACI deterio-
+et al. (2020); Kath and Ziel (2021) apply SCP respectively
+                                                                                                                                        rates efficiency in an exchangeable case while improving it
+to financial data (e.g. markets makers’ net positions) and
+                                                                                                                                        in an AR setting with a well-chosen γ (Section 3).
+to electricity price forecasting on various markets. In order
+                                                                                                                                        • We introduce AgACI, a parameter-free method using on-
+to account for the temporal aspect, they consider an online
+                                                                                                                                        line expert aggregation, to avoid choosing γ, achieving good
+version of SCP. In both studies, the validity varied greatly de-
+                                                                                                                                        performances in terms of validity and efficiency (Section 4).
+pending on the markets and the underlying regression model,
+                                                                                                                                        • We compare ACI to EnbPI and online SCP on extensive
+suggesting that further developments of CP and theoretical
+                                                                                                                                        synthetic experiments and we propose an easy-to-interpret
+guarantees for time series are needed.
+                                                                                                                                        visualisation combining validity and efficiency (Section 5).
+To this end, Chernozhukov et al. (2018) extend the CP theory                                                                            • We forecast and give predictive intervals on French elec-
+to ergodic cases in order to include dependent data. Xu                                                                                 tricity prices, an area where accurate predictions, but also
+and Xie (2021b) improve on that theory and propose a new                                                                                controlled predictive intervals, are required (Section 6).
+algorithm, Ensemble Prediction Interval (EnbPI), adapted to
+                                                                                                                                        To allow for better benchmarking of existing and new meth-
+time series by adding a sequential aspect.
+                                                                                                                                        ods, we provide (re-)implementations in Python of all the
+Another case that breaks the exchangeability assumption                                                                                 described methods and a complete pipeline of analysis on
+is distribution shift, which allows for example to deal with                                                                            GitHub.
+cases where the test data is shifted with respect to the train-
+ing data. Tibshirani et al. (2019) consider covariate shift                                                                             2       Setting: ACI for time series
+while Cauchois et al. (2020) tackle a joint distributional shift                                                                        In this section, we introduce ACI and our framework. We
+setting (that is, of (X, Y )). In both studies, a single shift in                                                                       consider T0 observations (x1 , y1 ) , . . . , (xT0 , yT0 ) in Rd ×R.
+the distribution is considered, a major limitation for apply-                                                                           The aim is to predict the response values and give predictive
+ing these methods to time series. In an adversarial setting,                                                                            intervals for T1 subsequent observations xT0 +1 , . . . , xT0 +T1
+Gibbs and Candès (2021) propose Adaptive Conformal In-                                                                                 sequentially: at any prediction step t ∈ JT0 + 1, T0 + T1 K,
+ference (ACI), accounting for an undefined number of shifts                                                                             yt−T0 , . . . , yt−1 have been revealed. Thereby, the data
+on the joint distribution. It is based on refitting the predictive                                                                      ((xt−T0 , yt−T0 ) , . . . , (xt−1 , yt−1 )) are used for the con-
+model, as well as updating online the quantile level used                                                                               struction of the predicted interval.
+by a recursive scheme depending on an hyper-parameter γ
+(a learning rate). Furthermore, they prove an asymptotic                                                                                Adaptive Conformal Inference. Proposed by Gibbs and
+validity result for any data distribution.                                                                                              Candès (2021), ACI is designed to adapt CP to temporal
+                                                                                                                                        distribution shifts. The idea of ACI is twofold. First, one
+                                                                                                                                        considers an online procedure with a random split2 , i.e., Trt
+       1
+                                                                                                                                        and Calt are random subsets of the last T0 points. Second,
+       0
+                                                                                                                                        to improve adaptation when the data is highly shifted, an
+ εt
+
+
+
+      −1
+                                                                                                                                        effective miscoverage level αt , updated recursively, is used
+            0          200
+                             t
+                                       400         500   520   540
+                                                                     t
+                                                                         560   580   600   600   620   640
+                                                                                                             t
+                                                                                                                 660   680   700
+                                                                                                                                        instead of the target level α. Set α1 = α, and for t ≥ 1
+       1                                                                                                                                   (
+                                                                                                                                              bα (xt ) = [µ̂(xt ) ± Q
+                                                                                                                                              C                      1−αt (SCalt )]
+                                                                                                                                                                       b
+                                                                                                                                                 t
+
+                                                                                                                                                                                  bα (xt )} , (2)
+ εt    0                                                                                                                                                                                    
+      −1                                                                                                                                      αt+1       = αt + γ α − 1{yt ∈   /C    t
+
+           700   720   740       760   780   800   800   820   840       860   880   900   900   920   940       960   980   1000
+                             t                                       t                                       t
+
+Figure 1: ACI on one simulated path εt , t = 1, . . . , 1000,                                                                           for γ ≥ 03 . If ACI does not cover at time t, then αt+1 ≤ αt ,
+from an AR(1) process (in black). The first 500 values form                                                                             and the size of the predictive interval increases; conversely
+the initial calibration set (top left subplot), and predicted                                                                           when it covers. Nothing prevents αt ≤ 0 or αt ≥ 1. While
+interval bounds are computed on the last 500 points (5 last                                                                             2
+                                                                                                                                            Figure 4(a) with training and calibration part shuffled randomly.
+subplots, 100 on each) for γ = 0 (orange), γ = 0.01 (blue)                                                                              3
+                                                                                                                                            ACI actually wraps around any CP procedure, here the definition
+and γ = 0.05 (purple).                                                                                                                      is given using mean regression SCP.
+
+                                                                                                                                    2
+the later is rare (as α is small) and produces by convention               3      Impact of γ on ACI efficiency
+Cbα (·) = {µ̂(·)} (i.e. Qb 1−α = 0) , the former can happen
+   t                          t
+                                  bα ≡ R (Q                                The choice of the parameter γ strongly impacts the be-
+frequently for some γ, giving C     t
+                                           b 1−α = +∞).
+                                                t
+                                                                           haviour of ACI: while the methodPT always satisfies the asymp-
+                                                                                                                                     a.s.
+How to deal with infinite intervals. A specificity of ACI’s                totic validity property, i.e. T1 t=1 1{yt ∈
+                                                                                                                     /C bα (xt )} −→
+                                                                                                                            t
+                                                                                                                                       T →∞
+algorithm is thus to often produce infinite intervals. Defining            α (Proposition 4.1 in Gibbs and Candès, 2021), this property
+the average length of an interval is then impossible. In order             does not give any insight on the length of resulting inter-
+to assess the efficiency in the following, we consider two                 vals. Besides,  this guarantee directly stems from the fact
+solutions: (i) imputing the length of infinite intervals by                        PT
+                                                                           that T1 t=1 1{yt ∈  /C bα (xt )} − α ≤ 2/(γT ). This tends
+                                                                                                     t
+(twice) the overall maximum of the residuals, or Q(1) if                   to suggest the use of larger γ values, that unfortunately gen-
+the residual’s quantile function is known and bounded4 ; (ii)              erate frequent infinite intervals. Here, we thus analyse the
+focusing on the median instead.                                            impact of γ on ACI’s efficiency in simple yet insightful cases:
+ACI on time series with general dependency. As high-                       in Section 3.1, focusing on the exchangeable case, then in
+lighted by Wisniewski et al. (2020); Kath and Ziel (2021),                 Section 3.2, with a simple AR process on the residuals.
+the first step to adapt a method for dependent time series                 Approach. Our focus is on the impact of the key parame-
+is to work online which is the case for ACI. Moreover, the                 ter γ. Analysing simple theoretical distributions allows to
+update of the quantile level according to the previous error               build intuition on the behaviour of the algorithm for more
+implies that ACI could cope with a fitted model that has not               complex data structure. In order to derive theoretical results,
+correctly caught the temporal evolution, such as a trend, a                we thus make supplementary modelling assumptions on the
+seasonality pattern or a dependence on the past. Therefore,                residuals, and do not consider the impact of the calibration
+ACI is a perfect candidate for CP for time series with gen-                set: we introduce Q the quantile function of the scores and
+eral dependency. To account for the temporal structure, we                                           b 1−α̂ (SCal ) = Q(1 − α̂). This
+                                                                           assume, for all α̂ and t, Q           t
+change the random split to a sequential split.5                            corresponds to considering the limit as #Cal → ∞. This
+To gain understanding on ACI in the context of dependent                   allows to focus on the impact of recursive updates in (2) and
+temporal data, we analyse a situation where a fitted regres-               describe their behaviour by relying on Markov Chain theory.
+sion model µ̂ produces AR(1) residuals, thus yt − µ̂(xt ) =
+εt , where εt is an AR(1) process: εt+1 = 0.99εt + ξt+1 ,                  3.1      Exchangeable case
+with ξt ∼ N (0, 0.01). We plot this toy example in Figure 1,
+                                                                           ACI is usually applied in an adversarial context. If the
+for T0 = T1 = 500. Three versions of ACI are compared:
+                                                                           scores are actually exchangeable, ACI’s validity would not
+γ = 0, the quantile level is not updated but the calibration
+                                                                           improve upon SCP (known to be quasi-exactly valid), thus
+set Calt is; γ = 0.01 and γ = 0.05. To obtain an insightful
+                                                                           assessing ACI’s impact on efficiency is necessary. Define
+visualisation6 , we represent the interval [±Q b 1−α (SCal )]
+                                                    t     t
+                                                                           L(αt ) = 2Q(1 − αt ) the length of the interval predicted by
+instead of Cαt (xt ). When no intervals are displayed, ACI is
+            b
+                                                                           the adaptive algorithm at time t, and L0 = 2Q(1 − α) the
+predicting R. Here and in the sequel, we use α = 0.1.                      length of the interval predicted by the non-adaptive algo-
+In this toy example, the coverage rate among many observa-                 rithm (or equivalently, γ = 0).
+tions is valid for γ ∈ {0.01, 0.05} (90% and 92% of points                 Theorem 3.1. Assume that: (i) α ∈ Q; (ii) the scores are ex-
+included) but not for γ = 0 (72.6%). Moreover, Figure 1                    changeable with quantile function Q; (iii) the quantile func-
+shows that the type of errors depends on γ. For γ = 0, ACI                 tion is perfectly estimated at each time (as defined above);
+excludes consecutive observations (e.g. for t ∈ [810, 860],                (iv) the quantile function Q is bounded and C 4 ([0, 1]). Then,
+zoomed-in plot). For γ ∈ {0.01, 0.05}, ACI manages to                      for all γ > 0, (αt )t>0 forms a Markov Chain, that admits a
+adapt to these observations, and the higher the γ, the less                stationary distribution πγ , and
+the adaptation is delayed. Furthermore, when the residuals
+                                                                                        T
+are small and far from both interval bounds, ACI quickly                            1X            a.s.      not.
+                                                                                          L(αt ) −→ Eπγ [L] = Eα̃∼πγ [L(α̃)].
+reduces the interval’s length and produces more efficient in-                       T t=1       T →+∞
+tervals. Consequently, ACI may also not cover on points for
+which the residuals have a relatively small values compared                Moreover, as γ → 0,
+to the calibration’s values (e.g. for t ∈ [760, 785]).                                                       γ
+                                                                               Eπγ [L] = L0 + Q00 (1 − α) α(1 − α) + O(γ 3/2 ).
+4
+                                                                                                             2
+  This happens in practice when the response and prediction are
+                                                                           Interpretation of assumptions. Assumption (i) is weak
+  bounded, e.g., thanks to physical/real constraints as for the spot
+  prices presented in Section 6.1, that are bounded by market rules.       since a practitioner will always select α ∈ Q while assump-
+5
+  As in Figure 4(a). This is also consistent with OSSCP (Sec. 5.3).        tion (ii) describes the classical exchangeable setting. The
+6                                                                          main assumptions are (iii) and (iv): (iii) can be interpreted
+  We suggest focusing the visualisation on the scores to analyse the
+  behaviour of CP methods, as they are at the core of the validity         as considering an infinite calibration set while (iv) is neces-
+  proof. A detailed discussion on this is given in App. A.4                sary7 in order to define Eπγ [L]: here, we extend Q(1 − α̂)
+                                                                           7
+                                                                               ∀γ> 0, Pπγ (α̃ ≤ 0) > 0: we need |Q(1)| < ∞ to define Eπγ [L].
+
+                                                                       3
+by Q(1) for α̂ < 0. Finally, the regularity assumption on Q                                          ϕ =0           ϕ =0.85         ϕ =0.98      ϕ =0.997
+                                                                                                     ϕ =0.6         ϕ =0.95         ϕ =0.99      ϕ =0.999
+is purely technical.
+                                                                                                               Thm. 3.1
+                                                                                                                                                                 0.08
+Interpretation of the result. For standard distributions,                                        4
+
+
+
+                                                                                Average length
+                                                                                                            0.01          0.03                                   0.06
+Q00 (1 − α) > 0,8 and Theorem 3.1 implies that ACI on                                                                                                       γ∗
+                                                                                                 3                                                               0.04
+exchangeable scores degrades the efficiency linearly with
+                                                                                                                                                                 0.02
+γ compared to CP. This is an important takeaway from
+                                                                                                 2
+                                                                                                                                                                 0.00
+the analysis, that underlines that such adaptive algorithms                                          0.00          0.05          0.10     0.15       0.20               0.0   0.6   0.85   0.95 0.98 0.99   0.997 0.999
+                                                                                                                                  γ                                                            ϕ
+may actually hinder the performance if the data does not
+have any temporal dependency, and a small γ is preferable.
+For example, if the residuals are standard gaussians, for                      Figure 2: Left: evolution of the mean length depending on γ
+α = 0.01, setting γ = 0.03 (resp. γ = 0.05) will increase                      for various ϕ. Right: γ ∗ minimizing the average length for
+the length by 1.59% (resp. by 3.38%) with respect to γ = 0.                    each ϕ (each cross has a size proportional to the number of
+                                                                               runs for which γ ∗ was the minimizer).
+3.2      AR(1) case
+We now consider the case of (highly) correlated residuals,                     that the expected length is minimal for γ = 0 and grows
+which happens in many practical time series applications.                      linearly with γ around 0. This behaviour is very similar for
+                                                                               ϕ = 0.6.
+Theorem 3.2. Assume that: (i) α ∈ Q; (ii) the residuals
+                                                                               3. For any γ, the function ϕ 7→ Eπγ,ϕ [L] is decreasing (Fig-
+follow an AR(1) process (i.e., εt+1 = ϕεt + ξt+1 with (ξt )t
+                                                                               ure 2, left). Indeed, stronger correlation between residuals
+i.i.d. random variables admitting a continuous density with
+                                                                               (i.e., a higher ϕ), allows to build smaller intervals. This
+respect to Lebesgue measure, of support S) clipped at a
+                                                                               confirms that ACI’s impact strengthens with the strength of
+large value R, and [−R, R] ⊂ S; (iii) the quantile function
+                                                                               the temporal dependence.
+Q of the stationary distribution of (εt )t is known; (iv) Q is
+                                                                               4. Surprisingly, the function ϕ 7→ γϕ∗ , that corresponds
+bounded by R. Then (αt , εt−1 ) is a homogeneous Markov
+                                                                               to the optimal learning rate for a given signal, is non-
+Chain in R2 that admits a unique stationary distribution
+                                                                               monotonic, (Figure 2, right). As γ = 0 is optimal for ϕ = 0,
+πγ,ϕ . Moreover,
+                                                                               the function first increases. However, the optimal learning
+                   1X
+                       T                                                       rate then diminishes as ϕ increases. This sheds light on the
+                                 a.s.
+                         L(αt ) −→ Eπγ,ϕ [L].                                  complex intrinsic tradeoffs of the method: for small values
+                   T t=1       T →+∞
+                                                                               of ϕ, using γ > 0 simply degrades the efficiency; for “mod-
+                                                                               erate” values of ϕ using a larger γ is necessary to quickly
+We numerically estimate γϕ∗ = argminγ Eπγ,ϕ [L] in Fig-                        benefit from the short-term dependency between residuals;
+ure 2. To do so, AR(1) processes of length T = 106 are                         finally, for larger values of ϕ, the process exhibits a longer
+simulated for various ϕ and asymptotic variance 1. ACI                         memory, thus it is crucial to find a smaller learning rate
+is applied on each of them, with 100 different γ ∈ [0, 0.2].                   that produces more stable intervals, even if it means that the
+Figure 2 (left) represents the average length depending on                     algorithm won’t adapt as quickly.
+γ for each ϕ, and (right) the values of γ minimizing this
+average length for each ϕ (for 25 repetitions of the experi-                   Overall, these results highlight the importance of the choice
+ment). The average length is computed after imputing all                       of γ, as not choosing γ ∗ can lead to significantly larger inter-
+the infinite intervals’ length by the maximum of the process,                  vals. In addition, they provide insights on the corresponding
+as explained in Section 2. A similar study using instead the                   dynamics. Yet the choice of γ in more complex practical
+median length is provided after the proofs in Appendix B.                      settings remains difficult: this calls for adaptive strategies.
+
+Interpretation. We make the following observations:
+                                                                               4                      Adaptive strategies based on ACI
+1. For high ϕ, ACI indeed improves for a strictly posi-
+tive γ upon γ = 0. This proves that ACI can be used                            To prevent the critical choice of γ an ideal solution is an
+to produce smaller intervals for time series CP. The function                  adaptive strategy with a time dependent γ. We propose
+γ 7→ Eπγ,ϕ [L] decreases until γϕ∗ , then increases again, as                  two strategies based on running ACI for K ∈ N values
+expected because very large γ cause the algorithm to be less                   {(γk )k≤K } of γ, chosen by the user. Overall, this does not
+stable and produce numerous infinite intervals.                                increase the computational cost because Trt and Calt are
+2. In Figure 2 (left), zoomed-in plot, the black line repre-                   shared between all ACI; thus the only additional cost is the
+sents asymptotic result of Theorem 3.1. We retrieve here                       computation of the K different quantiles. For any xt , denote
+                                                                               Cbα (xt ) the interval at time t built by ACI using γk .
+                                                                                  t,k
+8
+    as Q0 (x) = f (Q(x))
+                     1
+                          with f the scores’ probability density func-
+            0                                                                  Naive strategy. A simple strategy is to use at each step
+    tion, Q (x) increases locally around x if and only if f decreases
+    locally around Q(x) (Q is increasing). Thus, Q00 (x) > 0 if and            the γ that achieved in the past the best efficiency while
+    only if f decreases locally around Q(x). Thereby, for x = 1 − α            ensuring validity. For stability purposes, consider a warm-
+    high (usually the case), Q00 (1 − α) > 0 for standard distributions.       up period Tw ≤ T1 − 1. For each t ≥ T0 + Tw , we select
+
+                                                                           4
+                   n    Pt                     o
+ ∗
+kt+1 ∈ argmink∈At t−1 s=1 length(C   bα (xs )) with
+                                       s,k
+                                                                         5     Numerical evaluation on synthetic data
+                       Pt
+At = {k ∈ J1, KK | t−1 s=1 1ys ∈Cbα (xs ) ≥ 1 − α} or                          sets
+                                Ps,k
+                                   t
+ ∗
+kt+1 ∈ argmink∈J1,KK {|1−α−t−1 s=1 1ys ∈Cbα (xs ) |}                     In this section we conduct synthetic experiments on a wide
+                                                           s,k
+                                                                         range of data sets presented in Section 5.1. The goal of
+if At = ∅. For the first Tw steps, an arbitrary strategy is
+                                                                         this section is twofold. First, in Section 5.2, comparing our
+applied (in simulations, γ = 0 for t ≤ Tw = 50).
+                                                                         proposed adaptive strategies to ACI with a wide range of γ
+Online Expert Aggregation on ACI (AgACI). Instead                        values. Second, in Section 5.4, comparing performances of
+of picking one γ in the grid, we introduce an adaptive                   AgACI and ACI to that of competitors – namely EnbPI and
+aggregation of experts (Cesa-Bianchi and Lugosi, 2006),                  online sequential SCP, described in Section 5.3.
+with expert k being ACI with parameter γk . This strat-
+egy is detailed in Algorithm 1. At each step t, it per-                  5.1   Data generation process and settings
+forms two independent aggregations of the K-ACI intervals
+ bα (·) not.       (`)      (u)                                          We generate data according to:
+C  t,k
+            = [b̂t,k (·), b̂t,k (·)], one for each bound, and out-
+                                                                                                                               2
+puts C
+              not.
+       et (·) = [b̃(`)          (u)                                              Yt =10 sin (πXt,1 Xt,2 ) + 20 (Xt,3 − 0.5)
+                       t (·), b̃t (·)]. Aggregation computes an                                                                       (3)
+optimal weighted mean of the experts (Line 11), where the                              + 10Xt,4 + 5Xt,5 + 0Xt,6 + εt ,
+            (`)     (u)
+weights ωt,k , ωt,k assigned to expert k depend on all experts           where the Xt are multivariate uniformly distributed on [0, 1],
+performances (suffered losses) at time steps 1, · · · , t (Line          and Xt,6 represents an uninformative variable. The noise
+9). We use the pinball loss ρβ , as it is frequent in quantile           εt is generated from an ARMA(1,1) process of parameters
+regression, where the pinball parameter β is chosen to α/2               ϕ and θ, i.e. εt+1 = ϕεt + ξt+1 + θξt , with ξt a white
+(resp. 1 − α/2) for the lower (resp. upper) bound. These                 noise called the innovation (see Appendix C.1 for details).
+losses are plugged in the aggregation rule Φ. Finally, the               When the noise is i.i.d., one retrieves the simulations from
+aggregation rule can include the computation of the gradi-               Friedman et al. (1983). The temporal dependence is present
+ents of the loss (gradient trick). As aggregation rules require          only in the noise in order to control its strength and its impact
+bounded experts, a thresholding step is added (Line 6).                  on the algorithms’ performance.
+We chose Φ to be the Bernstein Online Aggregation (BOA,                  Given the non-linear structure of the data generating process,
+Wintenberger, 2017), that was successfully applied for finan-            we use a random forest (RF) as predictive model, with the
+cial data (Berrisch and Ziel, 2021; Remlinger et al., 2021).             same hyper-parameters through all the experiments (speci-
+We rely on R package OPERA (Gaillard and Goude, 2021),                   fied in Appendix C.2).
+which allows the user to easily select among many aggrega-
+tion rules such as EWA (Vovk, 1990), ML-Poly (Gaillard                   To assess the impact of the temporal structure, we vary ϕ
+et al., 2014) or FTRL (Shalev-Shwartz and Singer, 2007;                  and θ in {0.1, 0.8, 0.9, 0.95, 0.99}. To focus on the impact
+Hazan, 2019), etc., that give similar results in our exper-              of the dependence structure, the value of the innovation’s
+iments. We use the gradient trick in the simulations. In                 variance is selected so that the asymptotic variance of εt is
+the sequel, AgACI refers to AgACI using BOA and gradi-                   independent of ϕ, θ: here we choose limt→∞ Var(εt ) = 10.
+ent trick.                                                               For each set of parameters, we generate n = 500 samples
+                                                                         (εt )t∈J1,T0 +T1 K with T0 = 200. In the sequel we display the
+Algorithm 1 Online Expert Aggregation on ACI (AgACI)                     results on an ARMA(1,1) which are representative of all the
+Input: Miscoverage rate α, grid {γk , k ∈ J1, KK}, aggre-                results obtained. For the sake of simplicity, we consider ϕ =
+    gation rule Φ, threshold values M (`) , M (u) .                      θ. Complementary results (i) for an asymptotic variance of 1
+ 1: Let β (`) = α/2 and β (u) = 1 − α/2                                  (corresponding to a higher signal to noise ratio), (ii) for
+ 2: for t ∈ JT0 + 1, T0 + T1 K do                                        AR(1) and MA(1) models are available in Appendix D.
+ 3:   Set C et (xt ) = [b̃(`)        (u)
+                          t (xt ), b̃t (xt )]                            Joint visualisation of validity & efficiency. In order to si-
+ 4:   for k ∈ J1, KK do                                                  multaneously assess validity and efficiency, in Figures 3, 5
+                      (·)
+ 5:      Compute b̂t,k (xt ) using ACI with γk .                         and 7, we represent on the same graph the empirical cov-
+              (·)                      (·)                               erage and average median length (used for efficiency as
+ 6:                     / R then set b̂t,k (xt ) = M (·)
+         if b̂t,k (xt ) ∈
+                                                                         imputing the infinite bounds by the maximum of the whole
+ 7:    end for
+                                                                         sequence is not always feasible in practice). In those three
+ 8:    for k ∈ J1, KK do
+           (·)                      (·)                                  figures, the vertical dotted line represents the target miscov-
+         ωt,k = Φ ({ ρβ (·) (ys , b̂s,l (xs )), s ∈ JT0 + 1, tK,         erage rate, α = 0.1. Consequently, a method is valid when
+ 9:
+                          l ∈ J1, KK})                                   it lies at the right of this line, and the lower the better.
+10:    end for              PK     (·) (·)
+                    (·)       k=1 ωt,k b̂t,k (x)
+11:    Define b̃t+1 (x) =      PK       (·)        for any x ∈ Rd        5.2   Impact of γ, performance of AgACI
+                                 l=1 ωt,l
+12: end for                                                              Figure 3 illustrates the behaviour of ACI (with multiple
+                                                                         values of γ), the naive strategy (empty triangles) and AgACI
+
+                                                                     5
+                                                                                                                                             Unused data             Proper training set          Calibration set     Test point
+(black stars) for increasing (from left to right) values of ϕ,
+θ, with T1 = 200. In particular, the top row shows the joint
+validity & efficiency and, for this figure only, we add in the
+bottom row the same graph using the average length after
+                                                                                                                              t=0                               t = T0        t = T0 + T1   t=0                                  t = T0       t = T0 + T1
+imputation (see details in Appendix D) to assess efficiency                                                                                     (a) OSSCP                                                           (b) EnbPI
+in another way.
+When γ is small, one observes an undercoverage, which                                                                         Figure 4: Scheme of the two baselines: OSSCP and EnbPI.
+increases when the temporal dependency of ε increases.                                                                        In (a), Tr and Cal have equal size, but it can be changed.
+Increasing γ enables ACI to increase the interval’s size faster
+                                                                                                                              5.3   Description of baseline methods
+when we do not cover, and thus to improve validity, which is
+achieved for high values of γ; however this also increases the                                                                We consider as baseline online sequential split conformal
+frequency of uninformative (infinite) intervals, as deduced                                                                   prediction (OSSCP), a generalisation of SCP. The other
+from the bottom row of Figure 3, where the average length                                                                     competitor is EnbPI (Xu and Xie, 2021b), specifically de-
+after imputation grows with γ. Remark that these results do                                                                   signed for time series. Pseudo-codes and details are given
+not contradict the validity result recalled at the beginning                                                                  in Appendix C.3. Offline SCP (for which Trt ≡ Tr0 and
+of Section 3, which is only asymptotic while we predict                                                                       Calt ≡ Cal0 ) is not considered as a competitor because it
+on 200 points. For ϕ, θ small, we observe that similarly                                                                      is unfair to compare an offline algorithm to one that uses
+to Theorem 3.1, the efficiency does not improve with γ.                                                                       more recent data points. This corresponds to comparing a
+For moderate values of ϕ, θ ∈ {0.8, 0.9, 0.95}, we observe                                                                    prediction at horizon Tlarge to one at horizon Tsmall . This is a
+that the average median length is decreasing with γ for                                                                       limitation of the comparison in Xu and Xie (2021b).
+γ ≥ 0.01. This effect is observable on average but not
+                                                                                                                              OSSCP. We consider an online version of SCP by refitting
+present in all the 500 experiments. One possible explanation
+                                                                                                                              the underlying regression model and recalibrating using the
+is that the shrinking effect of ACI on the predicted interval
+                                                                                                                              newest points. Moreover, to appropriately account for the
+enables to significantly reduce the predicted interval when γ
+                                                                                                                              temporal structure of the data, we use a sequential split as
+is large, and this effect is, on average, more important than
+                                                                                                                              in Wisniewski et al. (2020): at any t, the time indices in Trt
+the number of large intervals.
+                                                                                                                              are smaller than those of Calt . Not randomizing aims at
+Moreover, the naive strategy is clearly not valid: indeed it                                                                  excluding future observations from Trt , which may lead to
+results in greedily choosing a γ that achieved good results                                                                   an under-estimation of the errors on Calt , thus eventually
+in the past, and is consequently slightly more likely to fail                                                                 to smaller intervals with under-coverage. We compare both
+to cover in future steps. Thereby, we do not consider it                                                                      splitting strategies on simulations in Appendix D.4. OSSCP
+anymore. Finally, AgACI achieves valid coverage without                                                                       procedure is schematised in Figure 4(a).
+increasing the median length with respect to each expert,
+                                                                                                                              Original EnbPI. EnbPI, Ensemble Prediction Interval (Xu
+and even improves the coverage. Overall, it appears to be a
+                                                                                                                              and Xie, 2021b), works by updating the list of conformity
+good candidate as a parameter-free method.
+                                                                                                                              scores with the most recent ones so that the intervals adapt
+                                                                                                                              to latest performances, without refitting the underlying re-
+                                                                                                                              gression model. Thereby, the predicted intervals can adapt
+                                                                                                                              to seasonality and trend. In EnbPI, B bootstrap samples of
+                                                    ϕ = θ =0.1                 ϕ = θ =0.8                 ϕ = θ =0.9                       ϕ = θ =0.95                                      ϕ = θ =0.99
+
+                                        14                                                                                                                                                                                 AgACI
+
+
+
+
+     Average median length
+                                                                                                                                                                                                                           Naive method
+
+
+                                        13
+                                                                                                                                                                                                                                0.0700
+
+                                                                                                                                                                                                                                0.0400
+                                        12
+                                                                                                                                                                                                                                0.0100
+                                             0.86     0.88       0.90   0.86     0.88       0.90   0.86     0.88       0.90         0.86     0.88        0.90                   0.86          0.88        0.90
+                                                     Coverage                   Coverage                   Coverage                         Coverage                                         Coverage                           0.0070
+
+
+
+
+     Average length, after imputation
+                                        16
+                                                                                                                                                                                                                                0.0040    γ
+                                        15                                                                                                                                                                                      0.0010
+
+                                        14                                                                                                                                                                                      0.0007
+
+                                                                                                                                                                                                                                0.0004
+                                        13
+                                                                                                                                                                                                                                0.0001
+                                        12
+                                                                                                                                                                                                                                0.0000
+                                             0.86     0.88       0.90   0.86     0.88       0.90   0.86     0.88       0.90         0.86     0.88        0.90                   0.86          0.88        0.90
+                                                     Coverage                   Coverage                   Coverage                         Coverage                                         Coverage
+
+
+Figure 3: ACI performance with various θ, ϕ and γ on data simulated according to equation (3) with a Gaussian ARMA(1,1)
+noise of asymptotic variance 10 (see Appendix C.1). Top row: average median length w.r.t. the coverage. Bottom row:
+average length after imputation w.r.t. the coverage. Stars correspond to the proposed online expert aggregation strategy,
+AgACI, and empty triangles to the naive choice.
+
+                                                                                                                        6
+the training set are generated and the regression algorithm
+                                                                                                         OSSCP (adapted from Lei et al., 2018)                      ACI (Gibbs & Candès, 2021),   = 0.01
+is fitted on each bootstrap sample producing B predictors.                                               O✏ine SSCP (adapted from Lei et al., 2018)                 ACI (Gibbs & Candès, 2021),   = 0.05
+Finally, the predictors are aggregated in two ways: first, for                                           EnbPI (Xu & Xie, 2021)                                     AgACI
+
+each training point of index t ≤ T0 , EnbPI aggregates only                                              EnbPI V2
+
+
+the subset of predictors trained on bootstrap sample exclud-                                 14
+
+ing (xt , yt ). This way, EnbPI constructs a set of hold-out                                                                                                                                 ' = ✓ =0.1
+                                                                                                                                                                                             ' = ✓ =0.8
+
+
+
+
+                                                                     Average median length
+                                                                                             13
+calibration scores. Second, for test points of index t > T0                                                                                                                                  ' = ✓ =0.9
+                                                                                                                                                                                             ' = ✓ =0.95
+EnbPI aggregates all the B predictors. A sketch of EnbPI is                                  12                                                                                              ' = ✓ =0.99
+                                                                                                          0.895     0.900      0.905
+presented in Figure 4(b). Note that in Xu and Xie (2021b)
+they use a classical bootstrap procedure, not dedicated to                                   11
+time series.
+                                                                                             10
+They show empirically that it leads to valid coverage on real                                     0.83       0.84       0.85       0.86     0.87      0.88   0.89      0.90      0.91
+                                                                                                                                          Coverage
+world time series, such as hourly wind power production
+and solar irradiation, while offline SCP fails to attain valid
+coverage.                                                            Figure 5: Performance of various CP methods on data simu-
+                                                                     lated according to equation (3) with a Gaussian ARMA(1,1)
+EnbPI V2. Xu and Xie (2021b) used the mean aggregation               noise of asymptotic variance 10 (see Appendix C.1). Results
+during the training phase and the (1 − α)-th quantile of the         aggregated from 500 independent runs. Empirical standard
+predictors for the prediction. We consider using the mean            errors displayed.
+aggregation all along the procedure as mixing both aggrega-
+tions may hurt the performance of the algorithm (as shown            • While ACI with γ = 0.01 also struggles for high values of
+in the following simulations). Note that simultaneously to             ϕ and θ such as 0.99, we observe that it still attains valid
+our work, authors released an updated version on ArXiv (Xu             coverage with a well chosen γ. Most importantly, ACI
+and Xie, 2021a), incorporating a similar change.                       performances are robust to the increase of the dependence
+                                                                       strength: except for the ϕ = θ = 0.99, its markers are
+5.4   Experimental results: impact of ϕ, θ                             really close to each other.
+                                                                     • AgACI always nearly attains validity (coverage is over
+Figure 5 presents the results for data generated as in Sec-            89.8% for all ϕ), and achieves the best efficiency perfor-
+tion 5.1, for various (ϕ, θ). Each sample contains 300 obser-          mance among valid methods.
+vations, with T0 = 200 and T1 = 100. We compare AgACI
+(with K = 30 experts), ACI (with γ ∈ {0.01, 0.05}), OS-              Note that ACI’s valid coverage with some γ comes at the
+SCP, EnbPI and EnbPI V2 (with mean aggregation). To                  price of predicting more infinite intervals. A more detailed
+assess the impact and interest of an online procedure, we            analysis on this phenomenon is conducted in Appendix D.3.
+also add offline SCP. Finally, to ensure the robustness of our       This can also be observed in graphs obtained with the aver-
+conclusions each experiment is repeated n = 500 times, and           age length after imputation, which are similar to Figure 5
+Figure 5 includes the standard errors (given by √  σ̂n
+                                                       , where       and Appendix D.2.1. In these graphs, the validity remains
+                                                     n
+σ̂n is the empirical standard deviation).                            unchanged as expected, but the efficiency is more degraded
+                                                                     for ACI with γ = 0.05 and for AgACI, since they produce
+Each color is associated to a set (ϕ, θ), each marker to an          more often uninformative intervals, as observed in Figure 3.
+algorithm. To improve readability, we often link markers of
+the same method. There are thus two ways of analysing Fig-           Summary. We highlight the following takeaways:
+ure 5: for a given method, the lines highlight the evolution         1. The temporal dependence impacts the validity.
+of its performance with (ϕ, θ); for a given data distribution,       2. Online is significantly better than offline.
+the set of markers of its color allow to compare the methods.        3. OSSCP. Achieves valid coverage for ϕ and θ smaller
+Figure 5, and results on AR(1) in Appendix D.2.1, highlight             than 0.9, but is not robust to the increasing dependence.
+that in an AR(1) or ARMA(1,1) process:                               4. EnbPI. Its validity strongly depends on the data distri-
+• Refitting the method (OSSCP vs Offline SCP) brings a                  bution (it is valid on a MA(1) noise, not in AR(1) and
+  significant improvement, that increases with higher depen-            ARMA(1,1) noise). When the method is valid, it pro-
+  dence (higher values for ϕ and θ).                                    duces the smallest intervals. EnbPI V2 method should be
+• All methods produce smaller intervals for ϕ = θ = 0.99.               preferred.
+• EnbPI looses coverage while producing shorter intervals            5. ACI. Achieves valid coverage for every simulation set-
+  when the dependence increases. The performance of                     tings with a well chosen γ, or for dependence such that
+  EnbPI depends significantly on the type and strength of               ϕ < 0.95. It is robust to the strength of the dependence.
+  dependence.                                                        6. AgACI. Achieves valid coverage for every simulation
+• EnbPI V2 is closer to the target coverage than original               settings, with good efficiency.
+  EnbPI.
+• OSSCP looses validity & coverage as ϕ and θ increase.
+
+                                                                 7
+6                      Forecasting French electricity spot prices                                                                              OSSCP
+                                                                                                                                               Offline SSCP
+                                                                                                                                                                        ACI γ = 0
+                                                                                                                                                                        ACI γ = 0.01
+                                                                                                                                                                                               ACI γ = 0.05
+                                                                                                                                                                                               AgACI
+                                                                                                                                               EnbPI V2
+In this last section, the task of forecasting French electricity
+                                                                                                                                      26
+spot prices with predictive intervals is considered in order
+                                                                                                                                      25
+to assess the methods on a real time series, and most impor-
+                                                                                                                      Median length
+tantly to show the relevance of ACI and AgACI in practice                                                                             24
+
+
+for time series without distribution shifts.                                                                                          23
+
+                                                                                                                                      22
+
+6.1                        Presentation of the price data                                                                             21
+                                                                                                                                           0.900   0.905      0.910   0.915    0.920   0.925   0.930   0.935
+                                                                                                                                                                         Coverage
+The data set contains the French electricity spot prices, set
+by an auction market, from 2016 to 2019. Each day D
+                                                                                                             Figure 7: Performance of different CP methods on hourly
+before 12 AM, any producer (resp. supplier) submit their
+                                                                                                             spot electricity prices in France, trained from 2016 to 2018
+orders for the 24 hours of day D + 1. An order consists
+                                                                                                             and forecasted on 2019. Median length with respect to
+of an electricity volume in MWh offered for sale (resp. re-
+                                                                                                             empirical coverage.
+quired to be purchased) and a price in e/MWh, at which
+they accept to sell (resp. buy) this volume. At 12 AM, the                                                   results are represented in Figure 7.
+algorithm “Euphemia” (EUPHEMIA, 2019) fixes the 24
+hourly prices of day D + 1 according to these offers and                                                     OSSCP over-covers but to a lesser extent than the offline
+additional constraints. Thereby, it is an hourly data set, con-                                              version. This can be explained by a low presence of peaks
+taining (3 × 365 + 366) × 24 = 35064 observations. Our                                                       during the test period. Indeed, by updating the whole pro-
+aim is to predict at day D (before 12 AM) the 24 prices                                                      cedure, the high peaks are “forgotten” which leads to small
+of day D + 1. Given the prices’ construction, we consider                                                    intervals while it is not the case for the offline version which
+the following explanatory variables: day-ahead forecast con-                                                 leads to too large intervals. Thereby, online versions can
+sumption, day-of-the-week, 24 prices of the day D − 1 and                                                    help to improve efficiency, in addition to validity. EnbPI at-
+24 prices of the day D − 7. An extract of the considered                                                     tains a valid coverage by over-covering. The under-coverage
+data set is presented in Appendix E.1.                                                                       observed in the simulation study is not systematic, as in Xu
+                                                                                                             and Xie (2021b). ACI gives the smallest intervals with a
+                                                                                                             correct coverage, for γ = 0.01 and γ = 0.05. The up-
+                     800                                     Observed price
+                                              125            Predicted price                                 date of the quantile level enables to shrink the intervals.
+                                                             Predicted interval                              While the simulation in Section 5.4 study outlines that ACI
+
+
+Spot price (€/MWh)
+                                              100
+                     600
+                                               75                                                            improves validity, this application illustrates that it can pro-
+                     400                       50                                                            vide efficient interval. AgACI is more efficient than γ = 0
+                                                         1       1         1          1       1
+                                                                                                             while maintaining validity. Yet it slightly over-covers, and
+                                                    21/0     22/0     23/0        24/0    25/0
+                     200                                                                                     is slightly less efficient than ACI with a well chosen γ.
+                       0                                                                                     An illustration of the predicted intervals is given in the inset
+                           2016        2017             2018                   2019               2020       graphic of Figure 6, for AgACI, to highlight the practical
+                                                        Date                                                 relevance of such an approach on the spot prices.
+Figure 6: French electricity spot prices, from 2016 to 2019.
+Predicted intervals on the 25th of January 2019, using
+AgACI.                                                                                                       7   Conclusion
+                                                                                                             This article shows why and how ACI can be used for in-
+These prices exhibits medium to high peaks, as illustrated in                                                terval prediction in the context of time series with general
+Figure 6 where the French prices had reached 800 e/MWh                                                       dependencies. We prove that ACI deteriorates efficiency
+in fall 2016, compared to an average price of approximately                                                  compared to CP in the exchangeable case and analyse the
+40 e/MWh in 2019. These extreme events are mainly due                                                        dependency on γ in the AR case with the support of numer-
+to the non-storability of electricity and the inelasticity of the                                            ical simulations. We propose an algorithm, AgACI, based
+demand: when the demand is high compared to the avail-                                                       on online expert aggregation, that wraps around ACI to
+able production, production units with expensive production                                                  avoid the choice of γ. We conduct extensive experiments on
+costs must be called, leading to a huge market price.                                                        synthetic time series for various strengths and structures of
+                                                                                                             time dependence, demonstrating ACI’s robustness and better
+6.2                        Price prediction with predictive intervals in 2019                                performances than baselines, with well chosen γ or using
+Since the 24 hours have very distinct patterns, we fit one                                                   AgACI. Finally we perform a detailed application study on
+model per hour, using again RF. We predict for the year                                                      the high-stakes electricity price forecasting problem in the
+2019, using a sliding window of 3 years, as described in                                                     energy transition era. Future work includes theoretical study
+Figure 4(a), using one year and 6 months as proper training                                                  of the proposed aggregation algorithm, including whether it
+set and the most recent year and a half for calibration. The                                                 preserves the asymptotic validity observed experimentally
+
+                                                                                                         8
+or to quantify its efficiency with respect to the performances         Goehry, B. (2020). Random forests for time-dependent
+of each expert.                                                          processes. ESAIM: Probability and Statistics, 24:801–
+                                                                         826.
+Acknowledgements                                                       Goehry, B., Yan, H., Goude, Y., Massart, P., and Poggi,
+                                                                        J.-M. (2021). Random forests for time series. HAL hal-
+We thank Maximilien Germain, Pablo Jiménez and Con-                     03129751.
+stantin Philippenko for interesting discussions. The work
+                                                                       Härdle, W., Horowitz, J., and Kreiss, J.-P. (2003). Bootstrap
+of A. Dieuleveut is partially supported by ANR-19-CHIA-
+                                                                         methods for time series. International Statistical Review,
+0002-01/chaire SCAI.
+                                                                         71(2):435–459.
+                                                                       Hazan, E. (2019). Introduction to online convex optimiza-
+References                                                               tion. arXiv preprint arXiv:1909.05207.
+Angelopoulos, A. N. and Bates, S. (2021). A gentle introduc-           Kath, C. and Ziel, F. (2021). Conformal prediction interval
+  tion to conformal prediction and distribution-free uncer-              estimation and applications to day-ahead and intraday
+  tainty quantification. arXiv preprint arXiv:2107.07511.                power markets. International Journal of Forecasting,
+Berrisch, J. and Ziel, F. (2021). CRPS learning. Journal of              37(2):777–799.
+  Econometrics.                                                        Kreiss, J.-P. and Paparoditis, E. (2012). The hybrid wild
+Cai, Y. and Davies, N. (2012). A simple bootstrap method                 bootstrap for time series. Journal of the American Statis-
+  for time series. Communications in Statistics-Simulation               tical Association, 107(499):1073–1084.
+  and Computation, 41(5):621–631.                                      Lago, J., De Ridder, F., and De Schutter, B. (2018). Forecast-
+                                                                         ing spot electricity prices: Deep learning approaches and
+Cauchois, M., Gupta, S., Ali, A., and Duchi, J. C. (2020).
+                                                                         empirical comparison of traditional algorithms. Applied
+  Robust Validation: Confident Predictions Even When
+                                                                         Energy, 221:386–405.
+  Distributions Shift. arXiv preprint arXiv:2008.04267.
+                                                                       Lago, J., Marcjasz, G., De Schutter, B., and Weron, R.
+Cesa-Bianchi, N. and Lugosi, G. (2006). Prediction, learn-               (2021). Forecasting day-ahead electricity prices: A re-
+  ing, and games. Cambridge University Press.                            view of state-of-the-art algorithms, best practices and an
+Chernozhukov, V., Wüthrich, K., and Yinchu, Z. (2018).                  open-access benchmark. Applied Energy, 293:116983.
+  Exact and Robust Conformal Inference Methods for Pre-                Lei, J., G’Sell, M., Rinaldo, A., Tibshirani, R. J., and Wasser-
+  dictive Machine Learning with Dependent Data. In Con-                  man, L. (2018). Distribution-Free Predictive Inference
+  ference On Learning Theory, pages 732–749. PMLR.                       for Regression. Journal of the American Statistical Asso-
+Dashevskiy, M. and Luo, Z. (2008). Network traffic demand                ciation, 113(523):1094–1111.
+  prediction with confidence. In IEEE Global Telecommu-                Maciejowska, K., Nowotarski, J., and Weron, R. (2016).
+  nications Conference. IEEE.                                           Probabilistic forecasting of electricity spot prices using
+Dashevskiy, M. and Luo, Z. (2011). Time series predic-                  Factor Quantile Regression Averaging. International Jour-
+  tion with performance guarantee. IET communications,                  nal of Forecasting, 32(3):957–965.
+  5(8):1044–1051.                                                      Meyn, S. P. and Tweedie, R. L. (2012). Markov chains and
+EUPHEMIA (2019). Euphemia public description, single                    stochastic stability. Springer Science & Business Media.
+  price coupling algorithm.                                            Nowotarski, J. and Weron, R. (2018). Recent advances in
+                                                                         electricity price forecasting: A review of probabilistic
+Friedman, J. H., Grosse, E., and Stuetzle, W. (1983). Multi-
+                                                                         forecasting. Renewable and Sustainable Energy Reviews,
+  dimensional additive spline approximation. SIAM J. Sci.
+                                                                         81:1548–1568.
+  Stat. Comput.
+                                                                       Papadopoulos, H., Proedrou, K., Vovk, V., and Gammerman,
+Gaillard, P. and Goude, Y. (2021). OPERA. R package                      A. (2002). Inductive Confidence Machines for Regres-
+  version 1.2.0.                                                         sion. In Machine Learning: ECML 2002, pages 345–356.
+Gaillard, P., Goude, Y., and Nedellec, R. (2016). Addi-                  Springer.
+  tive models and robust aggregation for GEFCom2014                    Remlinger, C., Brière, M., Alasseur, C., and Mikael, J.
+  probabilistic electric load and electricity price forecasting.         (2021). Expert aggregation for financial forecasting. arXiv
+  International Journal of Forecasting, 32(3):1038–1050.                 preprint arXiv:2111.15365.
+Gaillard, P., Stoltz, G., and Van Erven, T. (2014). A second-          Romano, Y., Patterson, E., and Candès, E. (2019). Con-
+  order bound with excess losses. In Conference on Learn-                formalized Quantile Regression. Advances in Neural
+  ing Theory, pages 176–196. PMLR.                                       Information Processing Systems, 32.
+Gibbs, I. and Candès, E. (2021). Adaptive conformal in-               Saha, A., Basu, S., and Datta, A. (2021). Random forests
+  ference under distribution shift. In Advances in Neural                for spatially dependent data. Journal of the American
+  Information Processing Systems.                                        Statistical Association, 0(0):1–19.
+
+                                                                   9
+Shafer, G. and Vovk, V. (2008). A Tutorial on Conformal
+  Prediction. JMLR, 9:51.
+Shalev-Shwartz, S. and Singer, Y. (2007). A primal-dual per-
+  spective of online learning algorithms. Machine Learning,
+  69(2-3):115–142.
+Tibshirani, R. J., Barber, R. F., Candès, E., and Ramdas, A.
+  (2019). Conformal Prediction Under Covariate Shift. Ad-
+  vances in Neural Information Processing Systems, 32:11.
+Uniejewski, B. and Weron, R. (2021). Regularized quan-
+  tile regression averaging for probabilistic electricity price
+  forecasting. Energy Economics, page 105121.
+Vovk, V., Gammerman, A., and Saunders, C. (1999).
+  Machine-Learning Applications of Algorithmic Random-
+  ness. In Proceedings of the Sixteenth International Con-
+  ference on Machine Learning, pages 444–453. Morgan
+  Kaufmann Publishers Inc.
+Vovk, V., Gammerman, A., and Shafer, G. (2005). Algorith-
+  mic Learning in a Random World. Springer US.
+Vovk, V. G. (1990). Aggregating strategies. Proc. of Com-
+  putational Learning Theory.
+Weron, R. (2014). Electricity price forecasting: A review
+ of the state-of-the-art with a look into the future. Interna-
+ tional Journal of Forecasting, 30(4):1030–1081.
+Wintenberger, O. (2017). Optimal learning with bernstein
+ online aggregation. Machine Learning, 106(1):119–141.
+Wisniewski, W., Lindsay, D., and Lindsay, S. (2020). Ap-
+ plication of conformal prediction interval estimations to
+ market makers’ net positions. In Proceedings of the Ninth
+ Symposium on Conformal and Probabilistic Prediction
+ and Applications, volume 128 of Proceedings of Machine
+ Learning Research, pages 285–301. PMLR.
+Xu, C. and Xie, Y. (2021a). Conformal prediction for dy-
+  namic time-series. arXiv preprint arXiv:2010.09107.
+Xu, C. and Xie, Y. (2021b). Conformal prediction inter-
+ val for dynamic time-series. In Proceedings of the 38th
+ International Conference on Machine Learning, volume
+ 139 of Proceedings of Machine Learning Research, pages
+ 11559–11569. PMLR.
+
+
+
+
+                                                                  10
+Appendices
+The appendices are organized as follows. First, Appendix A provides details about the Split Conformal Prediction procedure.
+Second, Appendix B proves the results of Section 3 and conducts the numerical analysis of Section 3.2 in the case where
+the efficiency is computed using the median length. Then, Appendix C contains details on the experimental setup (hyper-
+parameters, settings, pseudo-codes of competing algorithms). Finally, Appendices D and E contain complementary numerical
+results, respectively on synthetic data sets and on the French electricity spot prices data set.
+
+A     Details on Split Conformal Prediction
+In this section, we introduce and review the simplest theoretical properties of Split Conformal Prediction (SCP). More
+specifically, we present the whole algorithm, the theoretical guarantees and discuss the visualisation challenges arising when
+visualising a CP procedure.
+
+A.1   Split Conformal Prediction Algorithm
+
+Algorithm 2 Split Conformal Algorithm, with absolute value residuals scores
+Input: Regression algorithm A, significance level α, examples z1 , . . . , zT with zt = (xt , yt ).
+Output: Prediction interval Cˆα (x) for any x ∈ Rd .
+ 1: Randomly split {1, . . . , T } into two disjoint sets Tr and Cal.
+ 2: Fit a mean regression function: µ̂(·) ← A ({zt , t ∈ Tr})
+ 3: for j ∈ Cal do
+ 4:    Set sj = |yj − µ̂(xj )|, the conformity scores
+ 5: end for
+ 6: Set SCal = {sj , j ∈ Cal}
+ 7: Compute Q   b 1−αSCP (SCal ), the 1 − αSCP -th empirical quantile of SCal , with 1 − αSCP := (1 − α) (1 + 1/ |Cal|).
+                   h                          i
+ 8: Set Cˆα (x) = µ̂(x) ± Q  b 1−αSCP (SCal ) , for any x ∈ Rd .
+
+
+
+A.2   Theoretical guarantees of Split Conformal Prediction
+Conformal prediction relies on the assumption that the data is exchangeable.
+                                             T
+Definition A.1 (Exchangeability). (Xt , Yt )t=1 are exchangeable if for any permutation σ of J1, T K we have:
+                                                                                                     
+                       L ((X1 , Y1 ) , . . . , (XT , YT )) = L Xσ(1) , Yσ(1) , . . . , Xσ(T ) , Yσ(T ) ,
+
+where L designates the joint distribution.
+
+Lei et al. (2018) proves the following Theorem A.2 about SCP quasi-exact validity.
+                                  T +1                                                          T
+Theorem A.2. Suppose (Xt , Yt )t=1 are exchangeable, and we apply algorithm 2 on (Xt , Yt )t=1 to predict an interval on
+XT +1 , Cˆα (XT +1 ). Then we have:        n                   o
+                                         P YT +1 ∈ Cˆα (XT +1 ) ≥ 1 − α.
+If, in addition, the scores SCal have a continuous joint distribution, we also have an upper bound:
+                                           n                      o               2
+                                         P YT +1 ∈ Cˆα (XT +1 ) ≤ 1 − α +             .
+                                                                                T +2
+
+
+A.3   Examples of dependent scores when data noise is exchangeable
+In this subsection, we provide two examples that highlight the importance of adapting CP to time series. In these examples,
+the scores are non exchangeable while the true noise of the data is exchangeable.
+Example A.3 (Endogenous and not perfectly estimated). Assume Xt = Yt−1 ∈ R and that
+
+                                                      Yt = aYt−1 + εt ,
+
+                                                             11
+where εt is a white noise. This corresponds to an order-1 Auto-Regressive (i.e. AR(1)).
+Assume that the fitted model is fˆt (x) = âx, with â 6= a. Then, for any t, we have that:
+
+                                                                ε̂t = Yt − Ŷt = (a − â) Yt−1 + εt
+                                                                ε̂t = aε̂t−1 + ξt
+
+with ξt = εt − âεt−1 .
+The residual process (ε̂t )t≥0 is an ARMA(1,1) (Auto-Regressive Moving-Average, see section C.1) of parameters ϕ = a and
+θ = −â.
+Thus, we have generated dependent residuals (ARMA residuals) even though the underlying model only had white noise.
+Example A.4 (Exogenous and misspecified). Assume Xt ∈ R2 and that:
+
+                                                                          Yt = aX1,t + bX2,t + εt ,
+
+with εt ∼ N (0, 1), X2,t+1 = ϕX2,t + ξt , ξt ∼ N (0, 1) and X1,t can be any random variable.
+        i.i.d.                                                       i.i.d.
+
+Assume that we misspecify the model such that the fitted model is fˆt (x) = ax1 for any t ≥ 0. Then, for any t ≥ 0, we have
+that
+                                              ε̂t = Yt − Ŷt = bX2,t + εt .
+Thus, we have generated dependent residuals (Auto-Regressive residuals) even if the underlying model only had i.i.d. Gaussian
+noise.
+
+A.4   How should we visualise CP predicted intervals?
+We propose to have a closer look at how are constructed the prediction of this method. In this aim, we introduce model A.5.
+Model A.5.                                                                                     
+                                                                               2π            2π       t
+                                                            xt = cos               t + sin       t +
+                                                                               180           180     100
+                                                         εt+1 = 0.99εt + ξt+1 ,               ξt ∼ N (0, 0.01)                             .
+                                                            Yt = ft (xt ) + εt = xt + εt
+
+
+In this model A.5, the explanatory variables are deterministic. A generation from this model is represented in Figure 8. The
+first subplot, Figure 8(a), represents xt across time. The second subplot, Figure 8(b), represents the noise εt across time.
+Finally, the last subplot, Figure 8(c), represents the whole process Yt across time.
+
+
+                                                                      1                                                             15.0
+                          15
+
+
+
+
+                                                                                                                 yt = ft(xt) + εt
+                                                                                                                                    12.5
+                                                                      0
+                 ft(xt)
+                                                                εt
+                          10                                                                                                        10.0
+
+                                                                     −1                                                              7.5
+
+                           5                                                                                                         5.0
+                               0   250    500      750   1000              0     250      500     750   1000                                   0   250       500   750   1000
+                                           t                                               t                                                                  t
+
+                                    (a) ft (xt )                                       (b) εt                                                            (c) yt
+
+                                           Figure 8: Representation of data simulated according to model A.5.
+
+The aim is to predict intervals of coverage 0.9 for values of Yt , at t > 500, that is to say T0 = 500 here. For simplicity, we
+assume fˆt = ft at each time step t and we do not represent the points used to obtain this perfect regression model. There
+are two ways of visualizing the predictions, that are represented in each row of Figure 9. If the focus of the analysis is on a
+specific application with the aim of analysing the whole prediction, it is relevant to represent the response yt itself and the
+associated intervals. This is represented in the first row of Figure 9. Nevertheless, to better understand a CP method, it is
+relevant to represent the scores and the corresponding intervals, rescaled. This is represented in the second row of Figure 9
+(even if the residuals are displayed and not their absolute value, i.e. the scores).
+
+                                                                                         12
+            17.5
+
+            15.0
+
+            12.5
+       yt
+            10.0
+
+              7.5
+
+              5.0
+
+                    0   200       400   500   525   550       575   600   625   625   650   675       700   725   750   750   775   800       825   850   875   875   900   925       950   975   1000
+                              t                           t                                       t                                       t                                       t
+
+
+               1
+
+
+
+        ε̂t    0
+
+
+
+              −1
+
+
+
+                    0   200       400   500   525   550       575   600   625   625   650   675       700   725   750   750   775   800       825   850   875   875   900   925       950   975   1000
+                              t                           t                                       t                                       t                                       t
+
+
+
+
+Figure 9: Visualisation of OSSCP on simulated data, from model model A.5. 1000 data points are generated. The 500 first
+ones form the initial calibration set, displayed on the first subplot of each row. The 500 last ones are the ones the algorithm
+tries to predict. They are displayed on the 4 last subplots of each row: the second displays response from t = 501 to t = 625,
+the third from t = 626 to t = 750 and so on. Observed values are in black, predicted intervals bounds are displayed in orange
+
+To better understand the difference between the two visualizations, let’s look specifically at some observations. In the first
+line of the Figure 9, we can see that the intervals widen for t ∈ [801; 900], while struggling to include the observations.
+Nevertheless, it is difficult to understand the underlying phenomenon on such a plot. Indeed, the points seem very similar
+to those for t ∈ [660; 720]. What considerably influences the CP are the scores and not the observed values. Thus, in the
+second line, at times t ∈ [801; 900], we observe more clearly that the values go out of the previous range of values, being
+around 1.5 in absolute value. This explains why the intervals widen: the calibration set contains more and more high values,
+which increases the value of the quantile and, therefore, the length of the interval. To conclude, to analyse and assess the
+performances of CP procedures, we recommend representing the intervals around the conformity scores (or the residuals,
+depending on the score function) rather than the observed values. This is because the scores are what truly determine the
+conformal behaviour.
+
+B     Proof of the results presented in Section 3 and additional numerical experiments
+B.1   Proof of Theorem 3.1
+We recall here Theorem 3.1.
+Theorem 3.1. Assume that: (i) α ∈ Q; (ii) the scores are exchangeable with quantile function Q; (iii) the quantile function
+is perfectly estimated at each time (as defined above); (iv) the quantile function Q is bounded and C 4 ([0, 1]). Then, for all
+γ > 0, (αt )t>0 forms a Markov Chain, that admits a stationary distribution πγ , and
+
+                                                              T
+                                                    1X            a.s.      not.
+                                                          L(αt ) −→ Eπγ [L] = Eα̃∼πγ [L(α̃)].
+                                                    T t=1       T →+∞
+
+
+Moreover, as γ → 0,
+                                                                        γ
+                                              Eπγ [L] = L0 + Q00 (1 − α) α(1 − α) + O(γ 3/2 ).
+                                                                        2
+
+To prove Theorem 3.1, we rely on the following lemmas, that will be proved after the theorem. We denote Bβ a Bernoulli
+random variable of parameter β and P (x) designates the projection of x onto [0, 1]. Finally, for γ > 0, define the following
+Markov Chain:
+                                                                     
+                                        αt+1 = αt + γ α − BP (αt ) for t > 0,                                             (4)
+                                                           n                  o
+We introduce (p, q) ∈ N × N∗ , p < q, s.t. α = pq , and A = α + γ gcd(q−p,p)
+                                                                       q     Z ∩ ]γ(α − 1), 1 + γα[.
+Lemma B.1 (Finite state space).
+                                Assume that α ∈ Q. Then, for any γ > 0, the Markov Chain defined by α1 ∈ A and
+αt+1 = αt + γ α − BP (αt ) , for t > 0 has a finite state space A.
+Lemma B.2 (Irreducibility). Assume that α ∈ Q. Then, for any γ > 0, the Markov Chain defined by Equation (4), for t > 0
+and α1 ∈ A, is irreducible.
+
+                                                                                            13
+Thereby we will prove that the chain admits a unique stationary distribution πγ , we now compute the first four moments of
+the stationary distribution in Lemmas B.3 to B.6. The final proof relies on a Taylor expansion, that requires to control these
+four moments.
+Lemma B.3 (Expectation). Let γ > 0 and consider again the Markov Chain defined in equation (4). We have:
+
+                                                      Eπγ [(P (α̃) − α)] = 0.
+
+
+Lemma B.4 (Second order moment). Let γ > 0 and consider again the Markov Chain defined in equation (4). As γ → 0, we
+have:                                                γ
+                                  Eπγ (P (α̃) − α)2 = α(1 − α) + O(γ 2 ).
+                                       
+                                                         2
+
+Lemma B.5 (Third order moment). Let γ > 0 and consider again the Markov Chain defined in equation (4). As γ → 0, we
+have:
+                                        Eπγ (P (α̃) − α)3 = O(γ 3/2 ).
+                                                         
+
+
+
+Lemma B.6 (Fourth order moment). Let γ > 0 and consider again the Markov Chain defined in equation (4). As γ → 0, we
+have:
+                                        Eπγ (P (α̃) − α)4 = O(γ 3/2 ).
+                                                          
+
+
+
+The proofs of these Lemmas are postponed to Appendices B.2 and B.3. Here, we first give the proof of the main theorem.
+
+Proof of Theorem 3.1. Let γ > 0. For any t > 0 we have, for the recursion introduced in Equation (2), that
+                                                                                        
+                          αt+1 := αt + γ α − 1yt ∈/ Cbα (xt ) = αt + γ α − 1St >Q̂1−P (α ) ,
+                                                            t                                     t
+
+
+                                                                              d
+where St is the conformity score at time t. Noting that 1St >Q̂t (1−P (αt )) = BP(St >Q̂t (1−P (αt ))) , we obtain:
+                                                                                   
+                                               d
+                                          αt+1 = αt + γ α − BP(St >Q̂t (1−P (αt )))
+                                               d                                 
+                                               = αt + γ α − BP(St >Q(1−P (αt )))
+                                               d                    
+                                               = αt + γ α − BP (αt ) ,
+
+where the second line results from assumption (ii) and (iii), and the last equation from assumption (iii) only. Consequently, by
+induction, the chain defined by Equation (2) and
+                                                                               
+                                              αt+1 = αt + γ α − BP (αt ) ,                                                   (5)
+
+with α1 = α, have the same distribution.
+Using assumption (i), Lemma B.1 ensures that the state space A of the Markov Chain defined in equation (5) is finite.
+Furthermore, Lemma B.2 also ensures that the chain is irreducible. Therefore, the chain is irreducible
+                                                                                                   R      on a finite state space,
+thus it admits a unique stationary distribution, noted πγ and for any positive function f such that f dπγ < ∞, we have (Meyn
+and Tweedie, 2012, Theorem 17.1.7):
+                                                       T               Z
+                                                    1X            a.s.
+                                                          f (αt ) −→      f dπγ .
+                                                   T t=1         T →∞
+
+
+Remark that L(β) = 2Q(1 − P (β)) for any β. Therefore, combined with previous result we get the first result of Theorem 3.1:
+                                                  T
+                                              1X            a.s.
+                                                    L(αt ) −→ Eα̃∼πγ [L(α̃)] .
+                                              T t=1       T →+∞
+
+
+                                                                14
+We now need to characterize Eα̃∼πγ [L(α̃)] = 2Eα̃∼πγ [Q(1 − P (α̃))] as γ → 0. Assume that Q ∈ C 4 ([0, 1]). Using Taylor
+series expansion, for any α̃ ∈ A, there exists β(α̃) ∈ [0, 1]:
+                                                                                Q00 (1 − α)
+                      Q(1 − P (α̃)) =Q(1 − α) + Q0 (1 − α)(α − P (α̃)) +                    (α − P (α̃))2
+                                                                                      2                                      (6)
+                                          Q000 (1 − α)                 Q0000 (1 − β(α̃))
+                                        +              (α − P (α̃))3 +                   (α − P (α̃))4 .
+                                                6                              24
+To conclude, we take the expectation under πγ of equation (6), which gives:
+
+                                                                            Q00 (1 − α)
+             Eπγ [Q(1 − P (α̃))] =Q(1 − α) + Q0 (1 − α)Eπγ [(α − P (α̃))] +             Eπγ (α − P (α̃))2
+                                                                                                         
+                                                                                  2
+                                                                           0000                                             (7)
+                                    Q000 (1 − α)                            Q (1 − β(α̃))
+                                                                                                        
+                                                 Eπγ (α − P (α̃))3 + Eπγ                   (α − P (α̃))4 .
+                                                                 
+                                  +
+                                          6                                         24
+Injecting results of Lemmas B.3 to B.5 in equation (7), we obtain:
+                                                                                  0000
+                                         Q00 (1 − α)                              Q (1 − β(α̃))
+                                                                                                             
+      Eπγ [Q(1 − P (α̃))] =Q(1 − α) +                γα(1 − α) + O(γ 3/2 ) + Eπγ                (α − P (α̃))4 .              (8)
+                                               4                                        24
+
+Finally, we can control the last term since Q ∈ C 4 ([0, 1]) by assumption, thus there exists M > 0 such that for any x ∈ [0, 1],
+|Q0000 (1 − x)| < M . Hence, using Lemma B.6 we obtain:
+
+                        Eπγ Q0000 (1 − β(α̃))(α − P (α̃))4 ≤ Eπγ |Q0000 (1 − β(α̃))| (α − P (α̃))4
+                                                                                                    
+
+                                                                 ≤ M Eπγ (α − P (α̃))4
+                                                                                        
+
+                                                         ≤ M O(γ 3/2 )
+                             0000
+                         Eπγ Q (1 − β(α̃))(α − P (α̃))4 = O(γ 3/2 ).
+                                                       
+                                                                                                                             (9)
+
+Finally, combining equations (9) and (8) to conclude the proof by obtaining:
+                                                                 Q00 (1 − α)
+                           Eπγ [Q(1 − P (α̃))] = Q(1 − α) +                  γα(1 − α) + O(γ 3/2 ).                         (10)
+                                                                       4
+
+
+
+This concludes the proof of Theorem 3.1.
+Remark: is it possible to use only 3 moments? The proof here relies on the control of the first four moments. It is not
+clear that the same result could be obtained using only a third order Taylor expansion, as we would then require a bound on
+E[|P (α̃) − α|3 ], which is not guaranteed to be O(γ 3/2 ), contrary to E[(P (α̃) − α)3 ].
+
+B.2    Proof of Lemmas B.1 and B.2
+Proof of Lemma B.1. Let γ > 0 and denote α = pq with 0 < p < q and (p, q) ∈ N2 . We denote E the state space of the
+Markov Chain defined by equation (5), starting from a ∈ A. We show that E = A.
+First, (αt ) is stritcly bounded by γ(α − 1) and 1 + γα. Thus E ⊂]γ(α − 1), γα[. Secondly, for any starting point α1 ∈ A,
+we can observe that:
+                                               a.s.
+                                   {αt , t ≥ 1} ⊂ α1 + {kγ(α − 1) + nγα, (k, n) ∈ N2 }
+                                               ⊂ α1 + {kγ(α − 1) + nγα, (k, n) ∈ Z2 }
+                                                          p−q       p
+                                               = α1 + {kγ      + nγ , (k, n) ∈ Z2 }
+                                                           q        q
+                                                      γ
+                                               = α1 + {(q − p)Z + pZ}
+                                                      q
+                                                      γ
+                                               = α1 + gcd(q − p, p)Z
+                                                      q
+                                                     γ
+                                               = α + gcd(q − p, p)Z
+                                                     q
+
+                                                               15
+where gcd(a, b) is the greatest common divisor of a and b. We have used at the last line that α1 ∈ A writes as α + γq gcd(q −
+p, p)k, for some k ∈ Z. Combining both results, we get that:
+                                                                  
+                                                   γ
+                                     E⊂       α+     gcd(q − p, p)Z ∩ ]γ(α − 1), γα[.
+                                                   q
+
+This shows that the state space is finite and a subset of A. The reciprocal implication is proved in the following Lemma,
+together with irreducibility.
+
+
+Proof of Lemma B.2. Our objective is to show that there is a path of positive probability going from any point of the state
+space A to any point of the same state space A. Note that the chain always has at most two options when on a state x: make a
+step γα, with probability 1 − P (x), or a step γ(α − 1), with probability P (x).
+Let (x, y) ∈ A2 . Thereby, there exist (k, n), (l, m) ∈ N2 such that:
+
+                                                x = α + kγα + nγ(α − 1)
+                                                y = α + lγα + mγ(α − 1).
+
+Thus, starting from x, to attain y, the chain has to make the path y − x = (l − k)γα + (m − n)γ(α − 1).
+Noting that for any h ∈ N we have γα(q − p)h + γ(α − 1)hp = 0, we can equivalently write that:
+
+                                                   y − x = uγα + vγ(α − 1),                                              (11)
+
+with (u, v) ∈ N2 \ {(0, 0)}.
+Thus, for any (x, y) ∈ A2 there exists (u, v) ∈ N2 \ {(0, 0)} such that y − x = uγα + vγ(α − 1).
+Let’s show by induction on u + v that for any (u, v) ∈ N2 , and (x, y) ∈ A2 satisfying Equation (11) there exists a path of
+strictly positive probability between x and y.
+Initialization. Suppose first that u + v = 1. Then, there are two options: u = 1 and v = 0 or the reverse. Assume the
+former: Equation (11) gives y = x + γα and necessarily x < 1 since y < 1 + γα because y ∈ A. Thereby the step γα has a
+probability 1 − P (x) > 0 to occur. Thus the chain can attain y starting from x, i.e., P(α2 = y|α1 = x) > 0. The second case
+works similarly, by observing that necessarily x > 0.
+Heredity. Let m ∈ N. We assume that for any (u, v) ∈ N2 such that u + v = m, and (x, y) ∈ A2 satisfying Equation (11)
+there exists a path of strictly positive probability between x and y, or formally there exists t ∈ N such that P(αt = y|α1 =
+x) > 0.
+Suppose now that u + v = m + 1 with m ∈ N∗ . If v = 0, then y = x + uγα and similarly than for v = 0 and u = 1, the
+step γα is probable. Let z = x + γα. We have:
+• P(α2 = z|α1 = x) = 1 − P (x) > 0.
+• By our induction hypothesis, (y, z) satisfy Eq. 11 with u + v = m, thus there exists t such that P(αt = y|α2 = y) > 0.
+Overall, P(αt = y|α1 = x) > 0.
+If instead u = 0, then y = x + vγ(α − 1) and as for u = 0 and v = 1, the step γα is of strictly positive probability and we
+conclude similarly.
+Finally, if both u and v are non-null, then we can make the step γ(α − 1) if x > 0 and the step γα otherwise, before using our
+induction hypothesis.
+This shows that we can build a path of strictly positive probability for any (x, y) ∈ A2 , and thereby that the chain is
+irreducible.
+
+B.3   Control of the first four moments: Lemmas B.3 to B.6
+                                                                                                                         
+In the following Lemmas, to compute the first order moments of πγ , we consider the chain αt+1 = αt + γ α − BP (αt ) for
+t > 0, launched from the stationary distribution α1 ∼ πγ . Thanks to the stationarity property, for all t ≥ 1, αt ∼ πγ .
+
+                                                              16
+Proof of Lemma B.3. Let γ > 0. To derive Eπγ [(P (α1 ) − α)] we start by equation (5) with t = 1:
+                                                                                           
+                                                               α2 = α1 + γ α − BP (α1 )
+                                                                                                 
+                    taking expectation                      E [α2 ] = E [α1 ] + γ α − E BP (α1 )
+                                                                                          
+                    using E [α1 ] = E [α2 ] = Eπγ [α],           0 = γ α − Eπγ BP (α1 )
+                                                              
+                                            Eπγ E BP (α1 ) |α1 = α
+                                                         Eπγ [P (α1 )] = α.
+
+
+
+                                                          
+Proof of Lemma B.4. Let γ > 0. To derive Eπγ (P (α1 ) − α)2 we start by equation (5) with t = 1:
+
+                   (α2 − α)2 =   (α1 − α)2 + γ 2 (α − BP (α1 ) )2 + 2γ(α − BP (α1 ) )(α1 − α)
+                  (α2 − α)2 =    Eπγ (α1 − α)2 + γ 2 Eπγ (α − BP (α1 ) )2 + 2γEπγ (α − BP (α1 ) )(α1 − α))
+                                                                                                   
+        Eπγ
+                                 γ 2 Eπγ (α − BP (α1 ) )2 + 2γEπγ [(α − P (α1 ))(α1 − α)]
+                                                        
+                         0   =
+
+Consequently,
+
+                 2γEπγ [(P (α1 ) − α)(α1 − P (α1 ) + P (α1 ) − α)] =γ 2 Eπγ (α − BP (α1 ) + P (α1 ) − P (α1 ))2
+                                                                                                               
+
+       2γEπγ (P (α1 ) − α)2 − 2γEπγ [(α − P (α1 ))(α1 − P (α1 ))] =γ 2 Eπγ (α − BP (α1 ) + P (α1 ) − P (α1 ))2
+                                                                                                             
+
+                                      (2 − γ)Eπγ (P (α1 ) − α)2 =γEπγ [P (α1 )(1 − P (α1 ))]
+                                                                
+
+                                                                          + 2Eπγ [(α − P (α1 ))(α1 − P (α1 ))] .         (12)
+
+We can compute Eπγ [P (α1 )(1 − P (α1 ))]:
+
+          Eπγ [P (α1 )(1 − P (α1 )) − α(1 − α)] = Eπγ [(P (α1 ) − α)(1 − P (α1 )) + α(1 − P (α1 )) − α(1 − α)]
+                                                  = Eπγ [(P (α1 ) − α)(1 − P (α1 )) + α(α − P (α1 ))]
+                                                  = Eπγ [(P (α1 ) − α)(1 − P (α1 ) − α)]
+                                                  = Eπγ [(P (α1 ) − α)(α − P (α1 ) + 1 − 2α)]
+                                                  = −Eπγ (P (α1 ) − α)2 + Eπγ [(P (α1 ) − α)(1 − 2α)]
+                                                                        
+
+                                                  = −Eπγ (P (α1 ) − α)2
+                                                                        
+
+                     ⇒ Eπγ [P (α1 )(1 − P (α1 ))] = α(1 − α) − Eπγ (P (α1 ) − α)2
+                                                                                   
+                                                                                                                         (13)
+
+Reinjecting equation (13) in equation (12):
+                                             γ
+                          Eπγ (P (α1 ) − α)2 = α(1 − α) + Eπγ [(α − P (α1 ))(α1 − P (α1 ))]
+                             
+                                                                                                                         (14)
+                                              2
+                                                                             
+We are now going to derive an upper and lower bound of Eπγ (P (α1 ) − α)2 . Note that sign(α − P (α1 )) = −sign(α1 −
+P (α1 )), thus Eπγ [(α − P (α1 ))(α1 − P (α1 ))] ≤ 0. Hence we obtain the following upper bound:
+                                                                 γ
+                                              Eπγ (P (α1 ) − α)2 ≤ α(1 − α).
+                                                 
+                                                                                                                         (15)
+                                                                  2
+Furthermore, using again this observation, and additionally that |α−P (α1 )| ≤ 1 and |α1 −P (α1 )| ≤ γ and from equation (14),
+we can obtain:
+                                                    γ
+                              Eπγ (P (α1 ) − α)2 ≥ α(1 − α) − γPπγ (α1 /
+                                  
+                                                                               ∈]0, 1[)
+                                                       2
+                                                       γ
+                                                     ≥ α(1 − α) − γCα−1 Eπγ (P (α1 ) − α)2
+                                                                                              
+                                                       2
+                                                2
+                                                           1      γ
+                              Eπγ (P (α1 ) − α) ≥              −1 2 α(1 − α),                                            (16)
+                                                       1 + γCα
+
+                                                             17
+where the second inequality holds by observing that:
+
+                            Eπγ (P (α1 ) − α)2 ≥ (1 − α)2 Pπγ (α1 > 1) + α2 Pπγ (α1 < 0)
+                                               
+
+                            Eπγ (P (α1 ) − α)2 ≥ Cα Pπγ (α1 6∈ [0, 1])
+                                               
+
+                             ⇒ Pπγ (α1 6∈ [0, 1]) ≤ Cα−1 Eπγ (P (α1 ) − α)2
+                                                                           
+
+
+with Cα = min(α2 , (1 − α)2 ).
+Gathering equations (16) and (15), we obtain:
+
+                                      1     γ                           2
+                                                                            γ
+                                        −1 2 α(1 − α) ≤ Eπγ (P (α1 ) − α)   ≤ α(1 − α)
+                                                                             2
+                                 (1 + γCα )
+                            
+                   1           γ                                 γ
+                                 α(1 − α) ≤ Eπγ (P (α1 ) − α)2 − α(1 − α) ≤ 0
+                                                             
+                           −1
+              (1 + γCα−1 )     2                                 2
+                                                                γ               γ 2 Cα−1
+                                           Eπγ (P (α1 ) − α)2 − α(1 − α) ≤
+                                                            
+                                                                                           α(1 − α)
+                                                                2            2(1 + γCα−1 )
+                                                               γ
+                                            Eπγ (P (α1 ) − α)2 − α(1 − α) = O(γ 2 ).
+                                                
+                                                                                                                    (17)
+                                                                 2
+
+
+
+Proof of LemmaB.5. Let γ > 0. We start again by using
+                                                            equation (5) and removing the first terms as
+Eπγ (α2 − α)3 = Eπγ (α1 − α)3 . Then we will isolate Eπγ (P (α1 ) − α)3 and finally we will dominate each term
+obtained.
+
+
+
+                     0 =3γEπγ (α1 − α)2 (α − BP (α1 ) ) + 3γ 2 Eπγ (α1 − α)(α − BP (α1 ) )2 + γ 3 Eπγ (α − BP (α1 ) )3
+                                                                                                                     
+
+                     0 =3γEπγ (α1 − α)2 (α − P (α1 )) + 3γ 2 Eπγ (α1 − α)(α − P (α1 ))2 )
+                                                                                        
+
+                        + 6γ 2 Eπγ (α1 − α)(α − P (α1 ))(P (α1 ) − BP (α1 ) ) + 3γ 2 Eπγ (α1 − α)(P (α1 ) − BP (α1 ) )2
+                                                                                                                     
+
+                        + γ 3 Eπγ (α − BP (α1 ) )3
+                                                  
+
+ 3γEπγ (P (α1 ) − α)3 =3γEπγ (α1 − P (α1 ))2 (α − P (α1 )) + 6γEπγ [(α1 − P (α1 ))(P (α1 ) − α)(α − P (α1 ))]
+                                                         
+
+                        + 3γ 2 Eπγ (α1 − α)(α − P (α1 ))2 ) + 3γ 2 Eπγ [(α1 − α)P (α1 )(1 − P (α1 ))]
+                                                           
+
+                        + γ 3 Eπγ (α − BP (α1 ) )3
+                                                  
+
+  3Eπγ (P (α1 ) − α)3 =3Eπγ (α1 − P (α1 ))2 (α − P (α1 )) − 6Eπγ (α1 − P (α1 ))(P (α1 ) − α)2
+                                                                                           
+
+                        + 3γEπγ (α1 − α)(α − P (α1 ))2 ) + 3γEπγ [(α1 − α)P (α1 )(1 − P (α1 ))]
+                                                         
+
+                        + γ 2 Eπγ (α − BP (α1 ) )3
+                                                  
+
+3 Eπγ (P (α1 ) − α)3 ≤3 Eπγ (α1 − P (α1 ))2 (α − P (α1 )) + 6 Eπγ (α1 − P (α1 ))(P (α1 ) − α)2
+                                                                                              
+
+                        + 3γ Eπγ (α1 − α)(α − P (α1 ))2 ) + 3γ Eπγ [(α1 − α)P (α1 )(1 − P (α1 ))]
+                                                           
+
+                        + γ 2 Eπγ (α − BP (α1 ) )3 .
+                                                    
+                                                                                                                (18)
+
+To conclude, we can bound each term of the right hand side of equation (18). In order of appearance we obtain:
+
+                        Eπγ (α1 − P (α1 ))2 (α − P (α1 )) ≤ Eπγ (α1 − P (α1 ))2 |α − P (α1 )|
+                                                                                          
+
+                        Eπγ (α1 − P (α1 ))2 (α − P (α1 )) ≤ γ 2 .
+                                                        
+                                                                                                                    (19)
+
+
+                        Eπγ (α1 − P (α1 ))(P (α1 ) − α)2 ≤ Eπγ |α1 − P (α1 )| (P (α1 ) − α)2
+                                                                                          
+
+                                                          ≤ γEπγ (P (α1 ) − α)2
+                                                                               
+
+                                                            γ2
+                        Eπγ (α1 − P (α1 ))(P (α1 ) − α)2 ≤     α(1 − α) + O(γ 3 ),
+                                                       
+                                                                                                                    (20)
+                                                             2
+
+                                                           18
+where the last equality is obtained by using Lemma B.4.
+
+
+                          γ Eπγ (α1 − α)(α − P (α1 ))2 ) ≤ γEπγ |α1 − α| (α − P (α1 ))2 )
+                                                                                       
+
+                                                          ≤ γDγ,α Eπγ (α − P (α1 ))2 )
+                                                                                     
+
+                                                                γ2
+                          γ Eπγ (α1 − α)(α − P (α1 ))2 ) ≤ Dγ,α α(1 − α) + O(γ 3 ),
+                                                       
+                                                                                                                   (21)
+                                                                 2
+
+
+again using Lemma B.4, and with Dγ,α = max(1 + γα, γ(1 − α)) − α = O(1).
+
+
+
+
+γ Eπγ [(α1 − α)P (α1 )(1 − P (α1 ))] ≤ γ Eπγ [(α1 − P (α1 ))P (α1 )(1 − P (α1 ))] + γ Eπγ [(P (α1 ) − α)P (α1 )(1 − P (α1 ))]
+                                         1                       1
+                                     ≤ γ Eπγ [|α1 − P (α1 )|] + γ Eπγ [|P (α1 ) − α|]
+                                         4                       4
+                                       γ2    γq
+                                     ≤     +    Eπ [(P (α1 ) − α)2 ]
+                                        4    4r γ
+                                       γ2    γ γ
+                                     ≤     +      α(1 − α) + O(γ 2 )
+                                        4    4 2
+γ Eπγ [(α1 − α)P (α1 )(1 − P (α1 ))] ≤ O(γ 3/2 ),                                                                  (22)
+
+
+where the last inequality comes from Lemma B.4 a third time.
+
+
+
+
+                                  γ 2 Eπγ (α − BP (α1 ) )3 ≤ γ 2 max(α3 , (1 − α)3 ).
+                                                         
+                                                                                                                   (23)
+
+
+
+Gathering equations (19) to (23) together with equation (18), we obtain the following upper bound:
+
+
+                                                             γ2
+3 Eπγ (P (α1 ) − α)3 ≤ 3γ 2 + 3γ 2 α(1 − α) + O(γ 3 ) + 3Dγ,α α(1 − α) + O(γ 3 ) + O(γ 3/2 ) + γ 2 max(α3 , (1 − α)3 ),
+                   
+                                                             2
+
+
+which leads to:
+
+
+                                            Eπγ (P (α1 ) − α)3 = O(γ 3/2 ).
+                                                             
+                                                                                                                   (24)
+
+
+
+
+Proof of Lemma B.6. Let γ > 0. For the fourth order moment, the proof works in the same way for the third order moment,
+Lemma B.5.
+
+                                                           19
+                      0 =4γEπγ (α1 − α)3 (α − BP (α1 ) ) + 6γ 2 Eπγ (α1 − α)2 (α − BP (α1 ) )2
+                                                                                            
+
+                         + 4γ 3 Eπγ (α1 − α)(α − BP (α1 ) )3 + γ 4 Eπγ (α − BP (α1 ) )4
+                                                                                     
+
+                      0 =4γEπγ (α1 − P (α1 ) + P (α1 ) − α)3 (α − P (α1 ))
+                                                                            
+
+                         + 6γ 2 Eπγ (α1 − α)2 (α − P (α1 ) + P (α1 ) − BP (α1 ) )2
+                                                                                  
+
+                         + 4γ 3 Eπγ (α1 − α)(α − BP (α1 ) )3 + γ 4 Eπγ (α − BP (α1 ) )4
+                                                                                     
+
+  4γEπγ (P (α1 ) − α)4 =4γEπγ (α1 − P (α1 ))3 (α − P (α1 )) + 12γEπγ (α1 − P (α1 ))2 (P (α1 ) − α)(α − P (α1 ))
+                                                                                                            
+
+                         + 12γEπγ (α1 − P (α1 ))(P (α1 ) − α)2 (α − P (α1 ))
+                                                                               
+
+                         + 6γ 2 Eπγ (α1 − α)2 (α − P (α1 ))2 + 0 + 6γ 2 Eπγ (α1 − α)2 (P (α1 ) − BP (α1 ) )2
+                                                                                                          
+
+                         + 4γ 3 Eπγ (α1 − α)(α − BP (α1 ) )3 + γ 4 Eπγ (α − BP (α1 ) )4
+                                                                                     
+
+   4Eπγ (P (α1 ) − α)4 =4Eπγ (α1 − P (α1 ))3 (α − P (α1 )) − 12Eπγ (α1 − P (α1 ))2 (P (α1 ) − α)2
+                                                                                             
+
+                         − 12Eπγ (α1 − P (α1 ))(P (α1 ) − α)3
+                                                                
+
+                         + 6γEπγ (α1 − α)2 (α − P (α1 ))2 + 6γEπγ (α1 − α)2 P (α1 )(1 − P (α1 ))
+                                                                                                
+
+                         + 4γ 2 Eπγ (α1 − α)(α − BP (α1 ) )3 + γ 3 Eπγ (α − BP (α1 ) )4
+                                                                                     
+
+ 4 Eπγ (P (α1 ) − α)4 ≤4 Eπγ (α1 − P (α1 ))3 (α − P (α1 )) + 12 Eπγ (α1 − P (α1 ))2 (P (α1 ) − α)2
+                                                                                                
+
+                         + 12 Eπγ (α1 − P (α1 ))(P (α1 ) − α)3
+                                                                  
+
+                         + 6γ Eπγ (α1 − α)2 (α − P (α1 ))2 + 6γ Eπγ (α1 − α)2 P (α1 )(1 − P (α1 ))
+                                                                                                   
+
+                         + 4γ 2 Eπγ (α1 − α)(α − BP (α1 ) )3 + γ 3 Eπγ (α − BP (α1 ) )4 .
+                                                                                       
+                                                                                                               (25)
+
+We are now going to dominate each term of the right hand side of equation (25) in order of appearance.
+
+
+                                                                h                            i
+                                                                              3
+                        Eπγ (α1 − P (α1 ))3 (α − P (α1 )) ≤ Eπγ |α1 − P (α1 )| |α − P (α1 )|
+                                                        
+
+                        Eπγ (α1 − P (α1 ))3 (α − P (α1 )) ≤ γ 3
+                                                        
+                                                                                                               (26)
+
+
+
+                       Eπγ (α1 − P (α1 ))2 (P (α1 ) − α)2 = Eπγ (α1 − P (α1 ))2 (P (α1 ) − α)2
+                                                                                            
+
+                       Eπγ (α1 − P (α1 ))2 (P (α1 ) − α)2 ≤ γ 2 .
+                                                        
+                                                                                                               (27)
+
+
+                                                               h                             i
+                                                                                           3
+                        Eπγ (α1 − P (α1 ))(P (α1 ) − α)3 ≤ Eπγ |α1 − P (α1 )| |P (α1 ) − α|
+                                                       
+                                                                 h              i
+                                                                              3
+                                                          ≤ γEπγ |P (α1 ) − α|
+                        Eπγ (α1 − P (α1 ))(P (α1 ) − α)3 ≤ O(γ 5/2 ).
+                                                       
+                                                                                                               (28)
+
+where the last inequality holds using Lemma B.5.
+
+                         γ Eπγ (α1 − α)2 (α − P (α1 ))2 = γEπγ (α1 − α)2 (α − P (α1 ))2
+                                                                                     
+
+                                                                   γ
+                                                              2
+                                                          ≤ γDγ,α ( α(1 − α) + O(γ 2 ))
+                                                                    2
+                                                                  2
+                                                             2 γ
+                         γ Eπγ (α1 − α) (α − P (α1 )) ≤ Dγ,α α(1 − α) + O(γ 3 ).
+                                       2              2
+                                                       
+                                                                                                               (29)
+                                                                 2
+
+again where we’ve used Lemma B.5, and re-used its notation Dγ,α = max(1 + γα, γ(1 − α)) − α = O(1).
+
+                                                           20
+         γ Eπγ (α1 − α)2 P (α1 )(1 − P (α1 )) =γ Eπγ (α1 − P (α1 ))2 P (α1 )(1 − P (α1 ))
+                                                                                       
+
+                                                + 2Eπγ [(α1 − P (α1 ))(P (α1 ) − α)P (α1 )(1 − P (α1 ))]
+                                                + Eπγ (P (α1 ) − α)2 P (α1 )(1 − P (α1 ))
+                                                                                         
+
+                                                γ                     γ
+                                               ≤ Eπγ (α1 − P (α1 ))2 + Eπγ [|α1 − P (α1 )| |P (α1 ) − α|]
+                                                      
+                                                4                         2
+                                                    γ
+                                                + Eπγ (P (α1 ) − α)2
+                                                                      
+                                                    4
+                                                  3
+                                                γ     γ2    γ2
+         γ Eπγ (α1 − α)2 P (α1 )(1 − P (α1 )) ≤ +         + α(1 − α) + O(γ 3 ).
+                                            
+                                                                                                                           (30)
+                                                 4    2     8
+again where we’ve used Lemma B.5.
+
+                                                                      h                        i
+                                                                                             3
+                          γ 2 Eπγ (α1 − α)(α − BP (α1 ) )3 ≤ γ 2 Eπγ |α1 − α| α − BP (α1 )
+                                                         
+                                                                          h                i
+                                                                                         3
+                                                            ≤ γ 2 Dγ,α Eπγ α − BP (α1 )
+                          γ 2 Eπγ (α1 − α)(α − BP (α1 ) )3 ≤ γ 2 Dγ,α max(α3 , (1 − α)3 ).
+                                                         
+                                                                                                                           (31)
+
+
+                                    γ 3 Eπγ (α − BP (α1 ) )4 ≤ γ 3 max(α4 , (1 − α)4 ).
+                                                           
+                                                                                                                           (32)
+
+Gathering equations (26) to (32) together with equation (25), we obtain finally:
+
+                                             Eπγ (P (α1 ) − α)4 = O(γ 3/2 ).
+                                                                
+                                                                                                                           (33)
+
+
+
+B.4   Proof of Theorem 3.2
+In this section, we prove Theorem 3.2. Recall the theorem:
+Theorem 3.2. Assume that: (i) α ∈ Q; (ii) the residuals follow an AR(1) process (i.e., εt+1 = ϕεt + ξt+1 with (ξt )t i.i.d.
+random variables admitting a continuous density with respect to Lebesgue measure, of support S) clipped at a large value R,
+and [−R, R] ⊂ S; (iii) the quantile function Q of the stationary distribution of (εt )t is known; (iv) Q is bounded by R. Then
+(αt , εt−1 ) is a homogeneous Markov Chain in R2 that admits a unique stationary distribution πγ,ϕ . Moreover,
+                                                   T
+                                                1X            a.s.
+                                                      L(αt ) −→ Eπγ,ϕ [L].
+                                                T t=1       T →+∞
+
+
+
+We consider Zt = (αt , εt−1 ) defined in the state-space Z = A × [−R, R] by
+                                     (                                            
+                                        αt+1 = αt + γ α − 1{|εt | > Q  b 1−P (α ) } ,
+                                                                               t
+
+                                        εt      = −R ∨ (ϕεt−1 + ξt ) ∧ R
+
+That is, (αt )t≥0 is the recurrence defined by Equation (2), and (εt )t≥0 is an AR(1) process with parameters ϕ clipped at some
+large value R. Finally, (ξt )t is a sequence of i.i.d. r.v. admitting a continuous density with respect to the Lebesgue measure,
+of support S ⊃ [−R, R].
+This chain is defined for parameters α, R considered as fixed, and we focus on the influence of γ, ϕ. The main difference w.r.t.
+the previous section is that the state space is not countable anymore. More precisely, the state space is a product of a finite
+discrete set and an interval of R.
+The state-space Z is A × [−R, R], where A is defined in the previous Appendix B.1. We equip Z with the σ-algebra
+F = P(A) × B(R), where P(A) is the power-set of the finite set A and B(R) is the borel set of R.
+Lemma B.7. The sequence (Zt )t≥0 is a Markov chain. Moreover, the chain is Harris-recurrent, and admits a stationary
+distribution πγ,ϕ .
+
+                                                              21
+Proof. We observe that
+                                                                                        !
+                                αt+1            αt + γ α − 1{|ϕεt−1 + ξt | > Q
+                                                                             b 1−P (α ) }
+                   Zt+1 =                  =                                         t
+                                                                                              =: Fγ (Zt , ξt ).                    (34)
+                                 εt                     −R ∨ (ϕεt−1 + ξt ) ∧ R
+
+For a function Fγ : R2 × R. Consequently, Zt follows a Non-Linear State Space model (Meyn and Tweedie, 2012, Section
+2.2.2 and Chapter 7). We denote Pγ the probability kernel or Markov transition function, that is, for any z = (a, e) ∈ Z, and
+F ∈ F:
+                                                   Pγ (z, F ) = P(Z1 ∈ F |Z0 = z).
+Remark that relying on Equation (34), we have an explicit formula for Pγ . Defining the sequence of functions (Ft )t≥1 such
+that
+                                  Ft+1 (z0 , ξ1 , . . . ξt+1 ) = Fγ (Ft (z0 , ξ1 , . . . ξt ) , ξt+1 )
+where z0 and (ξi ) are arbitrary real numbers. By induction we have that for any initial condition Z0 = z0 ∈ Z and any t ∈ N,
+                                                       Zt = Ft (z0 , ξ1 , . . . , ξt ) ,
+which immediately implies that the t-step transition function may be expressed as
+                                                           Z     Z
+          Pγt (z, F ) = P (Fk (z, ξ1 , . . . , ξt ) ∈ F ) = · · · 1 {Fk (z, ξ1 , . . . , ξt ) ∈ F } p (dξ1 ) . . . p (dξt )
+
+where p is the distribution of ξ.
+We first prove that the chain is ψ-irreductible, for ψ = µ ⊗ λLeb , with µ the uniform probability measure on A and λLeb the
+Lebesgue measure. For any z0 = (a0 , e0 ) ∈ Z and F = {a0 } × O, with O open set, we have that
+                                                       P(Zt ∈ F |Z0 = z0 ) > 0
+for some t large enough. Indeed,
+  1. There exists a path (a1 , . . . , at ) from a0 to a0 such that for all i ∈ {1, . . . , t − 1}, 0 < ai < 1.
+  2. Let Fi be the set of values of εi such that we obtain ai from ai−1 .
+  3. Then if 0 < a0 < 1, we can directly conclude, as we have that for all i ∈ {1, . . . , t}, P(Zi ∈ {ai } × Fi )|Zi−1 =
+     (ai−1 , zi−1 ))) > δ > 0, thus P(Zt ∈ F |Z0 = z0 ) > δ n > 0.
+  4. The argument extends to the case where a0 ∈       / (0, 1): one only has to account for the fact that the last step can for a be in
+     made in both directions (increasing or decreasing), depending on the set of values in O.
+Moreover, the argument can be extended to show that for any a0 , O, there exists δ such that for all a0 , e0 , there exists t ≤ αγ
+                                                                                                                                 1
+
+such that
+                                                       P(Zt ∈ F |Z0 = z0 ) > δ
+Which proves that the chain will visit infinitely many times any borel set F with probability 1, and is consequently Harris-
+recurrent (Meyn and Tweedie, 2012, Chapter 9). Using Theorem 10.0.1 in Meyn and Tweedie (2012), we conclude that the
+chain admits a unique stationary distribution πγ,ϕ .
+Finally, applying (Theorem 17.1.7 Meyn and Tweedie, 2012) to the later result gives:
+                                                        T
+                                                    1X            a.s.
+                                                          L(αt ) −→ Eπγ,ϕ [L].
+                                                    T t=1       T →+∞
+
+
+
+
+B.5   Numerical study of ACI efficiency with AR(1) residuals, with respect to the median length
+We here reproduce the same experiment as in Section 3.2, but focus on the efficiency as the median of the intervals’ lengths
+instead of the average (after imputation). Results are given in Figure 10.
+Observations are very similar to the average length case, especially regarding (i) the monotonicity of the median interval
+length w.r.t. ϕ, (ii) the existence of a minimum γϕ+ to the function γ 7→ Medπγ [α̃] := argminm Eπγ,ϕ [|α̃ − m|] (iii) the
+non-monotony of ϕ 7→ γϕ+ .
+
+                                                                     22
+                                  ϕ =0      ϕ =0.85      ϕ =0.98      ϕ =0.997
+                                  ϕ =0.6    ϕ =0.95      ϕ =0.99      ϕ =0.999
+
+                            3.5                                                                             0.20
+
+                            3.0                                                                             0.15
+
+
+            Median length
+                            2.5                                                                        γ∗   0.10
+
+                            2.0                                                                             0.05
+
+                            1.5                                                                             0.00
+                                  0.00     0.05       0.10     0.15       0.20                                     0.0   0.6   0.85   0.95 0.98 0.99   0.997 0.999
+                                                       γ                                                                                  ϕ
+
+
+
+Figure 10: Left: evolution of the median length depending on γ for various ϕ. Right: γ ∗ minimizing the average length for
+each ϕ.
+
+C       Experimental details.
+C.1     Details ARMA(1,1) processes
+Definition C.1 (ARMA(1,1) process). We say that εt is an ARMA(1,1) process if for any t:
+
+                                                                             εt+1 = ϕεt + ξt+1 + θξt ,
+
+with:
+
+    • θ + ϕ 6= 0, |ϕ| < 1 and |θ| < 1;
+
+    • ξt is a white noise of variance σ 2 , called the innovation.
+
+
+The asymptotic variance of this process is:
+
+                                                                                             1 − 2ϕθ + θ2
+                                                                            Var(εt ) = σ 2                .                                                          (35)
+                                                                                                1 − ϕ2
+
+An ARMA(1,1) is thus characterised by three parameters: the coefficients ϕ and θ and the innovation’s variance σ 2 . The
+larger the coefficients, in absolute value, the greater the time dependence and variance. Note that when ϕ = 0, the ARMA(0,1)
+process corresponds to a MA(1) and when θ = 0, the ARMA(1,0) process corresponds to an AR(1).
+                                                                                                                                             2
+                                                                                            1−ϕ
+To fix the asymptotic variance of an ARMA(1,1) of parameters ϕ and θ to v, we fix σ 2 = v 1−2ϕθ+θ 2.
+
+
+
+C.2     Random forest parameters
+All the random forests model have the same parameters, that are the following:
+
+    • Number of trees: 1000
+
+    • Minimum sample per leaf: 1 (default)
+
+    • Maximum number of features: d (default)
+
+Furthermore, for EnbPI, as there is already an individual bootstrap in the algorithm, the random forest regressors do not
+bootstrap them again.
+
+C.3     Details about the baselines and comparison
+C.3.1     E NB PI FULL ALGORITHM
+In order to be self-contained and precise the modifications done in EnbPI V2, the EnbPI algorithm from Xu and Xie (2021b)
+is recalled in the following. In purple we precise the difference in EnbPI V2.
+
+                                                                                         23
+Algorithm 3 Sequential Distribution-free Ensemble Batch Prediction Intervals (EnbPI)
+                                T
+Input: Training data {(xi , yi )}i=1 , regression algorithm A, decision threshold α, aggregation function ϕ, number of bootstrap
+                                                           T +T1
+    models B, the batch size s, and test data {(xt , yt )}t=T +1 , with yt revealed only after the batch of s prediction intervals
+    with t in the batch are constructed.
+Output: Ensemble prediction intervals {Cα (xt )}Tt=T   +T1
+                                                          +1
+ 1: for b = 1, . . . , B do
+ 2:    Sample with replacement an index set Sb = (i1 , . . . , iT ) from indices (1, . . . , T )
+ 3:    Compute fˆb = A ({(xi , yi ) | i ∈ Sb })
+ 4: end for
+ 5: Initialise ε = {}
+ 6: for i = 1, . . . , Tn
+                         do               o
+       ˆ ϕ
+ 7:    f−i (xi ) = ϕ fˆb (xi ) | i ∈/ Sb
+ 8:    Compute ε̂ϕ        ˆϕ
+                 i = yi − f−i (xi )
+                  ϕ
+ 9:   ε = ε ∪ {ε̂i }
+10: end for
+11: for t = T + 1, . . . , T + T1 do                                                                         n
+                                           n           oT                                                                oT 
+             ϕ                                ϕ                                               ϕ                  ϕ
+12:    Let fˆ−t (xt ) = (1 − α) quantile of fˆ−i (xt )        EnbPI V2: this is replaced by fˆ−t (xt ) = ϕ      ˆ
+                                                                                                               f−i (xt )     .
+                                                        i=1                                                              i=1
+13:    Let wtϕ = (1 − α) quantile
+                           h      of ε   i
+                ϕ,α
+14:    Return C T,t (xt ) = f (xt ) ± wϕ
+                             ˆϕ
+                               −t          t
+15:    if t − T = 0 mod s then
+16:       for j = t − 1, . . . , t − 1 do
+17:          Compute ε̂ϕ               ˆϕ
+                       j = yj − f−j (xt )
+                         ϕ          ϕ
+18:        ε = (ε − {ε̂1 }) ∪ {ε̂i } and reset index of ε
+19:      end for
+20:   end if
+21: end for
+
+
+
+
+                                                                24
+Remark on the bootstrap approach. The bootstrap scheme is not adapted to time series, even if such strategies have
+been developed (Härdle et al., 2003; Kreiss and Paparoditis, 2012; Cai and Davies, 2012), and could be used to improve the
+adequation of EnbPI with the time series framework. Furthermore, recent works have proposed modifications of RF in the
+dependent setting (Goehry, 2020; Goehry et al., 2021; Saha et al., 2021). Generalizing these improvements to any ensemble
+method and use it for EnbPI could also enhance its performance, but is out of the scope of this paper.
+
+C.3.2     D ETAILS ON THE IMPLEMENTATION
+We conclude this section by summarizing computational aspects of the methods. One of the contributions is to provide a
+unified experimental framework. Therefore, in Table 1, we display the current available code for these methods, and what is
+available in the proposed repository.
+
+
+Table 1: Summary of available code online for each method and the proposed code in the repository. The programming
+language is specified, and, when relevant, the nature of the code.
+
+                                          Currently available                        Contribution
+                      Methods     Language        Details               Language     Options
+                      CP          R                                     Python
+                      OSCP        not available                         Python       randomised split
+                      EnbPI       Python                                Python       same aggregation function
+                      ACI         R script        no general function   Python       randomised split
+
+
+
+D     Additional experiments on synthetic data sets
+In this section, we provide supplemental results on the synthetic data sets presented in Section 5.1.
+First, in Appendix D.1 the sensitivity analysis of ACI γ as well as the comparison to the naive strategy and AgACI is extended
+to AR(1) and MA(1) processes of asymptotic variance 10.
+Then, in Appendix D.2, the comparison of all the CP methods for time series (initiated in Section 5.4) is also extended to
+these noises, that is AR(1) and MA(1) processes of asymptotic variance 10 (Appendix D.2.1), and to ARMA(1,1), AR(1) and
+MA(1) processes of asymptotic variance 1 (Appendix D.2.2).
+Next, we discuss in Section 5.4 that the improved validity for γ = 0.05 in comparison to γ = 0.01 comes at the cost of more
+infinite intervals. This analysis is detailed in Appendix D.3.
+Finally, we compare randomized and sequential split in Appendix D.4.
+
+Imputation. The rationale to impute the infinite intervals is the following. We take the maximum of the absolute values of
+the residuals on the test set, noted |ε|max . Then, for any t ∈ JT0 + 1, T0 + T1 K, if the predicted upper (resp. lower) bound
+  (u)                                                          (`)
+b̂t (xt ) is such that b̂t (xt ) > µ̂t (xt ) + |ε|max (resp. b̂t (xt ) < µ̂t (xt ) − |ε|max ) we impute it by µ̂t (xt ) + |ε|max (resp.
+µ̂t (xt ) − |ε|max ).
+
+D.1     Additional experimental results of ACI sensitivity to γ, presented in Section 5.2
+In this subsection, we provide similar results to those of Section 5.2, for different models on the noise. Especially, we consider
+AR(1) and MA(1) processes.
+Observations. The behaviour of the AR(1) process is very similar to the one of ARMA(1,1). On the other hand, for the MA
+case, the dependence structure is too weak to observe a significant effect of γ. All ACI methods produce nearly valid intervals,
+with coverage above 89.25%.
+Results are given in Figures 11 and 12.
+
+D.2     Comparison to baselines, extension of Section 5.4
+D.2.1     A SYMPTOTIC VARIANCE FIXED TO 10.
+Figure 13 displays the results on data generated according to Section 5.1, for an asymptotic variance of the noise of 10 (as in
+Figure 5), when this noise is an AR(1) or MA(1) process.
+
+                                                                 25
+                                                                                                      ϕ =0.1, θ = 0                               ϕ =0.8, θ = 0                              ϕ =0.9, θ = 0                                               ϕ =0.95, θ = 0                            ϕ =0.99, θ = 0
+                                                            14
+                                                                                                                                                                                                                                                                                                                                        AgACI
+
+
+
+
+                        Average median length
+                                                                                                                                                                                                                                                                                                                                        Naive method
+
+                                                            13
+                                                                                                                                                                                                                                                                                                                                         0.0700
+
+                                                                                                                                                                                                                                                                                                                                         0.0400
+                                                            12
+                                                                                                                                                                                                                                                                                                                                         0.0100
+                                                                                               0.86      0.88         0.90                0.86       0.88         0.90               0.86       0.88                            0.90             0.86       0.88          0.90             0.86       0.88          0.90
+                                                                                                        Coverage                                    Coverage                                   Coverage                                                    Coverage                                  Coverage                            0.0070
+
+
+
+
+                        Average length, after imputation
+                                                            16
+                                                                                                                                                                                                                                                                                                                                         0.0040  γ
+
+                                                            15                                                                                                                                                                                                                                                                           0.0010
+
+                                                            14                                                                                                                                                                                                                                                                           0.0007
+
+                                                                                                                                                                                                                                                                                                                                         0.0004
+                                                            13
+                                                                                                                                                                                                                                                                                                                                         0.0001
+                                                            12
+                                                                                                                                                                                                                                                                                                                                         0.0000
+                                                                                               0.86      0.88         0.90                0.86       0.88         0.90               0.86       0.88                            0.90             0.86       0.88          0.90             0.86       0.88          0.90
+                                                                                                        Coverage                                    Coverage                                   Coverage                                                    Coverage                                  Coverage
+
+
+Figure 11: ACI performance with various θ, ϕ and γ on data simulated according to equation (3) with a Gaussian AR(1) noise
+of asymptotic variance 10 (see Appendix C.1). Top row: average median length with respect to the coverage. Bottom row:
+percentage of infinite intervals. Stars correspond to the proposed online expert aggregation strategy, and empty triangles to the
+naive choice.
+                                                                                                      ϕ = 0, θ =0.1                               ϕ = 0, θ =0.8                              ϕ = 0, θ =0.9                                               ϕ = 0, θ =0.95                            ϕ = 0, θ =0.99
+
+                                                                                                                                                                                                                                                                                                                                         AgACI
+
+
+
+
+                 Average median length
+                                                                                                                                                                                                                                                                                                                                         Naive method
+                                                 13.8
+
+
+                                                                                                                                                                                                                                                                                                                                          0.0700
+                                                 13.6
+                                                                                                                                                                                                                                                                                                                                          0.0400
+
+                                                                                                                                                                                                                                                                                                                                          0.0100
+                                                                                 0.8925               0.8950 0.8975          0.9000      0.8925   0.8950 0.8975          0.9000     0.8925   0.8950 0.8975                             0.9000   0.8925    0.8950 0.8975          0.9000   0.8925    0.8950 0.8975          0.9000
+                                                                                                         Coverage                                    Coverage                                   Coverage                                                     Coverage                                  Coverage                           0.0070
+
+
+
+
+                                   Average length, after imputation
+                                                                                                                                                                                                                                                                                                                                          0.0040  γ
+
+                                                                                                                                                                                                                                                                                                                                          0.0010
+                                                                      15
+                                                                                                                                                                                                                                                                                                                                          0.0007
+
+                                                                                                                                                                                                                                                                                                                                          0.0004
+                                                                      14
+                                                                                                                                                                                                                                                                                                                                          0.0001
+
+                                                                                                                                                                                                                                                                                                                                          0.0000
+                                                                                 0.8925               0.8950 0.8975          0.9000      0.8925   0.8950 0.8975          0.9000     0.8925   0.8950 0.8975                             0.9000   0.8925    0.8950 0.8975          0.9000   0.8925    0.8950 0.8975          0.9000
+                                                                                                         Coverage                                    Coverage                                   Coverage                                                     Coverage                                  Coverage
+
+
+Figure 12: ACI performance with various θ, ϕ and γ on data simulated according to equation (3) with a Gaussian MA(1)
+noise of asymptotic variance 10 (see Appendix C.1). Top row: average median length with respect to the coverage. Bottom
+row: percentage of infinite intervals. Stars correspond to the proposed online expert aggregation strategy, and empty triangles
+to the naive choice.
+
+                                                                                                                                          OSSCP (adapted from Lei et al., 2018)                                                         ACI (Gibbs & Candès, 2021), γ = 0.01
+                                                                                                                                          Offline SSCP (adapted from Lei et al., 2018)                                                  ACI (Gibbs & Candès, 2021), γ = 0.05
+                                                                                                                                          EnbPI (Xu & Xie, 2021)                                                                        AgACI
+                                                                                                                                          EnbPI V2
+                                                                                                                                         AR(1) noise                                                                                                            MA(1) noise
+                                                                                               14
+
+                                                                                                                                                                                                                         13.8                                                                                                       ϕ = θ =0.1
+
+
+
+
+                                                                       Average median length                                                                                                     Average median length
+                                                                                               13                                                                                                                                                                                                                                   ϕ = θ =0.8
+                                                                                                                                                                                                                                                                                                                                    ϕ = θ =0.9
+                                                                                                                                                                                                                         13.6                                                                                                       ϕ = θ =0.95
+                                                                                               12
+                                                                                                                                                                                                                                                                                                                                    ϕ = θ =0.99
+                                                                                                                                                                                                                         13.4
+                                                                                               11
+
+                                                                                                                                                                                                                         13.2
+                                                                                               10
+                                                                                                           0.84                   0.86                0.88                   0.90                                                      0.8925   0.8950      0.8975 0.9000             0.9025   0.9050      0.9075
+                                                                                                                                          Coverage                                                                                                               Coverage
+
+
+
+
+Figure 13: Performance of various interval prediction methods on data simulated according to equation (3) with a Gaussian
+AR(1) (left) and MA(1) (right) noise of asymptotic variance 10 (see Appendix C.1). Results aggregated from 500 independent
+runs. Empirical standard error are displayed.
+
+Observations. As in the previous section, the methods’ performances are greatly impacted by the type and strength of
+dependence structure. Figure 13 shows that while ARMA(1,1) and AR(1) noises lead to similar patterns, it is not the case for
+an MA(1) noise. In the latter, θ has little influence: the five performances (one for each θ) are similar within each method. In
+addition, offline sequential SCP is very close to OSSCP. This is expected as a MA(1) process has very short memory, and the
+temporal dependence is thus small even for θ = 0.99.
+
+D.2.2    A SYMPTOTIC VARIANCE FIXED TO 1.
+We now fix the asymptotic variance of the noise to 1. The results are plotted in Figure 14. Note that this is an easier setting
+than previously, as the signal to noise ratio is higher for this asymptotic variance.
+Observations. Similarly to Figure 13, θ has little influence when the noise is a MA(1). On AR(1) and ARMA(1,1) noises
+
+                                                                                                                                                                                                                                26
+(left and middle subplots), the patterns are similar. First, we observe again the improvement thanks to the online mode (empty
+squares versus solid ones), which increases when the dependence increases. Second, all the methods achieve validity or are
+significantly closer to achieving it than when the asymptotic variance is set to 10 (this is related to the high signal to noise
+ratio mentioned at the beginning of this section). Third, EnbPI V2 is valid for ϕ = θ ≤ 0.95 and provides the most efficient
+intervals for theses values. Nevertheless, its performances, as well as those of EnbPI, follow a clear trend (similar to that of
+Figure 5): when the dependence increases, the coverage decreases, as well as the length. EnbPI does not seem to be robust to
+the increasing temporal dependence in these experiments.
+
+                                                                    OSSCP (adapted from Lei et al., 2018)                           ACI (Gibbs & Candès, 2021), γ = 0.01
+                                                                    Offline SSCP (adapted from Lei et al., 2018)                    ACI (Gibbs & Candès, 2021), γ = 0.05
+                                                                    EnbPI (Xu & Xie, 2021)                                          AgACI
+                                                                    EnbPI V2
+                                                ARMA(1,1) noise                                                  AR(1) noise                                                       MA(1) noise
+                                       9.00                                                        9.00
+                                                                                                                                                                     8.8
+                                       8.75                                                        8.75                                                                                                            ϕ = θ =0.1
+
+
+
+
+               Average median length                                       Average median length                                             Average median length
+                                                                                                                                                                                                                   ϕ = θ =0.8
+                                       8.50                                                        8.50                                                              8.6                                           ϕ = θ =0.9
+
+                                                                                                   8.25                                                                                                            ϕ = θ =0.95
+                                       8.25
+                                                                                                                                                                     8.4                                           ϕ = θ =0.99
+                                       8.00                                                        8.00
+                                                                                                                                                                     8.2
+                                       7.75                                                        7.75
+                                                                                                                                                                     8.0
+                                                                                                   7.50
+                                              0.89           0.90   0.91                                  0.89               0.90     0.91                                 0.895   0.900       0.905     0.910
+                                                     Coverage                                                     Coverage                                                            Coverage
+
+
+
+
+Figure 14: Performance of interval prediction methods on data simulated according to equation (3) with an ARMA(1,1) (left),
+                                                        1−ϕ2
+AR(1) (center) and MA(1) (right) noise with a N (0, 1 1−2ϕθ+θ 2 ) innovation. Results aggregated from 500 independent runs.
+
+Empirical standard error are displayed.
+
+
+D.3   Closer look at infinite intervals
+                                                                                                                                    Table 2: Percentage of infinite intervals for ACI, on an
+In this subsection, we investigate further the infite intervals
+                                                                                                                                    ARMA(1,1) noise (first five rows), on an AR(1) noise (θ =
+generated by ACI for ARMA(1,1), AR(1) and MA(1) noise
+                                                                                                                                    0, next five rows) and a MA(1) noise (ϕ = 0, last five rows).
+models. We report the results in Table 2. The central two
+                                                                                                                                    The central two columns present the percentage of infinite
+columns present the percentage of infinite intervals, for γ =
+                                                                                                                                    intervals, for γ = 0.01 and γ = 0.05. The last column
+0.01 and γ = 0.05. A first obvious observation is that the
+                                                                                                                                    represents the proportion of points for which γ = 0.05
+number of infinite intervals is orders of magnitude smaller
+                                                                                                                                    predicts R and that are not covered for γ = 0.01.
+for γ = 0.01 than for γ = 0.05. The last column represents
+the proportion of points for which γ = 0.05 predicts R and                                                                           Noise parameters                               γ = 0.01           γ = 0.05   Intersection
+that are not covered for γ = 0.01. This suggests that for                                                                            ϕ = θ = 0.1                                         0               1.12     53 out of 562      (9.43%)
+those intervals, predicting an infinite interval was somehow                                                                         ϕ = θ = 0.8                                         0               2.76     263 out of 1381   (19.04%)
+                                                                                                                                     ϕ = θ = 0.9                                         0               3.72     425 out of 1862   (22.83%)
+justified in the sense that the point was seemingly challenging                                                                      ϕ = θ = 0.95                                      0.03              4.45     514 out of 2224   (23.11%)
+to cover (as γ = 0.01 failed to cover). For example, in the                                                                          ϕ = θ = 0.99                                      0.04              6.22     554 out of 3109   (17.82%)
+first line (ϕ = θ = 0.1) we read that there are 562 points that                                                                      ϕ = 0.1                                             0                 1      37 out of 500      (7.40%)
+                                                                                                                                     ϕ = 0.8                                             0               2.75     212 out of 1373   (15.44%)
+result in infinite intervals for γ = 0.05, among which 53 lead                                                                       ϕ = 0.9                                             0               3.24     359 out of 1622   (22.13%)
+to finite predictions for γ = 0.01 failing to cover on that point.                                                                   ϕ = 0.95                                          0.03              4.32     488 out of 2160   (22.59%)
+                                                                                                                                     ϕ = 0.99                                          0.06              6.15     560 out of 3073   (18.22%)
+This means only 9.43 % of 562 infinite intervals that can be                                                                         θ = 0.1                                             0               1.03     38 out of 516      (7.36%)
+considered as “somehow justified”. This analysis highlights                                                                          θ = 0.8                                             0               1.42     49 out of 710      (6.90%)
+                                                                                                                                     θ = 0.9                                             0               1.54     47 out of 772      (6.09%)
+that γ = 0.05 seem to predict more infinite intervals than                                                                           θ = 0.95                                            0               1.54     45 out of 770      (5.84%)
+necessary, to compensate for easy errors as explained in                                                                             θ = 0.99                                            0               1.56     53 out of 781      (6.79%)
+Section 2.
+
+D.4   Randomised, sequential and other splits.
+In Figure 15, we compare the sequential split strategy (dark markers) used in our experiments to the randomised version (clear
+markers), on online SCP. We observe that the intervals produced by the randomised version are significantly smaller than the
+sequential one, while covering slightly less.
+Another splitting strategy would consist in calibrating on the first points and training on the last ones. Up to our knowledge,
+this has not been used in practice. This way, we could hope to obtain a better model for the point prediction task. Nevertheless,
+we would be calibrating on really different data than the test ones. Thereby, the impact of this scheme regarding the interval
+prediction task performance is not straightforward. This is why we focus here on the sequential split, which is the most
+
+                                                                                                                               27
+intuitive approach. Analysing further all of these effects theoretically or with extensive numerical experiments would be
+beneficial to the time series conformal prediction domain.
+
+                                                                             Online Sequential SCP (OSSCP, adapted from Lei et al., 2018)
+                                                                             Online Randomised SCP (Online SCP, adapted from Lei et al., 2018)
+
+
+                                                   ARMA(1,1) noise                                                      AR(1) noise                                                                  MA(1) noise
+                                                                                                                                                                          13.825
+                                       14                                                              14
+
+                                                                                                                                                                          13.800                                              ϕ = θ =0.1
+
+
+
+
+               Average median length                                           Average median length                                              Average median length
+                                       13                                                              13                                                                                                                     ϕ = θ =0.8
+                                                                                                                                                                          13.775                                              ϕ = θ =0.9
+                                                                                                                                                                                                                              ϕ = θ =0.95
+                                                                                                                                                                          13.750
+                                       12                                                              12                                                                                                                     ϕ = θ =0.99
+                                                                                                                                                                          13.725
+
+                                       11                                                              11                                                                 13.700
+
+                                            0.87     0.88      0.89   0.90                              0.86    0.87     0.88      0.89    0.90                                    0.900     0.901   0.902    0.903   0.904
+                                                       Coverage                                                           Coverage                                                                    Coverage
+
+
+
+
+Figure 15: Performance of interval prediction methods on data simulated according to equation (3) with a Gaussian ARMA(1,1)
+(left), AR(1) (middle) and MA(1) (right) noise of asymptotic variance 10 (see Appendix C.1). Randomised methods are
+displayed. Results aggregated from 500 independent runs. Empirical standard error are displayed.
+
+
+E     Forecasting French electricity spot prices
+E.1   Details about the data set
+Table 3 presents an extract of the French electricity spot prices data set used in Section 6. In this table, 2 × 23 columns are
+hidden for clarity and space: the 24 prices of D − 7 and the 24 prices of D − 7 are used as variables.
+
+
+                                            Table 3: Extract of the built data set, for French electricity spot price forecasting.
+
+                                                         Date and time                                  Price          Price D-1           Price D-7                                       For. cons.              DOW
+                                                        11/01/16 0PM                                   21.95            15.58                 13.78                                         58800              Monday
+                                                        11/01/16 1PM                                   20.04            19.05                 13.44                                         57600              Monday
+                                                              ..                                         ..               ..                    ..                                            ..                  ..
+                                                               .                                          .                .                     .                                             .                   .
+                                                        12/01/16 0PM                                   21.51            21.95                 25.03                                         61600              Tuesday
+                                                        12/01/16 1PM                                   19.81            20.04                 24.42                                         59800              Tuesday
+                                                               ..                                         ..               ..                    ..                                            ..                  ..
+                                                                .                                          .                .                     .                                             .                   .
+                                                        18/01/16 0PM                                   38.14            37.86                 21.95                                         70400              Monday
+                                                        18/01/16 1PM                                   35.66            34.60                 20.04                                         69500              Monday
+                                                                ..                                         ..               ..                    ..                                            ..                  ..
+                                                                 .                                          .                .                     .                                             .                   .
+
+
+E.2   Forecasting year 2019
+In Figure 16 we observe that on January 25, 2019, the forecasts are very different from the actual values. Nevertheless, the
+prediction intervals manage to include these observations for almost all hours (except after 5 pm) and almost all methods
+(EnbPI does not include points earlier, starting at 11 am).
+
+
+
+
+                                                                                                                                      28
+                                                                                                                                      150
+                                                     Observed price                                                                                        Observed price
+
+
+
+
+           Spot price (€/MWh)                                                                                    Spot price (€/MWh)
+                                125                  Predicted price                                                                  125                  Predicted price
+                                                     Predicted interval                                                                                    Predicted interval
+                                100                                                                                                   100
+
+                                 75                                                                                                    75
+
+                                 50                                                                                                    50
+
+                                           21         22         23         24         25        26                                              21         22         23         24         25        26
+                                       1-            1-          1-        1-         1-         1-                                          1-            1-          1-        1-         1-         1-
+                                      -0         -0          -0            -0        -0         -0                                          -0         -0          -0            -0        -0         -0
+                                     19         19          19         19        19         19                                             19         19          19         19        19         19
+                                 20            20         20          20         20        20                                          20            20         20          20         20        20
+
+                                                           (a) OSSCP                                                                                  (b) ACI with γ = 0.01
+
+
+                                                    Observed price                                                                                        Observed price
+                          120
+
+
+
+
+     Spot price (€/MWh)                                                                                    Spot price (€/MWh)
+                                                                                                                                 125
+                                                    Predicted price                                                                                       Predicted price
+                          100                       Predicted interval                                                                                    Predicted interval
+                                                                                                                                 100
+
+                                80
+                                                                                                                                      75
+                                60
+                                                                                                                                      50
+
+                                          21         22          3
+                                                                 -2         24        25         26                                             21         22          3
+                                                                                                                                                                       -2         24        25         26
+                                      1-            1-       01            1-         1-        1-                                          1-            1-       01            1-         1-        1-
+                                      -0        -0          9-         -0         -0        -0                                              -0        -0          9-         -0         -0        -0
+                                 19             19        20          19         19         19                                         19             19        20          19         19         19
+                                20          20               1        20        20         20                                         20          20               1        20        20         20
+
+                                                         (c) EnbPI V2                                                                                 (d) ACI with γ = 0.05
+
+Figure 16: Representation of predicted intervals around point forecasts on the 25th of January of 2019.
+
+
+
+
+                                                                                                      29
+

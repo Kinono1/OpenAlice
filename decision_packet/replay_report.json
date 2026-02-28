@@ -1,0 +1,9 @@
+{
+  "generatedAt": "2026-02-28T14:02:25Z",
+  "valid": false,
+  "errors": [
+    "log file not found: decision_packet/state_machine_log.jsonl"
+  ],
+  "finalState": null,
+  "transitions": []
+}
