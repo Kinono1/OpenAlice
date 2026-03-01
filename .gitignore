@@ -4,6 +4,9 @@ logs/
 /data/*
 !/data/default/
 !/data/default/**
+!/data/config/
+/data/config/*
+!/data/config/branch_workflow.v1.json
 state.json
 *.log
 

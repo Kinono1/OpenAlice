@@ -152,6 +152,30 @@ pnpm test       # run tests
 
 > **Note:** Port 3002 serves the UI only after `pnpm build`. For frontend development, use `pnpm dev:ui` (port 5173) which proxies to the backend and provides hot reload.
 
+## Branch Workflow
+
+This repo uses a fixed three-branch workflow policy:
+
+- `master` for official upstream sync only
+- `work/kino-mainline` for day-to-day development
+- `dev` for integration (`master + work/kino-mainline`)
+
+Policy source of truth:
+
+- `data/config/branch_workflow.v1.json`
+- `docs/branch-workflow-policy.md`
+
+Validation commands:
+
+```bash
+pnpm branch:policy:show
+pnpm branch:policy:check
+pnpm branch:policy:can-merge -- --source work/kino-mainline --target dev
+pnpm branch:policy:install-hooks
+```
+
+`branch:policy:install-hooks` enables pre-push enforcement so forbidden branch directions are blocked automatically.
+
 ## Configuration
 
 All config lives in `data/config/` as JSON files with Zod validation. Missing files fall back to sensible defaults. You can edit these files directly or use the Web UI.

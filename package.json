@@ -9,6 +9,11 @@
     "build": "pnpm build:ui && pnpm build:backend",
     "build:ui": "cd ui && pnpm install && pnpm build",
     "build:backend": "tsup src/main.ts --format esm --dts",
+    "branch:policy:show": "node scripts/branch_policy.mjs --show",
+    "branch:policy:check": "node scripts/branch_policy.mjs --check-current",
+    "branch:policy:can-merge": "node scripts/branch_policy.mjs --check-merge",
+    "branch:policy:enforce-push": "node scripts/branch_policy_enforce_push.mjs",
+    "branch:policy:install-hooks": "bash scripts/branch_policy_install_hooks.sh",
     "test": "vitest run",
     "test:watch": "vitest"
   },
