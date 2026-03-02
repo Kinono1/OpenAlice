@@ -1,6 +1,6 @@
 {
   "manifestVersion": "v1",
-  "frozenAt": "",
+  "frozenAt": "2026-03-02T16:08:00Z",
   "versions": {
     "sm": "sm-v1",
     "stats": "stats-v1",
@@ -20,25 +20,29 @@
   },
   "raciSnapshot": {
     "E7": {
-      "dri": "",
-      "backup": "",
-      "nightOnCall": ""
+      "dri": "kino.e7.dri",
+      "backup": "kino.e7.backup",
+      "nightOnCall": "kino.e7.oncall"
     },
     "E8": {
-      "dri": "",
-      "backup": "",
-      "nightOnCall": ""
+      "dri": "kino.e8.dri",
+      "backup": "kino.e8.backup",
+      "nightOnCall": "kino.e8.oncall"
     },
     "E9": {
-      "dri": "",
-      "backup": "",
-      "nightOnCall": ""
+      "dri": "kino.e9.dri",
+      "backup": "kino.e9.backup",
+      "nightOnCall": "kino.e9.oncall"
     }
   },
-  "incidentCommander": "",
-  "l2OverrideAllowlist": [],
+  "incidentCommander": "kino.incident.commander",
+  "l2OverrideAllowlist": [
+    "kino.mainline.override"
+  ],
   "signOff": {
-    "approvedBy": [],
-    "approvedAt": ""
+    "approvedBy": [
+      "kino.owner"
+    ],
+    "approvedAt": "2026-03-02T16:09:00Z"
   }
 }

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "gate_checkpoint.v1",
+  "gateId": "G2",
+  "generatedAt": "2026-03-02T10:41:02Z",
+  "hardGate": true,
+  "status": "pass",
+  "summary": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "warned": 0
+  },
+  "checks": [
+    {
+      "name": "research_quality_report_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_RESEARCH_QUALITY_REPORT_MISSING",
+      "detail": "data/research/reports/research_quality_report.json"
+    },
+    {
+      "name": "paper_count_threshold",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_PAPER_COUNT_BELOW_THRESHOLD",
+      "detail": "paperCount=10, required>=10"
+    },
+    {
+      "name": "paper_card_schema_pass_rate",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_PAPER_CARD_SCHEMA_FAIL",
+      "detail": "paperCardSchemaPassRate=1.0"
+    },
+    {
+      "name": "missing_required_fields_zero",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_PAPER_CARD_MISSING_REQUIRED_FIELDS",
+      "detail": "missingRequiredFields=0"
+    },
+    {
+      "name": "evidence_link_rate_threshold",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_EVIDENCE_LINK_RATE_LOW",
+      "detail": "evidenceLinkRate=1.0, required>=0.9"
+    },
+    {
+      "name": "research_quality_overall_passed",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_RESEARCH_QUALITY_GATE_FAILED",
+      "detail": "overallPassed=True"
+    },
+    {
+      "name": "research_contract_verify_report_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_RESEARCH_CONTRACT_REPORT_MISSING",
+      "detail": "data/runtime/research_contract_verify_report.json"
+    },
+    {
+      "name": "research_contracts_passed",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_RESEARCH_CONTRACT_VALIDATION_FAILED",
+      "detail": "contracts.passed=True"
+    }
+  ],
+  "reasonCodes": [],
+  "inputs": {
+    "researchQualityReport": {
+      "path": "data/research/reports/research_quality_report.json",
+      "exists": true
+    },
+    "researchContractReport": {
+      "path": "data/runtime/research_contract_verify_report.json",
+      "exists": true,
+      "canonicalPath": "data/runtime/research_contract_verify_report.json",
+      "legacyPath": "data/runtime/research_contract_verify_outputs.json",
+      "pathUsed": "data/runtime/research_contract_verify_report.json",
+      "fallbackUsed": false
+    }
+  }
+}

@@ -25,6 +25,9 @@ TEMPLATE_PATH = (
 FREEZE_SCHEMA_PATH = (
     REPO_ROOT / "docs/research/templates/freeze_manifest.schema.v1.json"
 )
+GATE_INDEX_SCHEMA_PATH = (
+    REPO_ROOT / "docs/research/templates/gate_checkpoint_index.schema.v1.json"
+)
 
 
 def now_utc_iso() -> str:
@@ -74,6 +77,120 @@ class TestGovernancePipeline(unittest.TestCase):
         if with_extra_field:
             payload["unexpectedTopLevel"] = "should-fail-schema"
         return payload
+
+    def write_json_file(self, path: Path, payload: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def make_checkpoint_setup(self, root: Path) -> dict[str, Path]:
+        paths = {
+            "output_dir": root / "gates",
+            "env_report": root / "environment_verify_report.json",
+            "freeze_report": root / "freeze_verify_report.json",
+            "preflight_report": root / "gates_preflight_report.json",
+            "quality_report": root / "research_quality_report.json",
+            "verdict_report": root / "experiment_verdict.v2.json",
+            "release_gate_status": root / "release_gate_status.json",
+            "contract_report": root / "research_contract_verify_report.json",
+            "contract_report_legacy": root / "research_contract_verify_outputs.json",
+            "contract_validate_out": root / "contract_validate_report.json",
+        }
+
+        self.write_json_file(
+            paths["env_report"],
+            {
+                "passed": True,
+                "generatedAt": now_utc_iso(),
+                "failedChecks": [],
+            },
+        )
+        self.write_json_file(
+            paths["freeze_report"],
+            {
+                "passed": True,
+                "generatedAt": now_utc_iso(),
+                "failures": [],
+            },
+        )
+        self.write_json_file(
+            paths["preflight_report"],
+            {
+                "passed": True,
+                "generatedAt": now_utc_iso(),
+                "steps": [
+                    {"name": "env:verify", "exitCode": 0},
+                    {"name": "freeze:verify", "exitCode": 0},
+                ],
+                "finalExitCode": 0,
+            },
+        )
+        self.write_json_file(
+            paths["quality_report"],
+            {
+                "generatedAt": now_utc_iso(),
+                "paperCount": 10,
+                "paperCardSchemaPassRate": 1.0,
+                "missingRequiredFields": 0,
+                "evidenceLinkRate": 1.0,
+                "overallPassed": True,
+            },
+        )
+        self.write_json_file(
+            paths["verdict_report"],
+            {
+                "schemaVersion": "experiment_verdict.v2",
+                "generatedAt": now_utc_iso(),
+                "result": "GO",
+                "reasonCodes": ["INFO_MVP_THRESHOLDS_PASS"],
+                "thresholds": {
+                    "meanPboMax": 0.2,
+                    "meanDsrProbabilityMin": 0.5,
+                    "fdrQMax": 0.1,
+                },
+                "aggregateMetrics": {
+                    "meanPbo": 0.1,
+                    "meanDsrProbability": 0.7,
+                    "fdrQ": 0.05,
+                },
+                "candidates": [
+                    {
+                        "strategyId": "S1",
+                        "strategyName": "demo",
+                        "status": "pass",
+                        "metrics": {
+                            "pbo": 0.1,
+                            "dsrProbability": 0.7,
+                            "fdrQ": 0.05,
+                        },
+                        "releaseGate": {
+                            "allowPaperTrading": True,
+                            "allowLiveTrading": True,
+                            "failedChecks": [],
+                        },
+                    }
+                ],
+                "outputPaths": {
+                    "validationRuns": str(root / "strategy_validation_runs.json"),
+                    "releaseGateStatus": str(paths["release_gate_status"]),
+                },
+            },
+        )
+        self.write_json_file(
+            paths["release_gate_status"],
+            {
+                "version": 1,
+                "generatedAt": now_utc_iso(),
+                "allowPaperTrading": True,
+                "allowLiveTrading": True,
+                "failedChecks": [],
+                "warningChecks": [],
+            },
+        )
+
+        return paths
 
     def test_build_and_validate_happy_path(self) -> None:
         with tempfile.TemporaryDirectory(prefix="openalice-gov-pass-") as tmp:
@@ -326,6 +443,358 @@ class TestGovernancePipeline(unittest.TestCase):
             self.assertFalse(bool(report.get("passed")))
             errors = report.get("schemaValidationErrors", [])
             self.assertTrue(any("schema:" in str(item) for item in errors))
+
+    def test_v5_gate_checkpoint_traceability(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="openalice-v5-checkpoints-") as tmp:
+            tmp_dir = Path(tmp)
+            packet_dir = tmp_dir / "packet"
+            gate_dir = tmp_dir / "gates"
+            packet_dir.mkdir(parents=True, exist_ok=True)
+            gate_dir.mkdir(parents=True, exist_ok=True)
+
+            now = datetime.now(timezone.utc)
+            release_gate_status = tmp_dir / "release_gate_status.json"
+            release_gate_status.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "generatedAt": now_utc_iso(),
+                        "allowPaperTrading": False,
+                        "allowLiveTrading": False,
+                        "failedChecks": ["significance"],
+                        "warningChecks": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            experiment_verdict = tmp_dir / "experiment_verdict.v2.json"
+            experiment_verdict.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "experiment_verdict.v2",
+                        "generatedAt": now_utc_iso(),
+                        "result": "NO_GO",
+                        "reasonCodes": [
+                            "HARD_MEAN_PBO_THRESHOLD_FAIL",
+                            "HARD_RELEASE_GATE_BLOCKED",
+                        ],
+                        "thresholds": {
+                            "meanPboMax": 0.2,
+                            "meanDsrProbabilityMin": 0.5,
+                            "fdrQMax": 0.1,
+                        },
+                        "aggregateMetrics": {
+                            "meanPbo": 0.9,
+                            "meanDsrProbability": 0.1,
+                            "fdrQ": 0.4,
+                        },
+                        "candidates": [
+                            {
+                                "strategyId": "S1",
+                                "strategyName": "demo",
+                                "status": "fail",
+                                "metrics": {
+                                    "pbo": 0.9,
+                                    "dsrProbability": 0.1,
+                                    "fdrQ": 0.4,
+                                },
+                                "releaseGate": {
+                                    "allowPaperTrading": False,
+                                    "allowLiveTrading": False,
+                                    "failedChecks": ["significance"],
+                                },
+                                "failureReasonCode": "HARD_MEAN_PBO_THRESHOLD_FAIL",
+                            }
+                        ],
+                        "outputPaths": {
+                            "validationRuns": str(tmp_dir / "runs.json"),
+                            "releaseGateStatus": str(release_gate_status),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            for gate_id, status in (
+                ("G0", "pass"),
+                ("G1", "pass"),
+                ("G2", "pass"),
+                ("G3", "fail"),
+                ("G4", "fail"),
+            ):
+                payload = {
+                    "schemaVersion": "gate_checkpoint.v1",
+                    "gateId": gate_id,
+                    "generatedAt": now_utc_iso(),
+                    "hardGate": True,
+                    "status": status,
+                    "summary": {"total": 1, "passed": 0 if status == "fail" else 1, "failed": 1 if status == "fail" else 0, "warned": 0},
+                    "checks": [
+                        {
+                            "name": "demo_check",
+                            "passed": status != "fail",
+                            "severity": "hard",
+                            "reasonCode": "HARD_DEMO_FAIL" if status == "fail" else "INFO_DEMO_PASS",
+                            "detail": f"{gate_id}:{status}",
+                        }
+                    ],
+                    "reasonCodes": ["HARD_DEMO_FAIL"] if status == "fail" else [],
+                    "inputs": {},
+                }
+                (gate_dir / f"{gate_id}.checkpoint.json").write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+            freeze_manifest_path = tmp_dir / "freeze_manifest.json"
+            freeze_manifest_path.write_text(
+                json.dumps(self.make_freeze_manifest(), ensure_ascii=False, indent=2)
+                + "\n",
+                encoding="utf-8",
+            )
+
+            build_proc = run_script(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_decision_packet.py"),
+                    "--template",
+                    str(TEMPLATE_PATH),
+                    "--output-dir",
+                    str(packet_dir),
+                    "--release-gate-status",
+                    str(release_gate_status),
+                    "--gate-checkpoints-dir",
+                    str(gate_dir),
+                    "--experiment-verdict",
+                    str(experiment_verdict),
+                ]
+            )
+            self.assertEqual(0, build_proc.returncode, msg=build_proc.stderr)
+
+            validate_proc = run_script(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "validate_decision_packet.py"),
+                    "--packet-dir",
+                    str(packet_dir),
+                    "--freeze-manifest",
+                    str(freeze_manifest_path),
+                    "--output",
+                    str(packet_dir / "verdict.json"),
+                ]
+            )
+            self.assertEqual(2, validate_proc.returncode, msg=validate_proc.stderr)
+
+            verdict = json.loads((packet_dir / "verdict.json").read_text(encoding="utf-8"))
+            self.assertEqual("NO_GO", verdict.get("verdict"))
+            trace = verdict.get("hardGateFailureTrace", [])
+            self.assertTrue(
+                any(item.get("name") == "gate_checkpoint_G3" for item in trace if isinstance(item, dict))
+            )
+
+    def test_gate_checkpoint_index_contract_validation_pass(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="openalice-gate-index-pass-") as tmp:
+            tmp_dir = Path(tmp)
+            paths = self.make_checkpoint_setup(tmp_dir)
+            self.write_json_file(
+                paths["contract_report"],
+                {
+                    "passed": True,
+                    "generatedAt": now_utc_iso(),
+                    "summary": {"totalFiles": 6, "passedFiles": 6, "failedFiles": 0},
+                    "files": [],
+                },
+            )
+
+            build_proc = run_script(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_gate_checkpoints.py"),
+                    "--output-dir",
+                    str(paths["output_dir"]),
+                    "--env-report",
+                    str(paths["env_report"]),
+                    "--freeze-report",
+                    str(paths["freeze_report"]),
+                    "--preflight-report",
+                    str(paths["preflight_report"]),
+                    "--research-quality-report",
+                    str(paths["quality_report"]),
+                    "--research-contract-report",
+                    str(paths["contract_report"]),
+                    "--research-contract-report-legacy",
+                    str(paths["contract_report_legacy"]),
+                    "--experiment-verdict",
+                    str(paths["verdict_report"]),
+                    "--release-gate-status",
+                    str(paths["release_gate_status"]),
+                ]
+            )
+            self.assertEqual(0, build_proc.returncode, msg=build_proc.stderr)
+
+            validate_proc = run_script(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "validate_research_contracts.py"),
+                    "--inputs",
+                    str(paths["output_dir"] / "gate_checkpoints_index.v1.json"),
+                    "--output",
+                    str(paths["contract_validate_out"]),
+                ]
+            )
+            self.assertEqual(0, validate_proc.returncode, msg=validate_proc.stderr)
+
+            report = json.loads(
+                paths["contract_validate_out"].read_text(encoding="utf-8")
+            )
+            self.assertTrue(bool(report.get("passed")))
+            files = report.get("files", [])
+            self.assertTrue(
+                any(
+                    isinstance(item, dict)
+                    and item.get("schemaVersion") == "gate_checkpoint_index.v1"
+                    and item.get("passed") is True
+                    for item in files
+                )
+            )
+
+    def test_gate_checkpoint_contract_report_fallback_to_legacy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="openalice-gate-fallback-") as tmp:
+            tmp_dir = Path(tmp)
+            paths = self.make_checkpoint_setup(tmp_dir)
+            self.write_json_file(
+                paths["contract_report_legacy"],
+                {
+                    "passed": True,
+                    "generatedAt": now_utc_iso(),
+                    "summary": {"totalFiles": 3, "passedFiles": 3, "failedFiles": 0},
+                    "files": [],
+                },
+            )
+
+            build_proc = run_script(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_gate_checkpoints.py"),
+                    "--output-dir",
+                    str(paths["output_dir"]),
+                    "--env-report",
+                    str(paths["env_report"]),
+                    "--freeze-report",
+                    str(paths["freeze_report"]),
+                    "--preflight-report",
+                    str(paths["preflight_report"]),
+                    "--research-quality-report",
+                    str(paths["quality_report"]),
+                    "--research-contract-report",
+                    str(paths["contract_report"]),
+                    "--research-contract-report-legacy",
+                    str(paths["contract_report_legacy"]),
+                    "--experiment-verdict",
+                    str(paths["verdict_report"]),
+                    "--release-gate-status",
+                    str(paths["release_gate_status"]),
+                ]
+            )
+            self.assertEqual(0, build_proc.returncode, msg=build_proc.stderr)
+
+            index_payload = json.loads(
+                (paths["output_dir"] / "gate_checkpoints_index.v1.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                str(paths["contract_report_legacy"]),
+                index_payload.get("contractReportPathUsed"),
+            )
+            self.assertTrue(bool(index_payload.get("contractReportFallbackUsed")))
+
+            g2_payload = json.loads(
+                (paths["output_dir"] / "G2.checkpoint.json").read_text(encoding="utf-8")
+            )
+            rc_inputs = (
+                g2_payload.get("inputs", {}).get("researchContractReport", {})
+                if isinstance(g2_payload.get("inputs"), dict)
+                else {}
+            )
+            self.assertEqual(
+                str(paths["contract_report_legacy"]),
+                rc_inputs.get("pathUsed"),
+            )
+            self.assertTrue(bool(rc_inputs.get("fallbackUsed")))
+
+    def test_gate_checkpoint_contract_report_prefers_canonical(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="openalice-gate-canonical-") as tmp:
+            tmp_dir = Path(tmp)
+            paths = self.make_checkpoint_setup(tmp_dir)
+            self.write_json_file(
+                paths["contract_report"],
+                {
+                    "passed": False,
+                    "generatedAt": now_utc_iso(),
+                    "summary": {"totalFiles": 3, "passedFiles": 2, "failedFiles": 1},
+                    "files": [{"path": "x.json", "passed": False}],
+                },
+            )
+            self.write_json_file(
+                paths["contract_report_legacy"],
+                {
+                    "passed": True,
+                    "generatedAt": now_utc_iso(),
+                    "summary": {"totalFiles": 3, "passedFiles": 3, "failedFiles": 0},
+                    "files": [],
+                },
+            )
+
+            build_proc = run_script(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_gate_checkpoints.py"),
+                    "--output-dir",
+                    str(paths["output_dir"]),
+                    "--env-report",
+                    str(paths["env_report"]),
+                    "--freeze-report",
+                    str(paths["freeze_report"]),
+                    "--preflight-report",
+                    str(paths["preflight_report"]),
+                    "--research-quality-report",
+                    str(paths["quality_report"]),
+                    "--research-contract-report",
+                    str(paths["contract_report"]),
+                    "--research-contract-report-legacy",
+                    str(paths["contract_report_legacy"]),
+                    "--experiment-verdict",
+                    str(paths["verdict_report"]),
+                    "--release-gate-status",
+                    str(paths["release_gate_status"]),
+                ]
+            )
+            self.assertEqual(0, build_proc.returncode, msg=build_proc.stderr)
+
+            index_payload = json.loads(
+                (paths["output_dir"] / "gate_checkpoints_index.v1.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                str(paths["contract_report"]),
+                index_payload.get("contractReportPathUsed"),
+            )
+            self.assertFalse(bool(index_payload.get("contractReportFallbackUsed")))
+            self.assertFalse(bool(index_payload.get("overallHardPass")))
+
+            g2_payload = json.loads(
+                (paths["output_dir"] / "G2.checkpoint.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("fail", g2_payload.get("status"))
 
     def test_python_fallback_accepts_double_dash_separator(self) -> None:
         with tempfile.TemporaryDirectory(prefix="openalice-fallback-sep-") as tmp:
