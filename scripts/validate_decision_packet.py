@@ -199,6 +199,39 @@ def resolve_artifact_paths(
     return resolved
 
 
+def is_v5_mode(evidence_pack: dict[str, Any]) -> bool:
+    return isinstance(evidence_pack.get("experimentVerdict"), dict) or isinstance(
+        evidence_pack.get("gateCheckpoints"), dict
+    )
+
+
+def collect_required_artifacts(
+    evidence_pack: dict[str, Any],
+    artifacts: dict[str, Any],
+) -> list[str]:
+    if not is_v5_mode(evidence_pack):
+        return [
+            "manifest",
+            "evidencePack",
+            "protocolSpec",
+            "protocolHashFile",
+            "comparabilityReport",
+            "championRegistrySnapshot",
+            "releaseGateStatus",
+            "offlineMetrics",
+            "liveShadowMetrics14d",
+            "stateMachineLog",
+            "decisionMarkdown",
+        ]
+
+    required = ["manifest", "evidencePack", "releaseGateStatus", "experimentVerdict"]
+    for gate_id in ("G0", "G1", "G2", "G3", "G4"):
+        key = f"gateCheckpoint{gate_id}"
+        if key in artifacts:
+            required.append(key)
+    return required
+
+
 def main() -> int:
     args = parse_args()
     packet_dir = Path(args.packet_dir)
@@ -269,19 +302,7 @@ def main() -> int:
         artifacts_raw = evidence_pack.get("artifacts", {})
         artifacts = artifacts_raw if isinstance(artifacts_raw, dict) else {}
         resolved_artifacts = resolve_artifact_paths(packet_dir, artifacts)
-        required_artifacts = [
-            "manifest",
-            "evidencePack",
-            "protocolSpec",
-            "protocolHashFile",
-            "comparabilityReport",
-            "championRegistrySnapshot",
-            "releaseGateStatus",
-            "offlineMetrics",
-            "liveShadowMetrics14d",
-            "stateMachineLog",
-            "decisionMarkdown",
-        ]
+        required_artifacts = collect_required_artifacts(evidence_pack, artifacts)
         missing_artifacts: list[str] = []
         for key in required_artifacts:
             path = resolved_artifacts.get(key)
@@ -323,21 +344,37 @@ def main() -> int:
                 )
 
         hard_gate_checks = evidence_pack.get("hardGateChecks")
-        hard_gate_failed: list[str] = []
+        hard_gate_failed: list[dict[str, str]] = []
         if isinstance(hard_gate_checks, list):
             for item in hard_gate_checks:
                 if not isinstance(item, dict):
                     continue
                 if item.get("passed") is not True:
                     name = item.get("name", "unknown_hard_gate")
-                    hard_gate_failed.append(str(name))
+                    reason = item.get("reason")
+                    hard_gate_failed.append(
+                        {
+                            "name": str(name),
+                            "reason": str(reason) if isinstance(reason, str) else "",
+                        }
+                    )
         if hard_gate_failed:
             add_reason(reasons_hard, "HARD_HARD_GATE_CHECK_FAILED")
+        checkpoint_failures = [
+            item for item in hard_gate_failed if item["name"].startswith("gate_checkpoint_")
+        ]
         checks.append(
             {
                 "name": "hard_gate_checks",
                 "passed": len(hard_gate_failed) == 0,
                 "detail": hard_gate_failed,
+            }
+        )
+        checks.append(
+            {
+                "name": "gate_checkpoint_traceability",
+                "passed": len(checkpoint_failures) > 0 or len(hard_gate_failed) == 0,
+                "detail": checkpoint_failures,
             }
         )
 
@@ -471,6 +508,8 @@ def main() -> int:
             },
             "checks": checks,
             "thresholdResults": threshold_results,
+            "hardGateFailureTrace": checkpoint_failures,
+            "v5Mode": is_v5_mode(evidence_pack),
         }
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

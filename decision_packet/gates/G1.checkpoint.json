@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "gate_checkpoint.v1",
+  "gateId": "G1",
+  "generatedAt": "2026-03-02T10:41:02Z",
+  "hardGate": true,
+  "status": "pass",
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "warned": 0
+  },
+  "checks": [
+    {
+      "name": "gates_preflight_report_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_PREFLIGHT_REPORT_MISSING",
+      "detail": "data/runtime/gates_preflight_report.json"
+    },
+    {
+      "name": "gates_preflight_exit_zero",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_PREFLIGHT_NONZERO",
+      "detail": "finalExitCode=0"
+    },
+    {
+      "name": "gates_preflight_steps_all_pass",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_PREFLIGHT_STEP_FAILED",
+      "detail": "stepCount=2"
+    }
+  ],
+  "reasonCodes": [],
+  "inputs": {
+    "preflightReport": {
+      "path": "data/runtime/gates_preflight_report.json",
+      "exists": true
+    }
+  }
+}

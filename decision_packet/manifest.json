@@ -1,10 +1,12 @@
 {
   "version": "v1",
-  "generatedAt": "2026-02-28T14:02:25Z",
+  "generatedAt": "2026-03-02T10:41:07Z",
   "templatePath": "docs/research/templates/go_no_go_evidence_pack.template.json",
   "outputDir": "decision_packet",
-  "missingCount": 8,
-  "missing": [
+  "missingCount": 0,
+  "missing": [],
+  "missingOptionalCount": 8,
+  "missingOptional": [
     {
       "key": "protocolSpec",
       "sourcePath": "decision_packet/protocol_spec.json"
@@ -81,8 +83,8 @@
       "destinationPath": "decision_packet/release_gate_status.json",
       "copied": true,
       "exists": true,
-      "sha256": "7831d61508f6b48dc1886480777d4c09904dda523548f7254e0e7842adb381ce",
-      "sizeBytes": 569
+      "sha256": "0bc82347e8d1e7b73735281da68f0e4996024f900a338e1991ec281ed7550b96",
+      "sizeBytes": 368
     },
     {
       "key": "offlineMetrics",
@@ -119,6 +121,69 @@
       "exists": false,
       "sha256": null,
       "sizeBytes": null
+    },
+    {
+      "key": "experimentVerdict",
+      "sourcePath": "data/research/strategy/experiment_verdict.v2.json",
+      "destinationPath": "decision_packet/experiment_verdict.v2.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "7e908eff6f9e51a648988239e07c3fb468d313a80f043c5364d8728a0b911067",
+      "sizeBytes": 2292
+    },
+    {
+      "key": "gateCheckpointG0",
+      "sourcePath": "data/runtime/gates/G0.checkpoint.json",
+      "destinationPath": "decision_packet/gates/G0.checkpoint.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "1186542b4d3027b39347f2930469ff2b8659a4d5921f61f804c6c348ed630b51",
+      "sizeBytes": 1298
+    },
+    {
+      "key": "gateCheckpointG1",
+      "sourcePath": "data/runtime/gates/G1.checkpoint.json",
+      "destinationPath": "decision_packet/gates/G1.checkpoint.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "82f212c68c78652c7086a4fc766b6e347e29bd14e1f90293753cc52a53d581c1",
+      "sizeBytes": 990
+    },
+    {
+      "key": "gateCheckpointG2",
+      "sourcePath": "data/runtime/gates/G2.checkpoint.json",
+      "destinationPath": "decision_packet/gates/G2.checkpoint.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "eda9bf474959a55d92c99686dbec3dc1eddf17483e2c5d9b13be2d54c74ca247",
+      "sizeBytes": 2515
+    },
+    {
+      "key": "gateCheckpointG3",
+      "sourcePath": "data/runtime/gates/G3.checkpoint.json",
+      "destinationPath": "decision_packet/gates/G3.checkpoint.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "8d79ba37fc72533ca9fe724a5360c934ac1a19ffd5ab5db6862f4f8e81f8075b",
+      "sizeBytes": 2361
+    },
+    {
+      "key": "gateCheckpointG4",
+      "sourcePath": "data/runtime/gates/G4.checkpoint.json",
+      "destinationPath": "decision_packet/gates/G4.checkpoint.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "800541c47c3046109cea1d7baab52831b748327526789ac01e9298e6ec075972",
+      "sizeBytes": 1253
+    },
+    {
+      "key": "gateCheckpointsIndex",
+      "sourcePath": "data/runtime/gates/gate_checkpoints_index.v1.json",
+      "destinationPath": "decision_packet/gates/gate_checkpoints_index.v1.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "6d820d8100f69337b9b4aa730db88597679bced0ceffc81e264a77a9782e621a",
+      "sizeBytes": 1604
     }
   ],
   "evidencePackPath": "decision_packet/evidence_pack.json"

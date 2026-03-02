@@ -1,0 +1,89 @@
+{
+  "schemaVersion": "experiment_verdict.v2",
+  "generatedAt": "2026-03-02T10:40:55.970Z",
+  "result": "NO_GO",
+  "reasonCodes": [
+    "HARD_MEAN_PBO_THRESHOLD_FAIL",
+    "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
+    "HARD_FDR_THRESHOLD_FAIL",
+    "HARD_RELEASE_GATE_BLOCKED",
+    "HARD_NO_CANDIDATE_PASS"
+  ],
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "aggregateMetrics": {
+    "meanPbo": 1,
+    "meanDsrProbability": 0.0493492933392912,
+    "fdrQ": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "S1",
+      "strategyName": "trend_baseline",
+      "status": "fail",
+      "metrics": {
+        "pbo": 1,
+        "dsrProbability": 0.1480391698025213,
+        "fdrQ": 1
+      },
+      "releaseGate": {
+        "allowPaperTrading": false,
+        "allowLiveTrading": false,
+        "failedChecks": [
+          "wfo",
+          "significance",
+          "risk_simulation"
+        ]
+      },
+      "failureReasonCode": "HARD_PBO_THRESHOLD_FAIL"
+    },
+    {
+      "strategyId": "S2",
+      "strategyName": "mean_reversion_rsi_bb",
+      "status": "fail",
+      "metrics": {
+        "pbo": 1,
+        "dsrProbability": 0.000008710215352314421,
+        "fdrQ": 1
+      },
+      "releaseGate": {
+        "allowPaperTrading": false,
+        "allowLiveTrading": false,
+        "failedChecks": [
+          "wfo",
+          "significance",
+          "risk_simulation"
+        ]
+      },
+      "failureReasonCode": "HARD_PBO_THRESHOLD_FAIL"
+    },
+    {
+      "strategyId": "S3",
+      "strategyName": "breakout_classic",
+      "status": "fail",
+      "metrics": {
+        "pbo": 1,
+        "dsrProbability": 0,
+        "fdrQ": 1
+      },
+      "releaseGate": {
+        "allowPaperTrading": false,
+        "allowLiveTrading": false,
+        "failedChecks": [
+          "wfo",
+          "significance",
+          "risk_simulation"
+        ]
+      },
+      "failureReasonCode": "HARD_PBO_THRESHOLD_FAIL"
+    }
+  ],
+  "outputPaths": {
+    "validationRuns": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/strategy_validation_runs.json",
+    "releaseGateStatus": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/runtime/release_gate_status.json"
+  },
+  "notes": "champion=S1"
+}

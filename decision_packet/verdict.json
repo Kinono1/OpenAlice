@@ -1,28 +1,20 @@
 {
   "version": "v1",
-  "generatedAt": "2026-02-28T14:02:25Z",
+  "generatedAt": "2026-03-02T10:41:16Z",
   "packetDir": "decision_packet",
   "evidencePackPath": "decision_packet/evidence_pack.json",
   "verdict": "NO_GO",
   "ciStatus": "failed",
   "reasonCodes": {
     "all": [
-      "HARD_FREEZE_MANIFEST_INVALID",
-      "HARD_MISSING_ARTIFACT",
       "HARD_HARD_GATE_CHECK_FAILED",
       "HARD_RELEASE_GATE_BLOCKED",
-      "HARD_METRIC_MISSING",
-      "HARD_THRESHOLD_BREACH",
-      "HARD_RELEASE_GATE_EXPIRED"
+      "HARD_THRESHOLD_BREACH"
     ],
     "hard": [
-      "HARD_FREEZE_MANIFEST_INVALID",
-      "HARD_MISSING_ARTIFACT",
       "HARD_HARD_GATE_CHECK_FAILED",
       "HARD_RELEASE_GATE_BLOCKED",
-      "HARD_METRIC_MISSING",
-      "HARD_THRESHOLD_BREACH",
-      "HARD_RELEASE_GATE_EXPIRED"
+      "HARD_THRESHOLD_BREACH"
     ],
     "warn": [],
     "info": []
@@ -34,43 +26,48 @@
     },
     {
       "name": "freeze_manifest_valid",
-      "passed": false,
-      "detail": [
-        "raciSnapshot.E7.dri missing",
-        "raciSnapshot.E7.backup missing",
-        "raciSnapshot.E7.nightOnCall missing",
-        "raciSnapshot.E8.dri missing",
-        "raciSnapshot.E8.backup missing",
-        "raciSnapshot.E8.nightOnCall missing",
-        "raciSnapshot.E9.dri missing",
-        "raciSnapshot.E9.backup missing",
-        "raciSnapshot.E9.nightOnCall missing",
-        "incidentCommander missing",
-        "l2OverrideAllowlist missing"
-      ]
+      "passed": true,
+      "detail": []
     },
     {
       "name": "required_artifacts_present",
-      "passed": false,
-      "detail": [
-        "protocolSpec",
-        "protocolHashFile",
-        "comparabilityReport",
-        "championRegistrySnapshot",
-        "offlineMetrics",
-        "liveShadowMetrics14d",
-        "stateMachineLog",
-        "decisionMarkdown"
-      ]
+      "passed": true,
+      "detail": []
     },
     {
       "name": "hard_gate_checks",
       "passed": false,
       "detail": [
-        "comparability_all_runs_valid",
-        "protocol_hash_matches_runtime",
-        "champion_registry_schema_valid",
-        "state_machine_drill_passed"
+        {
+          "name": "experiment_verdict_result",
+          "reason": "result=NO_GO; reasonCodes=HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED,HARD_NO_CANDIDATE_PASS"
+        },
+        {
+          "name": "gate_checkpoint_G3",
+          "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+        },
+        {
+          "name": "gate_checkpoint_G4",
+          "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+        },
+        {
+          "name": "gate_checkpoints_hard_pass",
+          "reason": "hard-failed=G3,G4"
+        }
+      ]
+    },
+    {
+      "name": "gate_checkpoint_traceability",
+      "passed": true,
+      "detail": [
+        {
+          "name": "gate_checkpoint_G3",
+          "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+        },
+        {
+          "name": "gate_checkpoint_G4",
+          "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+        }
       ]
     },
     {
@@ -85,84 +82,39 @@
       "passed": false,
       "detail": [
         {
-          "thresholdKey": "transferPassRatioRolling14dMin",
-          "measuredKey": "transferPassRatioRolling14d",
-          "operator": ">=",
-          "threshold": 0.25,
-          "measured": null,
-          "passed": false,
-          "missingMeasured": true
-        },
-        {
-          "thresholdKey": "winnerEligibleRatioRolling14dMin",
-          "measuredKey": "winnerEligibleRatioRolling14d",
-          "operator": ">=",
-          "threshold": 0.35,
-          "measured": null,
-          "passed": false,
-          "missingMeasured": true
-        },
-        {
           "thresholdKey": "meanPboMax",
           "measuredKey": "meanPbo",
           "operator": "<=",
           "threshold": 0.2,
-          "measured": null,
+          "measured": 1,
           "passed": false,
-          "missingMeasured": true
+          "missingMeasured": false
         },
         {
           "thresholdKey": "meanDsrProbabilityMin",
           "measuredKey": "meanDsrProbability",
           "operator": ">=",
           "threshold": 0.5,
-          "measured": null,
+          "measured": 0.0493492933392912,
           "passed": false,
-          "missingMeasured": true
+          "missingMeasured": false
         },
         {
           "thresholdKey": "fdrQMax",
           "measuredKey": "fdrQ",
           "operator": "<=",
           "threshold": 0.1,
-          "measured": null,
+          "measured": 1,
           "passed": false,
-          "missingMeasured": true
-        },
-        {
-          "thresholdKey": "quoteAgeP95MsMax",
-          "measuredKey": "quoteAgeP95Ms",
-          "operator": "<=",
-          "threshold": 2000,
-          "measured": null,
-          "passed": false,
-          "missingMeasured": true
-        },
-        {
-          "thresholdKey": "decisionToSubmitP95MsMax",
-          "measuredKey": "decisionToSubmitP95Ms",
-          "operator": "<=",
-          "threshold": 800,
-          "measured": null,
-          "passed": false,
-          "missingMeasured": true
-        },
-        {
-          "thresholdKey": "decisionToFirstFillP95MsMax",
-          "measuredKey": "decisionToFirstFillP95Ms",
-          "operator": "<=",
-          "threshold": 2500,
-          "measured": null,
-          "passed": false,
-          "missingMeasured": true
+          "missingMeasured": false
         },
         {
           "thresholdKey": "releaseGateStatusAgeHoursMax",
           "measuredKey": "releaseGateStatusAgeHours",
           "operator": "<=",
           "threshold": 24,
-          "measured": 74.01825718638888,
-          "passed": false,
+          "measured": 0.005569448888888889,
+          "passed": true,
           "missingMeasured": false
         }
       ]
@@ -170,85 +122,51 @@
   ],
   "thresholdResults": [
     {
-      "thresholdKey": "transferPassRatioRolling14dMin",
-      "measuredKey": "transferPassRatioRolling14d",
-      "operator": ">=",
-      "threshold": 0.25,
-      "measured": null,
-      "passed": false,
-      "missingMeasured": true
-    },
-    {
-      "thresholdKey": "winnerEligibleRatioRolling14dMin",
-      "measuredKey": "winnerEligibleRatioRolling14d",
-      "operator": ">=",
-      "threshold": 0.35,
-      "measured": null,
-      "passed": false,
-      "missingMeasured": true
-    },
-    {
       "thresholdKey": "meanPboMax",
       "measuredKey": "meanPbo",
       "operator": "<=",
       "threshold": 0.2,
-      "measured": null,
+      "measured": 1,
       "passed": false,
-      "missingMeasured": true
+      "missingMeasured": false
     },
     {
       "thresholdKey": "meanDsrProbabilityMin",
       "measuredKey": "meanDsrProbability",
       "operator": ">=",
       "threshold": 0.5,
-      "measured": null,
+      "measured": 0.0493492933392912,
       "passed": false,
-      "missingMeasured": true
+      "missingMeasured": false
     },
     {
       "thresholdKey": "fdrQMax",
       "measuredKey": "fdrQ",
       "operator": "<=",
       "threshold": 0.1,
-      "measured": null,
+      "measured": 1,
       "passed": false,
-      "missingMeasured": true
-    },
-    {
-      "thresholdKey": "quoteAgeP95MsMax",
-      "measuredKey": "quoteAgeP95Ms",
-      "operator": "<=",
-      "threshold": 2000,
-      "measured": null,
-      "passed": false,
-      "missingMeasured": true
-    },
-    {
-      "thresholdKey": "decisionToSubmitP95MsMax",
-      "measuredKey": "decisionToSubmitP95Ms",
-      "operator": "<=",
-      "threshold": 800,
-      "measured": null,
-      "passed": false,
-      "missingMeasured": true
-    },
-    {
-      "thresholdKey": "decisionToFirstFillP95MsMax",
-      "measuredKey": "decisionToFirstFillP95Ms",
-      "operator": "<=",
-      "threshold": 2500,
-      "measured": null,
-      "passed": false,
-      "missingMeasured": true
+      "missingMeasured": false
     },
     {
       "thresholdKey": "releaseGateStatusAgeHoursMax",
       "measuredKey": "releaseGateStatusAgeHours",
       "operator": "<=",
       "threshold": 24,
-      "measured": 74.01825718638888,
-      "passed": false,
+      "measured": 0.005569448888888889,
+      "passed": true,
       "missingMeasured": false
     }
-  ]
+  ],
+  "hardGateFailureTrace": [
+    {
+      "name": "gate_checkpoint_G3",
+      "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+    },
+    {
+      "name": "gate_checkpoint_G4",
+      "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+    }
+  ],
+  "v5Mode": true
 }

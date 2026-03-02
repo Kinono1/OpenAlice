@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/gate_checkpoint_index.schema.v1.json",
+  "title": "OpenAlice Gate Checkpoint Index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "outputDir",
+    "overallHardPass",
+    "hardFailGates",
+    "schemaValidationFailures",
+    "checkpoints"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "gate_checkpoint_index.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "outputDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "overallHardPass": {
+      "type": "boolean"
+    },
+    "hardFailGates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^G[0-9]+$"
+      }
+    },
+    "schemaValidationFailures": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gateId",
+          "path",
+          "status",
+          "hardGate",
+          "reasonCodes"
+        ],
+        "properties": {
+          "gateId": {
+            "type": "string",
+            "pattern": "^G[0-9]+$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "warn", "fail", "skipped"]
+          },
+          "hardGate": {
+            "type": "boolean"
+          },
+          "reasonCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "contractReportPathCanonical": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contractReportPathLegacy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contractReportPathUsed": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contractReportFallbackUsed": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["tool_error"]
+    },
+    "error": {
+      "type": "string"
+    }
+  }
+}

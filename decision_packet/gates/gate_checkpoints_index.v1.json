@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "gate_checkpoint_index.v1",
+  "generatedAt": "2026-03-02T10:41:02Z",
+  "outputDir": "data/runtime/gates",
+  "overallHardPass": false,
+  "hardFailGates": [
+    "G3",
+    "G4"
+  ],
+  "schemaValidationFailures": {},
+  "checkpoints": [
+    {
+      "gateId": "G0",
+      "path": "data/runtime/gates/G0.checkpoint.json",
+      "status": "pass",
+      "hardGate": true,
+      "reasonCodes": []
+    },
+    {
+      "gateId": "G1",
+      "path": "data/runtime/gates/G1.checkpoint.json",
+      "status": "pass",
+      "hardGate": true,
+      "reasonCodes": []
+    },
+    {
+      "gateId": "G2",
+      "path": "data/runtime/gates/G2.checkpoint.json",
+      "status": "pass",
+      "hardGate": true,
+      "reasonCodes": []
+    },
+    {
+      "gateId": "G3",
+      "path": "data/runtime/gates/G3.checkpoint.json",
+      "status": "fail",
+      "hardGate": true,
+      "reasonCodes": [
+        "HARD_EXPERIMENT_NO_GO",
+        "HARD_MEAN_PBO_THRESHOLD_FAIL",
+        "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
+        "HARD_FDR_THRESHOLD_FAIL",
+        "HARD_RELEASE_GATE_BLOCKED"
+      ]
+    },
+    {
+      "gateId": "G4",
+      "path": "data/runtime/gates/G4.checkpoint.json",
+      "status": "fail",
+      "hardGate": true,
+      "reasonCodes": [
+        "HARD_UPSTREAM_GATE_FAILED"
+      ]
+    }
+  ],
+  "contractReportPathCanonical": "data/runtime/research_contract_verify_report.json",
+  "contractReportPathLegacy": "data/runtime/research_contract_verify_outputs.json",
+  "contractReportPathUsed": "data/runtime/research_contract_verify_report.json",
+  "contractReportFallbackUsed": false
+}
