@@ -7,6 +7,10 @@
 import type { ICryptoTradingEngine } from './interfaces';
 import type { Config } from '../../core/config';
 import { CcxtTradingEngine } from './providers/ccxt/index';
+import {
+  assertSafeTradingMode,
+  assertTradingInterfaceAuthToken,
+} from './trading-guard.js';
 
 export interface CryptoTradingEngineResult {
   engine: ICryptoTradingEngine;

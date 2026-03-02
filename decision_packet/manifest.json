@@ -1,0 +1,125 @@
+{
+  "version": "v1",
+  "generatedAt": "2026-02-28T14:02:25Z",
+  "templatePath": "docs/research/templates/go_no_go_evidence_pack.template.json",
+  "outputDir": "decision_packet",
+  "missingCount": 8,
+  "missing": [
+    {
+      "key": "protocolSpec",
+      "sourcePath": "decision_packet/protocol_spec.json"
+    },
+    {
+      "key": "protocolHashFile",
+      "sourcePath": "decision_packet/protocol_hash.txt"
+    },
+    {
+      "key": "comparabilityReport",
+      "sourcePath": "decision_packet/comparability_report.json"
+    },
+    {
+      "key": "championRegistrySnapshot",
+      "sourcePath": "decision_packet/champion_registry_snapshot.json"
+    },
+    {
+      "key": "offlineMetrics",
+      "sourcePath": "decision_packet/offline_metrics.json"
+    },
+    {
+      "key": "liveShadowMetrics14d",
+      "sourcePath": "decision_packet/live_shadow_metrics_14d.json"
+    },
+    {
+      "key": "stateMachineLog",
+      "sourcePath": "decision_packet/state_machine_log.jsonl"
+    },
+    {
+      "key": "decisionMarkdown",
+      "sourcePath": "decision_packet/decision.md"
+    }
+  ],
+  "artifacts": [
+    {
+      "key": "protocolSpec",
+      "sourcePath": "decision_packet/protocol_spec.json",
+      "destinationPath": "decision_packet/protocol_spec.json",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "protocolHashFile",
+      "sourcePath": "decision_packet/protocol_hash.txt",
+      "destinationPath": "decision_packet/protocol_hash.txt",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "comparabilityReport",
+      "sourcePath": "decision_packet/comparability_report.json",
+      "destinationPath": "decision_packet/comparability_report.json",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "championRegistrySnapshot",
+      "sourcePath": "decision_packet/champion_registry_snapshot.json",
+      "destinationPath": "decision_packet/champion_registry_snapshot.json",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "releaseGateStatus",
+      "sourcePath": "data/runtime/release_gate_status.json",
+      "destinationPath": "decision_packet/release_gate_status.json",
+      "copied": true,
+      "exists": true,
+      "sha256": "7831d61508f6b48dc1886480777d4c09904dda523548f7254e0e7842adb381ce",
+      "sizeBytes": 569
+    },
+    {
+      "key": "offlineMetrics",
+      "sourcePath": "decision_packet/offline_metrics.json",
+      "destinationPath": "decision_packet/offline_metrics.json",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "liveShadowMetrics14d",
+      "sourcePath": "decision_packet/live_shadow_metrics_14d.json",
+      "destinationPath": "decision_packet/live_shadow_metrics_14d.json",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "stateMachineLog",
+      "sourcePath": "decision_packet/state_machine_log.jsonl",
+      "destinationPath": "decision_packet/state_machine_log.jsonl",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    },
+    {
+      "key": "decisionMarkdown",
+      "sourcePath": "decision_packet/decision.md",
+      "destinationPath": "decision_packet/decision.md",
+      "copied": false,
+      "exists": false,
+      "sha256": null,
+      "sizeBytes": null
+    }
+  ],
+  "evidencePackPath": "decision_packet/evidence_pack.json"
+}

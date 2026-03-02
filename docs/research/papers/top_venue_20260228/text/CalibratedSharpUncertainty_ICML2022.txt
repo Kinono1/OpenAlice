@@ -1,0 +1,907 @@
+  Learning to Solve PDE-constrained Inverse Problems with Graph Networks
+
+
+                                Qingqing Zhao 1 David B. Lindell 1 Gordon Wetzstein 1
+
+                                                                  a) Pipeline
+                        Abstract                                                            Learned Prior              Learned         Predicted
+                                                                                                                       Forward         dynamics
+     Learned graph neural networks (GNNs) have re-                                                                      Model
+                                                                                                                                                     y
+     cently been established as fast and accurate alter-                                                    𝒖𝒙 (𝒙𝒊 )
+                                                                                                                        GNN
+     natives for principled solvers in simulating the dy-                                                                          x
+                                                                                                                                                e
+                                                                                                                                               tim
+
+     namics of physical systems. In many application                                                                                                 y
+                                                                                                            𝒖𝒚 (𝒙𝒊 )
+     domains across science and engineering, however,
+                                                                                                                                   x
+                                                                                                                                                   e
+                                                                                                                                               tim
+     we are not only interested in a forward simulation
+     but also in solving inverse problems with con-               b) Inverse Problem Results
+
+     straints defined by a partial differential equation                             Observations       Predicted dynamics       GT dynamics
+
+
+
+
+                                                                     Wave Equation
+     (PDE). Here we explore GNNs to solve such PDE-
+     constrained inverse problems. We demonstrate
+     that GNNs combined with autodecoder-style pri-
+     ors are well-suited for these tasks, achieving more                             tim
+                                                                                        e
+     accurate estimates of initial conditions or physical
+     parameters than other learned approaches when                 Navier Stokes
+
+                                                                    Equations
+     applied to the wave equation or Navier–Stokes
+     equations. We also demonstrate computational
+     speedups of up to 90× using GNNs compared to
+     principled solvers.
+                                                                Figure 1. (a) Pipeline for our approach: we first pre-train the prior
+                                                                and a Graph Neural Network (GNN) for a given class of problems
+                                                                in a supervised manner using a dataset generated from classical
+1. Introduction                                                 FEM solvers. Here, the GNN is a fully-differentiable forward
+                                                                simulator and the prior is a generative model learned over the
+Understanding and modeling the dynamics of physical sys-
+                                                                space of physics parameters of interest. At test time, the generative
+tems is crucial across science and engineering. Among           model maps the latent code to the estimated physics parameter that
+the most popular approaches to solving partial differential     is passed to the GNN to obtained the predicted dynamics. The
+equations (PDEs) are mesh-based finite element simulations,     latent code is then optimized to minimize the difference between
+which are widely used in electromagnetism (Pardo et al.,        predicted and observed dynamics on the graph. (b) We demon-
+2007), aerodynamics (Economon et al., 2016; Ramamurti           strate the proposed method for solving inverse problems governed
+& Sandberg, 2001), weather prediction (Bauer et al., 2015),     by the wave equation or Navier–Stokes equations. From sparse
+and geophysics (Schwarzbach et al., 2011). Learning-based       observations, the method recovers the complete evolution of the
+methods for mesh-based simulations have recently made           dynamics.
+much progress (Pfaff et al., 2021), offering faster runtimes
+than principled solvers, better adaptivity to the simulation    graph networks (Pfaff et al., 2021). While this approach
+domain compared to grid-based convolutional neural net-         has been successful in simulating the dynamics of physical
+work (CNNs) (Thürey et al., 2020; Wandel et al., 2021), and    systems, it remains unclear how to leverage these network
+generalization across simulations. State-of-the-art learning-   architectures to efficiently solve PDE-constrained inverse
+based mesh simulators operate on adaptive meshes using          problems of the form in Eq. (1).
+    1
+      Stanford University.   Correspondence to: Qingqing                             minimize L (H (ut=1...T ) , yt=1...T ) ,
+Zhao <cyanzhao@stanford.edu>,         David B. Lindell                                  {u0 ,θ}
+                                                                                                                                                     (1)
+<lindell@stanford.edu>,      Gordon     Wetzstein  <gor-
+don.wetzstein@stanford.edu>.                                                                 s.t. ut+1 = Mθ (ut ) ,
+
+Proceedings of the 39 th International Conference on Machine
+Learning, Baltimore, Maryland, USA, PMLR 162, 2022. Copy-       where ut ∈ CN is the state of the simulation modeled at
+right 2022 by the author(s).                                    N nodes of the mesh at time t = 1 . . . T ; the operator H :
+CN → CM models the measurement process of the real or              et al., 2020; Belbute-Peres et al., 2020; Bar-Sinai et al.,
+complex-valued state using a set of M sensors, giving rise to      2019; Kochkov et al., 2021) or adapt similar optimization
+the observations yt ∈ CM ; Mθ : CN → CN is an operator             schemes or constraints (Karniadakis et al., 2021; Wang &
+representing the PDE constraints that govern the temporal          Perdikaris, 2021; Sirignano & Spiliopoulos, 2018; Raissi
+dynamics of the system with θ ∈ RP parameterizing M                et al., 2019; Wang et al., 2021; Wandel et al., 2021).
+at time t. In the context of inverse problems, we seek the
+                                                                   Many of the aforementioned methods operate on regular
+initial state u0 or the parameters θ given a set of observations
+                                                                   grids, for example using convolutional neural networks
+yt=1...T . These problem are often ill-posed and considerably
+                                                                   (CNNs). A major disadvantage of this approach is its
+more difficult than learning the forward simulation.
+                                                                   inability to allocate resolution adaptively throughout the
+Here we explore efficient approaches that leverage recently        simulation domain. Learning-based finite element meth-
+proposed graph networks to solve PDE-constrained inverse           ods (FEMs) (Xue et al., 2020) and graph neural networks
+problems. For this purpose, we consider learning-based             (GNNs) (Kipf & Welling, 2017; Hamilton et al., 2017;
+approaches to the simulation, where M is modeled by a              Veličković et al., 2018; Wu et al., 2020; Scarselli et al.,
+graph network GNN : CN → CN . Moreover, we formulate               2008) have been shown to be a powerful method for sim-
+priors for both initial state u0 = Gu (zu ) and the parameters     ulation on irregular grids with adaptive resolution. GNNs
+θ = Gθ (zθ ) that constrain these quantities to be fully           process data structured into a graph of nodes and edges, and
+defined in a lower-dimensional subspace by the latent codes        have been demonstrated for modeling complex physical dy-
+zu ∈ RLu , Lu < N , and zθ ∈ RLθ , Lθ < P . The fact               namics with particle- or mesh-based simulation (Lino et al.,
+that the graph network GNN, and finite element methods in          2021; Seo et al., 2020; Li et al., 2020b;a). Our approach
+general, operate on irregular meshes motivates us to explore       is inspired by recent GNN architectures for modeling time-
+emerging coordinate network architectures (Park et al.,            resolved dynamics (Pfaff et al., 2021; Sanchez-Gonzalez
+2019; Tancik et al., 2020; Sitzmann et al., 2020) as suitable      et al., 2020) that generalize to unseen initial conditions and
+priors. Coordinate networks operate on the continuous              solution domains. Whereas these approaches focus on learn-
+simulation domain and map coordinates to a quantity of             ing the forward simulation given a set of initial or boundary
+interest, such as the initial condition or the parameters of a     conditions, ours aims at solving ill-posed PDE-constrained
+specific problem.                                                  inverse problems that require a learned simulation model as
+                                                                   part of the framework.
+To our knowledge, this is the first approach to com-
+                                                                   Machine learning techniques have recently also been
+bining continuous coordinate networks with graph networks
+                                                                   adapted for solving ill-posed physics-based inverse prob-
+for learning to solve PDE-constrained inverse problems.
+                                                                   lems. These problems often involve recovering solutions
+The summary of the proposed approach is shown in
+                                                                   to PDEs (Raissi et al., 2020) or physical quantities, such as
+Figure 1. We demonstrate that this architecture affords
+                                                                   the density, viscosity, or other material parameters (Mosser
+faster runtimes and better quality for fewer observations
+                                                                   et al., 2020; He & Wang, 2021; Fan et al., 2020), from
+than the principled solvers we tested, while offering the
+                                                                   a sparse set of measurements. Other methods can super-
+same benefits of improved accuracy over grid-based CNNs
+                                                                   resolve PDE solutions from estimated solutions at coarse
+to inverse problems that graph networks offer for forward
+                                                                   resolution (Esmaeilzadeh et al., 2020) or recover initial con-
+simulations (Figure 1).
+                                                                   ditions from PDE solutions observed at coarse resolution
+                                                                   later in time (Li et al., 2020b; Frerix et al., 2021). Yet an-
+2. Related Work                                                    other class of techniques are tailored to the inverse design
+                                                                   problem, which aims to optimize material properties such
+Machine learning methods have emerged as a powerful
+                                                                   that the PDE solution satisfies certain useful properties, e.g.,
+tool for modeling the dynamics of physical systems. Com-
+                                                                   for the design of nanophotonic elements (Molesky et al.,
+pared to conventional methods (see e.g., Quarteroni & Valli
+                                                                   2018). Our approach is most similar to other methods that
+(2008)), physics-based machine learning techniques may
+                                                                   infer material properties or initial conditions from sparse
+offer improved computational performance, ease of imple-
+                                                                   measurements of the PDE solution over time. Similar to
+mentation, and learning priors from data to solve ill-posed
+                                                                   some of these methods (Mosser et al., 2020; Jiang & Fan,
+physics-based inverse problems. Previous techniques span
+                                                                   2019), we use a generative model to learn a prior over the
+a spectrum of being entirely data-driven (i.e., modeling dy-
+                                                                   solution space of material parameters or initial conditions;
+namics with a feedforward pass through a network) (Bhat-
+                                                                   however, our framework is the first to learn to map a latent
+nagar et al., 2019; Li et al., 2021; Tompson et al., 2017; Lu
+                                                                   code to material parameters or initial conditions compat-
+et al., 2021; Lino et al., 2021; Pfaff et al., 2021; Sanchez-
+                                                                   ible with a GNN forward model. This allows our model
+Gonzalez et al., 2020; Seo et al., 2020) to hybrid approaches
+                                                                   to solve physics-based inverse problems on irregular grids
+that either directly incorporate conventional solvers (Um
+                                                                   with adaptive resolution, leading to improved computational
+                                                                                                                                          3
+  4                                                            SGD                      argmin! ' ℒ (Observations, Predictions)
+                   Initial Condition (wavefield)     1
+                                                                                                  "
+                                                                                   Observation Objective
+        𝑧!"!#
+          𝑥!                                                  2
+                                                                     Sparse
+                                                                   Observations
+                  Simulation Parameters (velocity)   1
+
+                                                                     Predictions                           Iterative rollout
+          𝑧$
+          𝑥!                                                           GNN                                     GNN
+
+
+      Learned Priors                                                                                                           Forward Modeling
+
+Figure 2. Pipeline for solving inverse problems (illustrated for the 2D wave equation). The forward simulator GNN (the blue boxes) and
+the prior networks (green boxes) are pre-trained with a dataset of wave trajectories generated using classical FEM solvers. We aim to
+recover the initial wavefield or the velocity distribution. At test time, the generative model first maps a latent code to the estimated physics
+parameters (step 1) that is passed to the GNN to obtain the predicted dynamics (step 2). The latent code is optimized to minimize the
+difference between the predicted and the observed dynamics on the graph (steps 3 and 4).
+
+
+efficiency and accuracy.                                                  model that outputs solutions to partial differential equations
+                                                                          given the initial states and boundary conditions.
+3. Method                                                                 The state of the system at time t is described as ut = (V, E)
+                                                                          with nodes V and mesh edges E that define the mesh. We
+We approach the task of solving physics-constrained in-
+                                                                          adopt the approach of (Pfaff et al., 2021) to model the tem-
+verse problems by first pre-training a GNN as a fast forward
+                                                                          poral dynamics of the system, i.e., Mθ , using a GNN with
+model that outputs solutions to partial differential equa-
+                                                                          Encoder-Processor-Decoder architecture followed by an in-
+tions given the initial states and boundary conditions. The
+                                                                          tegrator.
+physics-constrained inverse problems we aim to solve in-
+volve recovering initial conditions or other parameters that              We encode the relative displacement vector (i.e., the vec-
+govern the evolution of the PDE. Since recovering these                   tor that points from one node to another) and its norm as
+quantities is an ill-posed problem, we also learn a prior over            edge features, ei . The node features comprise dynamics
+the space of solutions using a deep generative model. Here,               quantities that describe the state of the PDE and a one-hot
+a network maps latent codes to a space of material parame-                vector, vi , indicating the type of the nodes (domain bound-
+ters or initial conditions on the graph that comprise plausible           aries, inlet, outlet, etc.). In the forward pass, the encoding
+solutions to the inverse problems. At test time, the GNN is               step uses an edge encoder multilayer perceptron (MLP) and
+a fully-differentiable forward simulator, and the latent code             node encoder MLP to encode edge features and node fea-
+of the generative model is optimized to minimize the differ-              tures into latent vectors. The processing step consists of
+ence between the predicted and the observed dynamics on                   several message passing layers with residual connections.
+the graph. A detailed pipeline of our approach for solving                This step takes as input the set of node embeddings vi , and
+inverse problem for the wave equation (Section 4) is shown                edge embeddings eij , and outputs an updated embedding vi
+in Figure 2.                                                              and eij . The equations that define the layers of the message
+                                                                          passing steps are given by the following.
+3.1. GNN-based Simulator
+                                                                                                e′ij = MLPe (eij , vi , vj ),                     (2)
+GNNs have previously been found to perform well in sim-                                                           X
+ulating PDE models (Pfaff et al., 2021; Sanchez-Gonzalez                                         vi′ = MLPv (vi ,       e′ij ).                   (3)
+et al., 2020). The excellent performance can be attributed to                                                         j
+
+their adaptive resolution and ability to generalize by mod-
+eling complicated local interactions. Here, we leverage the               In the final decoding step, an MLP is used to transform the
+state-of-art GNN (Pfaff et al., 2021) to learn a fast forward             latent node features vi to the output pi , which we integrate
+                                                                                         Relative Simulation Error
+at each time step to update the dynamic quantities ut+1 =
+ut + pt .                                                                           CNN 25x25
+                                                                                    CNN 64x64
+                                                                          0.2
+                                                                                    GNN
+3.2. Learning Inverse Problems and Priors
+The inverse problems we wish to solve are of the form out-
+                                                                          0.1
+lined in Equation 1 with the dynamics being learned by the
+GNN described above. Solving for the initial condition or
+parameters may be ill-posed, so we restrict the solutions to
+lie in a lower-dimensional subspace of the autodecoder-type                0
+                                                                                0   10          20       30          40   50
+priors Gu or Gθ . When working on regular grids, these pri-                                      Timestep
+ors could easily be implemented as CNN-based generative
+model, but it is not clear how to model such priors for ir-     Figure 3. Accumulated relative error of the U-Net (CNN) (on both
+regular meshes. To this end, we leverage recently proposed      coarse and fine grids) and GNN-based forward simulators for
+coordinate networks with ReLU activation functions, which       varying number of time steps.
+use a conditioning-by-concatenation approach to generalize
+across signals:
+                                                            and accurate recovery of the unknown parameters. The
+                                              x                 U-Net (CNN) solver baseline is comparable to existing ap-
+ Gu/θ = Wn (ϕn−1 ◦ ϕn−2 ◦ . . . ◦ ϕ0 )                + bn      proaches in the literature for forward simulation (Thürey
+                                            zu/θ
+ϕi (xi ) = ReLU (Wi xi + bi ) ,                                 et al., 2020; Wandel et al., 2021; Holl et al., 2019; Bhatna-
+                                                                gar et al., 2019; Tompson et al., 2017); since we focus on
+                                                         (4)
+                                                                solving physics-constrained inverse problems, we extend
+where ϕi : RMi 7→ RNi is the ith layer of the MLP con-          this approach accordingly and incorporate our learned prior.
+sisting of the affine transform defined by the weight matrix    We also evaluate the effect of the learned prior. We find that
+Wi ∈ RNi ×Mi and the biases bi ∈ RNi . The input to             our approach gives a favorable tradeoff between accuracy
+the first layer concatenates the coordinate x with a scene-     and speed, enabling accurate recovery of the unknown pa-
+specific latent code vector zu/θ . This coordinate network,     rameters while being up to nearly two orders of magnitude
+implemented by an MLP, maps continuous coordinates on           faster than the classical FEM solver.
+the simulation domain to a quantity of interest. Thus, it can
+be evaluated on a regular grid or, more importantly, on the
+irregular locations of the graph nodes our GNN operates on.     4.1. Two-Dimensional Scalar Wave Equation
+We learn Gu/θ in a pre-processing step, using training data     The wave equation, Eq. (6), is a second-order partial differ-
+relevant for a specific physical problem. We optimize the       ential equation that describes the dynamics of acoustic or
+network parameter, denoted by ψG , and the latent code, z,      electromagnetic wave propagation.
+with respect to the individual training sample, indexed by i,
+to maximize the joint log posterior of all training samples:                        ∂2u       ∂2u
+                                                                                       2
+                                                                                         − c2 2 = 0
+                                                                                  ∂t        ∂x
+            N      K
+           X      X                           1                                       ′   ∂u                                   (6)
+                      L G z i , xj , uij + 2 ∥z i ∥22  (5)
+                                        
+   arg min                                                                         u0 =      |t=0 = 0
+     ψG ,z i=1                               σ                                             ∂t
+                  j=1
+                                                                                                u0 = uinit
+At test time, the pre-trained GNN modeling the dynamics
+                                                                Here, u is the field amplitude and c is the velocity parameter
+and the pre-trained coordinate networks as the prior are
+                                                                that spatially characterizes the speed of the wave propaga-
+fixed, and the latent code vectors zu/θ are optimized for a
+                                                                tion inside the medium. The wave equation can be solved
+given set of sparse observations using a standard Adam
+                                                                given initial conditions, u′0 and uinit , and the boundary con-
+solver (Kingma & Ba, 2014).
+                                                                ditions. In our experiments, the domain is chosen to be
+                                                                Ω ∈ [0, 1]2 with an obstacle at the center. The Dirichlet
+                                                                boundary conditions are used at all boundaries, u|∂Ω = 0.
+4. Experiments                                                  The initial field velocity is set to be 0, and the initial field
+                                                                distribution is denoted by uinit .
+We demonstrate our approach on the wave equation and
+the Navier–Stokes equations for modeling acoustics or fluid     The PDE-constrained inverse problem we are aiming to
+dynamics. Our method leverages a learned simulator us-          solve is to recover unknown parameters uinit or c from sparse
+ing a Graph Neural Network and a learned prior for fast         measurements of u in space and time. Formally, it can be
+Figure 4. Qualitative results for the initial state recovery problem with the 2D wave equation. Here “C.” refers to the coarse meshes
+(25 × 25 nodes for U-Net (CNN) or ≈ 600 nodes for GNN), and “F.” refers to the fine meshes (64 × 64 nodes for U-Net (CNN) or
+≈ 2800 nodes for the FEM solver). Without the learned prior, G, all methods fail due to the ill-posed nature of the problem. Using the
+prior, we find the GNN yields a result that is closer to the ground truth compared to both U-Net (CNN) models. While the FEM solver on
+the fine grid outperforms the GNN, it is also ≈8× slower. Thus the GNN with the prior gives a favorable tradeoff between speed and
+accuracy.
+
+
+described as                                                            meshes. We evaluate on 40 held-out trajectories across 3
+                     X                                                  different meshes. We find that the FEM solver requires a
+      minimize                ∥H(ugt          pred   2
+                                  t (x)) − H(ut (x))∥2
+         {z}                                                            timestep that is 5× smaller than the GNN solver to achieve
+                    t∈Titer
+                                                                  (7)   stable results. At this setting, the FEM solver simulated on a
+             s.t.         ut+1 = ut + Mc (ut , u′t )                    fine irregular mesh is roughly 8× slower than the GNN; run-
+                          |         {z            }
+                       u0 (x)=Guinit (z,x)   or   c(x)=Gc (z,x)         ning the FEM solver on the same grid as the GNN is 2.5×
+                                                                        slower than the GNN with accuracy roughly 80× worse in
+Here, we minimize the mean squared error (MSE) between                  terms of MSE.
+the predicted field (upred
+                         t ) and the ground truth observed              To compare the accuracy of different learned forward simu-
+field (ugt
+        t  ), summed    over  different observation time steps,
+                                                                        lators, we plot the accumulated relative error, unrolled for
+t. We address two different tasks, (1) recovering the initial
+                                                                        50 time steps and averaged over 96 trajectories in Fig. 3.
+condition, uinit , and (2) full-waveform inversion (Virieux &
+                                                                        The GNN-based simulator provides a robust solution. We
+Operto, 2009) in which we recover the velocity parameter,
+                                                                        evaluate two different cases for the U-Net (CNN). In one
+c. These optimized quantities are parameterized by the
+                                                                        case, we restrict the number of grid nodes to be roughly the
+prior network Guinit /c . Finally, the measurement sampling
+                                                                        same as the GNN (25 × 25). Since the small number of
+operator is given by H, and Mc is the forward model that
+                                                                        nodes must be regularly and coarsely spaced, this provides
+solves the wave equation, Eq. (6), to produce the field at the
+                                                                        poor performance. Second, we set the grid resolution of
+next time step.
+                                                                        the U-Net (CNN) such that the spacing between grid points
+                                                                        matches the minimum spacing in the GNN mesh. This re-
+Learned Forward Simulation In our approach, Mc is
+                                                                        quires 7× more nodes than the GNN (64 × 64), but the
+given by a GNN, which learns the wave equation forward
+                                                                        performance is still relatively worse than the GNN.
+model on irregular meshes.
+As a baseline, we train a U-Net (CNN) forward model based
+on (Thürey et al., 2020). Similar to (Pfaff et al., 2021),             Initial State Recovery For the initial state recover task,
+we train the GNN and U-Net (CNN) by directly supervis-                  we solve Eq. (7) where uinit (x) = Guinit (z, x) is the unknown
+ing on a dataset of “ground truth” wave equation solutions              parameter and initial velocity is given to be 0. For both
+generated with an open source FEM solver (FEniCS (Logg                  this problem and full-waveform inversion, the prior is pre-
+et al., 2012)). The FEM solver uses a fine irregular mesh               trained on a dataset of 10,000 values of uinit (or c), generated
+with many more nodes (≈2800) than the GNN (≈600) on                     by sampling a Gaussian random field and tapering the so-
+average across the dataset. The training dataset is composed            lution to zero near the boundaries to satisfy the Dirichlet
+of 1100 simulated time-series trajectories using 37 separate            boundary condition.
+             Forward Model         # nodes      Initial State Recovery                  FWI                 Runtimes
+                                                MSE       MSE (with G)         MSE      MSE (with G)          (s)
+             FEM (Irr. F.)           2827      1.55e-3        7.82e-4        3.91e-1        1.19e-1          1.25e1
+             FEM (Irr. C.)            611      1.72e-1        4.18e-3        3.88e-1        1.64e-1          6.03e0
+             U-Net (Reg. C.)          625      1.32e-2        3.52e-3        4.19e-1        1.54e-1          1.71e-1
+             U-Net (Reg. F.)         4096      3.16e-2        1.49e-3        5.14e-1        1.08-1           1.91e-1
+             GNN (Irr. C.)            611      1.05e-2        8.87e-4        3.68e-1        1.05e-1          1.44e0
+
+Table 1. Quantitative results for the initial state recovery and full-waveform inversion (FWI) problems for the 2D wave equation. All
+metrics are averaged over 40 test samples and evaluated on coarse irregular grids. Observation setup: we use measurements every 2
+GNN time steps from 2 to 30 GNN time steps with 20 sensors randomly sampled from the grid. Runtime measures the time taken per
+optimization iteration. We observe that the GNN outperforms the U-Net (CNN) with a similar number of nodes and provides comparable
+results with the U-Net (CNN) using 7× more nodes. The classical FEM solver using a fine irregular mesh gives the lowest MSE, however
+it is at least 8× slower than the learned simulator approaches.
+
+
+We solve the inverse problems by optimizing the value of             2021) for seismic inversion. As we are primarily interested
+z using the ADAM optimizer (Kingma & Ba, 2014) for                   in a comparison between learned methods on regular and
+all experiments until convergence, or a maximum of 2000              irregular meshes, we adopt the U-Net (CNN) baseline as a
+iterations. In the case where we optimize without the prior,         representative method that can be unrolled per timestep and
+we directly optimize the unknown parameters, uinit or c.             integrated into our framework. Since the prior is agnostic
+                                                                     to the particular grid setup, we use the same prior across all
+Table (1) reports a quantitative comparison of different
+                                                                     models.
+solvers with and without the prior, and a qualitative com-
+parison is shown in Fig. 4. Here we unroll the GNN for               For the FWI problem, we minimize Eq. (7) where c(x) =
+30 GNN time steps and take measurements every 2 GNN                  Gc (z, x) is the unknown parameter. FWI is a highly non-
+steps from 2 to 30 time steps. At every measurement, we              linear inverse problem, and the final optimization result
+have sensors placed at 20 randomly sampled nodes from the            depends heavily on the initial state and may easily fall into
+coarse irregular mesh. For baseline comparisons with other           local minima. In order to improve the optimization, differ-
+form of meshes (regular for U-Net (CNN) and fine irregular           ent forms of progressive training schemes have been used.
+mesh for FEM solver), we use nearest neighbor sampling               For example, one can progressively fit the data in time by
+to find the corresponding sensor location. From the table            introducing a damping function as in (Chen et al., 2015).
+we observe that with or without the prior, our approach pro-         In frequency-domain full-waveform inversion, one can first
+vides a favorable trade-off between the accuracy and the             optimize low-frequencies to avoid local minima (Aghamiry
+speed. While the U-Net (CNN) is the fastest forward simu-            et al., 2019; Brenders & Pratt, 2007). In our approach, we
+lator, the GNN solver outperforms the U-Net (CNN) solver             adopt a progressive training scheme in time where we grad-
+in terms of accuracy at resolution 25 × 25 and performs              ually increase the total number of observed time steps as
+slightly better than the U-Net (CNN) at resolution 64 × 64.          the optimization proceeds. For the FWI task, we unroll the
+We attribute this to the stronger performance of the GNN             GNN for 30 GNN time steps and take measurements every
+forward model, as shown in Fig. 3. Given that the FEM                2 GNN steps. At the beginning of the optimization, we only
+solver operating on the finest mesh gives the most accurate          have observations at time step T = {2∆t}, and we include
+forward model, it gives the best MSE in the inverse problem.         one extra time step’s measurement every 120 optimization
+However, it is at least 8× slower than the learned simulator         iterations until T = {2∆t, 4∆t, · · · , 30∆t}.
+approaches. For all cases, using a learned prior significantly
+                                                                    Table (1) reports a quantitative comparison of the perfor-
+improves the final accuracy. By optimizing the latent code,
+                                                                    mance of different solvers used with or without the prior.
+we constrain the solution space to the manifold learned by
+                                                                    We observe similar trends as in the initial state recovery
+Guinit /c and avoid bad local optima that lie far outside the
+                                                                    task, where using a learned prior significantly improves the
+dataset distribution.
+                                                                    final accuracy. For this task, the proposed GNN solver gives
+                                                                    the lowest MSE compared to the baselines. Figure 5 shows
+Full Waveform Inversion Full-waveform inversion                     qualitative comparisons between the different learned sim-
+(FWI) is a common problem in seismology (Virieux et al.,            ulators and demonstrates that the proposed approach with
+2017) and involves recovering the density of structures in          the GNN forward model leads to a better recovery of the
+the propagation medium. We are motivated by recent work             density distribution.
+that uses variants of a CNN as a prior (Mosser et al., 2020;
+Wu & McMechan, 2019) or forward operator (Yang et al.,
+                                                                       where H is the measurement sampling operator, and M is
+                                                                       the forward model that solves the incompressible Navier–
+                                                                       Stokes Equations.
+                                                                       Our assimilation trajectories are random flow clips of length
+                                                                       T = 10 time intervals from the test dataset. We take mea-
+                                                                       surements every 2 time intervals for a total of 5 measure-
+                                                                       ment snapshots where each time intervals are equivalent to
+                                                                       1 learned solver timesteps, or 12.5 FEM solver timesteps.
+                                                                       At every measurements, we have 50 sensors measuring the
+                                                                       velocity field, [ux , uy ], as shown in Fig. 6.
+
+Figure 5. Qualitative results for full-waveform inversion experi-
+ments. Here “C.” refers to the coarse meshes and “F.” refers to the      Forward Model          # nodes      MSE        Runtime (s)
+fine meshes, consistent with the notation used in Fig. 4. We observe      FEM (Irr. C.)          2732       3.92e-4        3.87e1
+that the GNN outperforms the U-Net (CNN) both quantitatively             U-Net (Reg. C.)         2916       5.78e-3        1.11e-1
+and qualitatively.                                                       U-Net (Reg. F.)         16384      2.55e-3        1.65e-1
+                                                                          GNN (Irr. C.)          2732       9.73e-4        1.10e0
+4.2. Two-Dimensional Incompressible Navier–Stokes
+     Equation                                                          Table 2. Errors of different forward models for 50-steps rollout
+                                                                       averaged over 50 test trajectories. The proposed method with
+The two-dimensional incompressible Navier–Stokes Equa-                 the GNN provides better accuracy than the U-Net (CNN) at both
+tions are non-linear partial differential equations modeling           coarse and fine resolution and is 35× faster than the classical FEM
+the dynamics of fluids. Taking a fluid density of ρ = 1.0,             solver.
+the fluid is characterized by
+                                                                       Learned Forward Simulation As described in Sec. 3,
+                ∂u                                                     our method uses a GNN as a fast and accurate learned simu-
+                   + u∇u − ν∇2 u + ∇p = 0                       (8)
+                ∂t                                                     lator operating on irregular meshes. Similar to the 2D scalar
+                                 ∇·u=0                          (9)    wave equation experiment, we train as baselines a U-Net
+                                                                       (CNN) for an input resolution of 54 × 54, which matches
+Here, ν = 0.001 is the kinematic viscosity, u represents the
+                                                                       the average number of nodes of the irregular grid used by
+velocity of the fluid in the x and y directions, and p rep-
+                                                                       the GNN (≈2732 nodes). We also train a U-Net (CNN)
+resents the pressure. These incompressible Navier–Stokes
+                                                                       at 128 × 128 resolution, which contains roughly 6× more
+equations can be solved given the initial condition u and
+                                                                       nodes compared to the coarse irregular grid (Irr. C.) used by
+boundary conditions for the given domain. For our exper-
+                                                                       the GNN. All learned simulators are trained in a supervised
+iments, we use an irregular domain Ω ∈ [0, 1.6] × [0, 0.4]
+                                                                       manner on a dataset obtained using an open source FEM
+with a cylinder of random radius at a random position near
+                                                                       solver (Logg et al., 2012). Our dataset consists of 850
+the flow inlet. No-slip boundary conditions are defined at
+                                                                       training trajectories on 55 meshes, and 50 test trajectories
+the lower and upper edge, as well as at the boundary of
+                                                                       on 5 meshes. The unrolled MSE is shown in Table (2). We
+the cylinder as shown in Eq. (10). On the left edge, a con-
+                                                                       observe a similar trend as in the wave equation example: the
+stant inflow profile is prescribed, Eq. (11); on the right edge,
+                                                                       GNN gives the best accuracy among learned solvers and is
+do-nothing boundary condition is used, Eq. (12).
+                                                                       approximately 35× faster than the FEM solver.
+              u(x) = [0, 0]    ∀x ∈ ∂Ωup, bottom, cylinder    (10)
+              u(x) = [1, 0]    ∀x ∈ ∂Ωin                      (11)     Fluid Data Assimilation We train our prior Gu on
+                                                                       34000 fluid snapshots from the training trajectories, where
+          ν∂η u − pη = 0 ∀x ∈ ∂Ωout                           (12)
+                                                                       Gu (z, x) = u(x) = [ux (x), uy (x)]. Similarly to the wave
+                                                                       equation experiment, we solve the optimization problem
+We carry out flow assimilation on the velocity field u given           given in Eq. (13) using the ADAM optimizer (Kingma &
+sparse velocity measurements in space and time. Formally,              Ba, 2014). Different from the wave equation experiments
+we have                                                                we add a fine-tuning stage to the optimization where we up-
+                X                                                      date the parameters of the generative prior Gu , which helps
+   minimize         ∥H(ugt             pred
+                         t (x)) − H(ut (x))∥1                          to improve the generalization performance in this problem.
+        {z}
+                 t∈Titer
+                                                              (13)     Similar techniques have been widely used in GAN inversion
+          s.t. ut+1 = ut + M (ut )                                     problems (Daras et al., 2020; Roich et al., 2021). Figure 7
+                u0 (x) = Guinit (z, x).                                shows the averaged observation objective with optimiza-
+                          y
+   𝑢!
+                    tim
+                       es
+            x            teps
+
+                          y
+   𝑢"
+                    tim
+                       es
+            x            teps
+
+
+Figure 6. Fluid data assimilation results using different forward models with the prior. Left: we have 50 sensors measuring the velocity
+field and we take measurements every 2 time steps over a flow clip of total 10 time steps. Right: qualitative comparison of recovered
+flows using different methods at t = 0 (beginning of assimilation window) and t = 10 (end of the assimilation window). We visualize
+the magnitude of the velocity (∥u∥22 ) for comparison (see supplementary for additional comparisons and results using different forward
+without the learned prior). The reported MSE are the average mean square error over the entire flow assimilation window. While the FEM
+solver yields the best results, it is roughly 90× slower than the GNN.
+
+
+                                                                                            Observation Objective
+ Forward Model                Fluid Data Assimilation                                                                  Without
+                         MSE (ux ) MSE (uy ) Runtime (s)                                                               Fine-tuning
+                                                                                                 Optimize !                GNN
+                                                                                                                           FEM
+ FEM (Irr. C.)            4.46e-3       1.94e-3         6.39e1
+                                                                                                                           U-Net (F.)
+ U-Net (Reg. C.)          1.02e-2       5.40e-3         1.27e-1                                                            U-Net (C.)
+ U-Net (Reg. F.)          7.97e-3       3.31e-3         3.25e-1                                                        With
+ GNN (Irr. C.)            6.55e-3       1.86e-3         6.94e-1                                                        Fine-tuning
+                                                                                                                           GNN
+                                                                                    Optimize          Optimize !, $        FEM
+                                                                                        !                                  U-Net (F.)
+Table 3. Fluid assimilation results averaged over 50 test samples                                                          U-Net (C.)
+on 5 unseen meshes. Here, we simulate for 10 time steps taking
+measurement of 50 sampled sensors every 2 time steps. Runtime                                  Optimization Steps
+is the per-iteration optimization time. We observe that the GNN
+(Irr. C.) performs much better than the U-Net (Reg. C.) using a       Figure 7. Observation objective during the optimization. Solid
+similar number of nodes (listed in Table (2)). U-Net (Irr. F.) uses   lines: during the first 200 iterations, we only optimize the latent
+5× more nodes than the GNN but has slightly worse performance.        code z and the prior, G, parameterized by ψ is fixed. From 200
+The FEM solver gives the best performance but is 90× slower than      - 600 iterations, we start to fine tune the prior, i.e optimizing ψ,
+the GNN.                                                              to increase the expressiveness of the prior to better match the
+                                                                      observations. After fine-tuning, we observe a significant decrease
+                                                                      in the objective function. Dashed lines: we only optimize the
+                                                                      latent code z throughout the optimization. We observe that the
+                                                                      final observation objective without fine-tuning is much higher than
+tion steps for different forward model and with or without            the cases with fine-tuning.
+fine-tuning procedure. After beginning the fine-tuning pro-
+cedure we notice a spike in the objective function, but the           5. Discussions
+optimization ultimately converges to much lower residuals
+than without the fine-tuning procedure. In Table (3), we              In this paper we present a general framework for solving
+qualitatively compare the data assimilation performance for           PDE-constrained inverse problems with a GNN-based for-
+different forward models with the learned prior, and qual-            ward solver and an autodecoder-style learned prior. Both the
+itative comparisons can be found in Fig. 6. We report the             GNN-based learned simulator and the learned prior operate
+average MSE over all time steps of ux and uy as our eval-             on irregular meshes with adaptive resolution, enabling repre-
+uation metric. We observe similar trends as in the wave               senting and processing signals with fewer nodes compared
+equation experiment: the learned GNN forward model with               to the regular grids used by convolutional networks. Our
+the learned prior achieves better accuracy compared to the            experiments on the wave equation and Navier–Stokes equa-
+coarse U-Net (CNN) model, which has a similar number                  tions demonstrate that the proposed framework achieves
+of nodes. While the FEM solver gives the best fluid recon-            improved performance compared to a conventional U-Net
+struction, it is 50× slower than the GNN. U-Net (Reg. F.)             (CNN) operating on grids with the same number of nodes
+uses 5× more nodes than the GNN, but achieves similar                 as the GNN. Moreover, our approach is up to 90× faster
+performance.                                                          compared to conventional FEM solvers.
+We also mention a few limitations of the proposed approach.     Chen, G., Chen, S., and Wu, R.-S. Full Waveform Inversion
+The current implementation is limited in the number of time-      in time domain using time-damping filters, pp. 1451–1455.
+steps that can be modeled in the inverse problem due to mem-      2015.
+ory required to unroll the solvers. Also, the method requires
+the forward model to be trained from scratch for changes        Daras, G., Dean, J., Jalal, A., and Dimakis, A. G. Interme-
+to the underlying equations (e.g., significant changes to the     diate layer optimization for inverse problems using deep
+boundary conditions or dynamics). Still, techniques like          generative models. In Proc. ICML, 2020.
+gradient checkpointing (Griewank, 1992) may be helpful
+to mitigate the memory constraints of the unrolled opti-        Economon, T. D., Palacios, F., Copeland, S. R., Lukaczyk,
+mization, and generalizing learned physics solvers across         T. W., and Alonso, J. J. Su2: An open-source suite for
+problem settings is an promising direction for future work.       multiphysics simulation and design. AIAA J., 54(3):828–
+                                                                  846, 2016.
+Overall, our approach works to integrate GNNs and learned
+priors for solving physics-constrained inverse problems.        Esmaeilzadeh, S., Azizzadenesheli, K., Kashinath, K.,
+Our approach may be useful for solving ill-posed problems         Mustafa, M., Tchelepi, H. A., Marcus, P., Prabhat, M.,
+across a range of tasks related to physics-based simulation       Anandkumar, A., et al. Meshfreeflownet: a physics-
+and modeling. GNNs are an attractive architecture for ef-         constrained deep continuous space-time super-resolution
+ficient modeling across multi-resolution domains and may          framework. In SC20, 2020.
+yield even greater improvements compared to conventional
+CNNs, especially for larger domains or in 3D problem set-       Fan, T., Xu, K., Pathak, J., and Darve, E. Solving inverse
+tings.                                                            problems in steady-state navier-stokes equations using
+                                                                  deep neural networks. AAAI, 2020.
+6. Acknowledgements                                             Frerix, T., Kochkov, D., Smith, J. A., Cremers, D., Brenner,
+This project was supported in part by a PECASE by the             M. P., and Hoyer, S. Variational data assimilation with
+ARO and Stanford HAI.                                             a learned inverse observation operator. In Proc. ICML,
+                                                                  2021.
+References                                                      Griewank, A. Achieving logarithmic growth of temporal and
+Aghamiry, H. S., Gholami, A., and Operto, S. Improv-              spatial complexity in reverse automatic differentiation.
+  ing full-waveform inversion by wavefield reconstruction         Optim Methods Softw, 1:35–54, 1992.
+ with the alternating direction method of multipliers. Geo-
+  physics, 84(1):R125–R148, 2019.                               Hamilton, W. L., Ying, R., and Leskovec, J. Inductive
+                                                                  representation learning on large graphs. In Proc. NeurIPS,
+Bar-Sinai, Y., Hoyer, S., Hickey, J., and Brenner, M. P.          2017.
+  Learning data-driven discretizations for partial differen-
+  tial equations. Proc. Natl. Acad. Sci. U.S.A, 116(31):        He, Q. and Wang, Y. Reparameterized full-waveform in-
+  15344–15349, 2019.                                              version using deep neural networks. Geophysics, 86(1):
+                                                                  V1–V13, 2021.
+Bauer, P., Thorpe, A., and Brunet, G. The quiet revolution of
+  numerical weather prediction. Nature, 525(7567):47–55,        Holl, P., Koltun, V., and Thuerey, N. Learning to control
+  2015.                                                           pdes with differentiable physics, 2019.
+
+Belbute-Peres, F. d. A., Economon, T., and Kolter, Z. Com-      Jiang, J. and Fan, J. A. Global optimization of dielec-
+  bining differentiable pde solvers and graph neural net-          tric metasurfaces using a physics-driven neural network.
+  works for fluid flow prediction. In Proc. ICML, 2020.            Nano Lett., 19(8):5366–5372, 2019.
+
+Bhatnagar, S., Afshar, Y., Pan, S., Duraisamy, K., and          Karniadakis, G. E., Kevrekidis, I. G., Lu, L., Perdikaris,
+  Kaushik, S. Prediction of aerodynamic flow fields us-           P., Wang, S., and Yang, L. Physics-informed machine
+  ing convolutional neural networks. Comput. Mech., 64            learning. Nat. Rev. Phys., 3(6):422–440, 2021.
+  (2):525–545, 2019.
+                                                                Kingma, D. P. and Ba, J. Adam: A method for stochastic
+Brenders, A. J. and Pratt, R. G. Full waveform tomography         optimization. 2014.
+  for lithospheric imaging: results from a blind test in a
+  realistic crustal model. Geophys. J. Int., 168(1):133–151,    Kipf, T. N. and Welling, M. Semi-supervised classification
+  01 2007.                                                        with graph convolutional networks. 2017.
+Kochkov, D., Smith, J. A., Alieva, A., Wang, Q., Brenner,        Raissi, M., Perdikaris, P., and Karniadakis, G. E. Physics-
+  M. P., and Hoyer, S. Machine learning–accelerated com-           informed neural networks: A deep learning framework for
+  putational fluid dynamics. Proc. Natl. Acad. Sci. U.S.A,         solving forward and inverse problems involving nonlinear
+ 118(21), 2021.                                                    partial differential equations. J. Comput. Phys., 378:686–
+                                                                   707, 2019.
+Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhat-
+  tacharya, K., Stuart, A., and Anandkumar, A. Multipole         Raissi, M., Yazdani, A., and Karniadakis, G. E. Hidden
+  graph neural operator for parametric partial differential        fluid mechanics: Learning velocity and pressure fields
+  equations. In Proc. NeurIPS, 2020a.                              from flow visualizations. Science, 367(6481):1026–1030,
+                                                                   2020.
+Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhat-
+  tacharya, K., Stuart, A., and Anandkumar, A. Neural            Ramamurti, R. and Sandberg, W. Simulation of flow about
+  operator: Graph kernel network for partial differential          flapping airfoils using finite element incompressible flow
+  equations. arXiv preprint arXiv:2003.03485, 2020b.               solver. AIAA J., 39(2):253–260, 2001.
+
+Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhat-        Roich, D., Mokady, R., Bermano, A. H., and Cohen-Or,
+  tacharya, K., Stuart, A., and Anandkumar, A. Fourier             D. Pivotal tuning for latent-based editing of real images.
+  neural operator for parametric partial differential equa-        arXiv preprint arXiv:2106.05744, 2021.
+  tions. 2021.
+                                                                 Sanchez-Gonzalez, A., Godwin, J., Pfaff, T., Ying, R.,
+Lino, M., Cantwell, C., Bharath, A. A., and Fotiadis, S.           Leskovec, J., and Battaglia, P. Learning to simulate com-
+  Simulating continuum mechanics with multi-scale graph            plex physics with graph networks. In Proc. ICML, 2020.
+  neural networks. CoRR, 2021.
+                                                                 Scarselli, F., Gori, M., Tsoi, A. C., Hagenbuchner, M., and
+Logg, A., Mardal, K.-A., Wells, G. N., et al. Automated            Monfardini, G. The graph neural network model. IEEE
+  Solution of Differential Equations by the Finite Element         Trans. Neural Netw. Learn. Syst., 20(1):61–80, 2008.
+  Method. Springer, 2012.
+                                                                 Schwarzbach, C., Börner, R.-U., and Spitzer, K. Three-
+Lu, L., Jin, P., and Karniadakis, G. E. Learning nonlinear         dimensional adaptive higher order finite element simula-
+  operators via deeponet based on the universal approxima-         tion for geo-electromagnetics—a marine csem example.
+  tion theorem of operators. Nat. Mach. Intell., 2021.             Geophys. J. Int., 187(1):63–74, 2011.
+
+Molesky, S., Lin, Z., Piggott, A. Y., Jin, W., Vucković, J.,    Seo, S., Meng, C., and Liu, Y. Physics-aware difference
+ and Rodriguez, A. W. Inverse design in nanophotonics.             graph networks for sparsely-observed dynamics. In Proc.
+ Nat. Photonics, 12(11):659–670, 2018.                             ICLR, 2020.
+
+Mosser, L., Dubrule, O., and Blunt, M. J. Stochastic seismic     Sirignano, J. and Spiliopoulos, K. Dgm: A deep learning
+ waveform inversion using generative adversarial networks          algorithm for solving partial differential equations. J.
+ as a geological prior. Math. Geosci., 52(1):53–79, 2020.          Comput. Phys., 375:1339–1364, 2018.
+
+Pardo, D., Demkowicz, L., Torres-Verdin, C., and Paszyn-         Sitzmann, V., Martel, J., Bergman, A., Lindell, D., and Wet-
+  ski, M. A self-adaptive goal-oriented hp-finite element           zstein, G. Implicit neural representations with periodic
+  method with electromagnetic applications. part ii: Elec-          activation functions. In Proc. NeurIPS, 2020.
+  trodynamics. Comput Methods Appl Mech Eng, 196
+  (37-40):3585–3597, 2007.                                       Tancik, M., Srinivasan, P. P., Mildenhall, B., Fridovich-Keil,
+                                                                   S., Raghavan, N., Singhal, U., Ramamoorthi, R., Barron,
+Park, J. J., Florence, P., Straub, J., Newcombe, R., and Love-     J. T., and Ng, R. Fourier features let networks learn high
+  grove, S. Deepsdf: Learning continuous signed distance           frequency functions in low dimensional domains. In Proc.
+  functions for shape representation. In Proc. CVPR, 2019.         NeurIPS, 2020.
+
+Pfaff, T., Fortunato, M., Sanchez-Gonzalez, A., and              Thürey, N., Weißenow, K., Prantl, L., and Hu, X. Deep
+  Battaglia, P. W. Learning mesh-based simulation with             learning methods for reynolds-averaged navier–stokes
+  graph networks. 2021.                                            simulations of airfoil flows. AIAA J., 58(1):25–36, 2020.
+
+Quarteroni, A. M. and Valli, A. Numerical Approximation          Tompson, J., Schlachter, K., Sprechmann, P., and Perlin, K.
+  of Partial Differential Equations. Springer, 1st ed. 1994.       Accelerating eulerian fluid simulation with convolutional
+  2nd printing edition, 2008.                                      networks. In Proc. ICML, 2017.
+Um, K., Brand, R., Holl, P., Thuerey, N., et al. Solver-in-
+ the-loop: Learning from differentiable physics to interact
+ with iterative pde-solvers. In Proc. NeurIPS, 2020.
+Veličković, P., Cucurull, G., Casanova, A., Romero, A., Lio,
+  P., and Bengio, Y. Graph attention networks. 2018.
+Virieux, J. and Operto, S. An overview of full-waveform
+  inversion in exploration geophysics. Geophysics, 74(6):
+  WCC1–WCC26, 2009.
+Virieux, J., Asnaashari, A., Brossier, R., Métivier, L., Ri-
+  bodetti, A., and Zhou, W. 6. An introduction to full
+  waveform inversion, pp. R1–1–R1–40. 2017.
+
+Wandel, N., Weinmann, M., and Klein, R. Learning in-
+ compressible fluid dynamics from scratch–towards fast,
+ differentiable fluid models that generalize. 2021.
+Wang, S. and Perdikaris, P. Long-time integration of para-
+ metric evolution equations with physics-informed deep-
+ onets. CoRR, abs/2106.05384, 2021.
+Wang, S., Wang, H., and Perdikaris, P. Learning the solution
+ operator of parametric partial differential equations with
+ physics-informed deeponets. Sci. Adv., 7(40):eabi8605,
+ 2021.
+
+Wu, Y. and McMechan, G. A. Parametric convolutional neu-
+ ral network-domain full-waveform inversion. Geophysics,
+ 84(6):R881–R896, 2019.
+Wu, Z., Pan, S., Chen, F., Long, G., Zhang, C., and Philip,
+ S. Y. A comprehensive survey on graph neural networks.
+ IEEE Trans. Neural Netw. Learn. Syst., 32(1):4–24, 2020.
+Xue, T., Beatson, A., Adriaenssens, S., and Adams, R.
+ Amortized finite element analysis for fast pde-constrained
+  optimization. In Proc. ICML, 2020.
+
+Yang, Y., Gao, A. F., Castellanos, J. C., Ross, Z. E., Az-
+  izzadenesheli, K., and Clayton, R. W. Seismic Wave
+  Propagation and Inversion with Neural Operators. TSR, 1
+  (3):126–134, 11 2021.
+A. Two-Dimensional Scalar Wave Equation
+A.1. Dataset
+The dataset for the wave equation consists of 1100 training trajectories over 37 meshes, and 40 test trajectories over 3
+unseen meshes. For each mesh, we have a fish shape obstacle at the center obtained from the shape dataset (LEMS). The
+Dirichlet boundary condition is applied to all boundaries. The ground truth trajectories are obtained using an open source
+FEM solver, FEniCs (Logg et al., 2012), simulated on fine meshes with Euler method and first order elements. We use
+generalized minimal residual method (GMRES) as our linear solver and incomplete LU factorization as our preconditioner.
+The supervised fields on coarse meshes and regular meshes are all interpolated from the ground truth trajectories. For every
+trajectory, we randomly sample an initial wavefield, and a velocity distribution from the gaussian random field. The velocity
+distribution is threshold to binary. To satisfy the boundary conditions, the sampled initial wavefield is decayed to 0 near the
+boundaries using the solution of the Eikonal equation.
+
+A.2. Prior Network
+For the prior networks, Gc or Gu , we use a multilayer perceptron (MLP) with 6 hidden layers, hidden features of size 256,
+and the positional encoding (Tancik et al., 2020). ReLU nonlinearity is used at all intermediate layers and sigmoid is used
+at the final layer. Input latent code is of size 64. During the training, the dataset is normalized to be between [0, 1]. We
+train the network with ADAM optimizer (Kingma & Ba, 2014) for 1500 epochs using a batch size of 32, and a learning
+rate of 5e-4. For each training sample, we randomly sample 900 points and add random noise to the coordinates for better
+generalization. The loss function is Eq. (14), where σ = 0.01.
+
+                                                                                     
+                                             N     K
+                                             X   X                         1
+                                                      L G z i , xj , uij + 2 ∥z i ∥22 
+                                                                       
+                                    arg min                                                                              (14)
+                                      ψG ,z i=1   j=1
+                                                                          σ
+
+
+A.3. Learned Simulators
+U-Net For the U-Net learned forward model, we adopt the architecture in (Thürey et al., 2020). Input of the network
+consists of 3 channels, [u, u′ , mask], where the ”mask” indicates the simulation domain. We adjust the network size so that
+the total number of parameters of the U-Net matches the total number of parameters used in the GNN. The input field are
+all normalized to zero mean and unit variance using the dataset statistics. We train the network for 500 epochs using the
+ADAM optimizer (Kingma & Ba, 2014), learning rate 0.0004 and batch size 10.
+
+GNN For GNN, we adopt the architecture in (Pfaff et al., 2021). The input edge features consist of the relative displacement
+vector between nodes and its norm. The input node features consist of [u, u′ , c, node type], where node type is a one-hot
+vector that is [0, 1] on the boundaries, or [1, 0] off boundaries. We use two-hidden-layer MLPs with hidden features size 256,
+and the total number of message passing steps is 10. The input and the output features are all normalized to zero mean and
+unit variance using the dataset statistics. We train the network using the ADAM optimizer (Kingma & Ba, 2014) with a
+learning rate decay exponentially from 1-4 to 1e-8 over 500 epochs.
+
+A.4. Qualitative Comparisons
+Here, we show some qualitative comparisons for the initial state recovery, Fig. 8, and the full-waveform inversion task,
+Fig. 9, for the 2D wave equation experiments discussed in Sec. 4.1. In these experiments, the sensor locations are off
+boundary nodes randomly sampled from the coarse irregular grid that the GNN operates on.
+Figure 8. Sampled qualitative comparisons for initial state recovery results with the wave equation. Left: with the learned prior; Right:
+without the learned prior. We observe that with prior gives much better results than without prior in all cases, indicating the effectiveness
+of our prior.
+
+
+
+
+Figure 9. Sampled qualitative comparisons for full-waveform inversion results with the wave equation. Left: with the learned prior; Right:
+without the learned prior. We observe that with prior gives much better results than without prior in all cases, indicating the effectiveness
+of our prior.
+B. Two-Dimensional Incompressible Navier Stokes Equation
+B.1. Dataset
+The fluid dataset consists of 850 training trajectories on 55 meshes, and 50 test trajectories on 5 meshes. The ground truth
+trajectories are obtained through simulation using an open source FEM solver, FEniCs (Logg et al., 2012) on the fine meshes
+and Chorin’s method (Chorin, 1969). For every trajectory, we randomly sample an initial velocity, u, from a gaussian
+random field. The first 1000 steps of the simulation are discarded.
+
+B.2. Prior Network
+For the prior networks, Gu , we use a multilayer perceptron (MLP) with 6 hidden layers, hidden features of size 128, and the
+positional encoding (Tancik et al., 2020). ReLU nonlinearity is used at all intermediate layers. Input latent code is of size
+128. The skip connection is adopted here, i.e. the input latent code is concatenated to the 3rd and the 5th layer of the MLP
+(Park et al., 2019). During the training, the dataset is normalized to be zero mean and unit variance. We train the network
+with the ADAM optimizer (Kingma & Ba, 2014) for 1500 epochs using a batch size of 32 and a learning rate of 5e-4. For
+each training sample, we randomly sample 4000 points and add random noise to the coordinates for better generalization.
+The loss function is Eq. (14), where σ = 0.01.
+
+B.3. Learned Simulators
+U-Net For the U-Net learned forward model, we adopt the architecture in (Thürey et al., 2020). The input of the network
+consists of 3 channels, [ux , uy , mask], where the ”mask” indicates the simulation domain. We adjust the network size so
+that the total number of parameters of the U-Net matches the total number of parameters used in the GNN. We train the
+model for 500 epochs with the ADAM optimizer (Kingma & Ba, 2014), a learning rate of 0.0004 and a batch size of 128.
+
+
+GNN For the GNN learned forward model, we adopt the architecture in (Pfaff et al., 2021). The input edge features consist
+of the relative displacement vector between nodes, and its norm. The input node features consist of [ux , uy , node type],
+where the node type is a one-hot vector indicates if the node is at the inlet, outlet, cylinder boundary, wall boundaries, or
+otherwise. We use two-hidden-layers MLPs with hidden features size 128, and the total number of the message passing
+steps is 15. We train the network with the ADAM optimizer (Kingma & Ba, 2014) with a learning rate decay exponentially
+from 1-4 to 1e-8 over 500 epochs.
+
+B.4. Fine tuning
+
+
+                             Forward Model                   Fluid Data Assimilation
+                                                   without Fine-tuning      with Fine-tuning
+                                                   MSE (Vx ) MSE (Vy ) MSE (Vx ) MSE (Vy )
+                             FEM (Irr. C.)           5.58e-3        2.83e-3        4.46e-3        1.94e-3
+                             U-Net (Reg. C.)         1.21e-2        6.17e-3        1.02e-3        5.40e-3
+                             U-Net (Reg. F.)         8.64e-3        4.04e-3       7.974e-3        3.31e-3
+                             GNN (Irr. C.)           9.87e-3        4.19e-3        6.55e-3        1.86e-3
+
+Table 4. Fluid assimilation results averaged over 40 test samples on 5 unseen meshes. Here, each flow clip consists of 10 time steps, where
+each time step is equivalent to 2 learned solver steps (GNN or U-Net) and 12.5 FEM solver step. We take measurement of the velocity,
+[ux , uy ], every 2 time steps using 50 sampled sensors. Here we compare the with-fine-tuning and the without-fine-tuning approach. We
+observe that with-fine-tuning approach achieves lower MSE for all forward models.
+
+
+
+B.5. Qualitative Comparisons
+In Fig. 10, we show some qualitative comparisons for the flow assimilation task using different solvers, and learned prior. In
+this experiment, 10 sensors are sampled at a bounding box near the cylinder, and 40 sensors are sampled randomly from the
+whole domain.
+      Sample 1   U-Net (C.)            U-Net (F.)              FEM (F.)               GNN (C.)               GT
+
+       𝑢"
+
+       T=0
+
+
+
+
+       𝑢!
+
+       T=0
+
+
+
+
+       𝑢"
+
+      T=10
+
+
+
+
+       𝑢!
+
+      T=10
+
+
+
+
+      Sample 2
+
+       𝑢"
+
+      T=0
+
+
+
+
+       𝑢!
+
+      T=0
+
+
+
+
+       𝑢"
+
+      T=10
+
+
+
+
+       𝑢!
+
+      T=10
+
+
+
+
+                                    Figure 10. Sample comparisons for flow assimilation task.
+
+
+
+
+B.6. Without Prior
+In Fig. 11 and Tab. (B.6), we show some qualitative and quantitative comparisons for the flow assimilation task without
+using the learned prior network. Due to the highly ill-posedness of the problem, all solvers yield results deviates from the
+ground truth. All learned solvers yield results with strong artifacts as the input flow velocity is now far outside the training
+dataset distribution that the learn solvers trained on. Note that for the learned simulators, the learned prior network also
+ensures that the input states/physics parameters are always within the training set distribution.
+
+C. Runtime Analysis
+To obtained the average runtime per optimization iteration, we run our approaches on 8 CPU cores (FEM solver) and a
+single Quadro RTX 6000 GPU (U-Net and GNN).
+                                        Forward Model         MSE (Vx )      MSE (Vy )
+                                        FEM (Irr. C.)          2.45e-1        3.13e-2
+                                        U-Net (Reg. C.)        8.50e-1        5.44e-2
+                                        U-Net (Reg. F.)        9.76e-1        5.55e-2
+                                        GNN (Irr. C.)          1.97e0         4.85e-2
+
+                           Table 5. Fluid assimilation results without using the learned prior network.
+
+
+
+
+                  Figure 11. Sample comparisons for flow assimilation task without using learned prior network.
+
+
+Supplementary References
+Chorin, A. J. On the convergence of discrete approximations to the navier-stokes equations. Math. Comp., 23, 1969.
+Kingma, D. P. and Ba, J. Adam: A method for stochastic optimization. 2014.
+LEMS. Binary shape databases. http://vision.lems.brown.edu/sites/default/files/99db.tar.
+  gz.
+
+Logg, A., Mardal, K.-A., Wells, G. N., et al. Automated Solution of Differential Equations by the Finite Element Method.
+  Springer, 2012.
+Park, J. J., Florence, P., Straub, J., Newcombe, R., and Lovegrove, S. Deepsdf: Learning continuous signed distance
+  functions for shape representation. In Proc. CVPR, 2019.
+
+Pfaff, T., Fortunato, M., Sanchez-Gonzalez, A., and Battaglia, P. W. Learning mesh-based simulation with graph networks.
+  2021.
+Tancik, M., Srinivasan, P. P., Mildenhall, B., Fridovich-Keil, S., Raghavan, N., Singhal, U., Ramamoorthi, R., Barron, J. T.,
+  and Ng, R. Fourier features let networks learn high frequency functions in low dimensional domains. In Proc. NeurIPS,
+  2020.
+
+Thürey, N., Weißenow, K., Prantl, L., and Hu, X. Deep learning methods for reynolds-averaged navier–stokes simulations of
+  airfoil flows. AIAA J., 58(1):25–36, 2020.
+

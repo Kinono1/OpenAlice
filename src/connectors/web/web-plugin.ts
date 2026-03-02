@@ -18,7 +18,7 @@ import { createDevRoutes } from './routes/dev.js'
 import { createToolsRoutes } from './routes/tools.js'
 
 export interface WebConfig {
-  port: number
+  port: number;
 }
 
 export class WebPlugin implements Plugin {
@@ -74,15 +74,16 @@ export class WebPlugin implements Plugin {
     )
 
     // ==================== Start server ====================
-    this.server = serve({ fetch: app.fetch, port: this.config.port }, (info) => {
-      console.log(`web plugin listening on http://localhost:${info.port}`)
-    })
+    this.server = serve({ fetch: app.fetch, port: this.config.port }, info => {
+      console.log(`web plugin listening on http://localhost:${info.port}`);
+    });
   }
 
   async stop() {
-    this.sseClients.clear()
-    this.unregisterConnector?.()
-    this.server?.close()
+    this.stoppedRef.value = true;
+    this.sseClients.clear();
+    this.unregisterConnector?.();
+    this.server?.close();
   }
 
   private createConnector(

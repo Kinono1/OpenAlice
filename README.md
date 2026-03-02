@@ -18,6 +18,7 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 
 - **Dual AI provider** — switch between Claude Code CLI and Vercel AI SDK at runtime, no restart needed
 - **Crypto trading** — CCXT-based execution (Bybit, OKX, Binance, etc.) with a git-like wallet (stage, commit, push)
+- **Pre-trade risk guard** — hard risk checks before order placement (kill switch, leverage cap, max order notional, max position size, max daily loss)
 - **Securities trading** — Alpaca integration for US equities with the same wallet workflow
 - **Guard pipeline** — extensible pre-execution safety checks for both crypto and securities (max position size, max leverage, cooldown between trades)
 - **Market data** — OpenBB-powered equity, crypto, commodity, and currency data layers with symbol search and technical indicator calculator
@@ -49,6 +50,14 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 **EventLog** — A persistent append-only JSONL event bus. Cron fires, heartbeat results, and errors all flow through here. Supports real-time subscriptions and crash recovery.
 
 **Evolution Mode** — A permission escalation toggle. Off: Alice can only read/write `data/brain/`. On: full project access including Bash — Alice can modify her own source code.
+
+## Recent Additions
+
+- Added `strategyGetSignal`, `strategyBacktest`, and `strategyCompare` tools with realistic cost modeling (fees, slippage, latency, funding rate).
+- Added `ensemble` strategy mode that combines `trend`, `meanReversion`, and `breakout` with weighted voting.
+- Added pre-trade risk gate on crypto order execution path with configurable hard limits in `data/config/risk.json`.
+- Added `mlEnsemblePredict` tool backed by Python ensemble models and test-set accuracy reporting.
+- Added `pnpm ml:eval` for reproducible OKX-based ML evaluation from the CLI.
 
 ## Architecture
 
@@ -147,10 +156,38 @@ Open [localhost:3002](http://localhost:3002) and start chatting. No API keys or 
 pnpm dev        # start backend (port 3002) with watch mode
 pnpm dev:ui     # start frontend dev server (port 5173) with hot reload
 pnpm build      # production build (backend + UI)
+pnpm data:download:okx -- --universe config --timeframe 1h --start 2023-01-01
+pnpm data:download:binance -- --source okx-usdt --market both --timeframe 1d --startMonth 2020-01
+pnpm data:report:universe -- --quote USDT
+pnpm ml:eval    # run ML Ensemble V1 evaluation on recent OKX candles
 pnpm test       # run tests
 ```
 
 > **Note:** Port 3002 serves the UI only after `pnpm build`. For frontend development, use `pnpm dev:ui` (port 5173) which proxies to the backend and provides hot reload.
+
+## Branch Workflow
+
+This repo uses a fixed three-branch workflow policy:
+
+- `master` for official upstream sync only
+- `work/kino-mainline` for day-to-day development
+- `dev` for integration (`master + work/kino-mainline`)
+
+Policy source of truth:
+
+- `data/config/branch_workflow.v1.json`
+- `docs/branch-workflow-policy.md`
+
+Validation commands:
+
+```bash
+pnpm branch:policy:show
+pnpm branch:policy:check
+pnpm branch:policy:can-merge -- --source work/kino-mainline --target dev
+pnpm branch:policy:install-hooks
+```
+
+`branch:policy:install-hooks` enables pre-push enforcement so forbidden branch directions are blocked automatically.
 
 ## Branch Workflow
 
@@ -199,6 +236,8 @@ All config lives in `data/config/` as JSON files with Zod validation. Missing fi
 | `openbb.json` | OpenBB API URL, per-asset-class data providers, provider API keys |
 | `news-collector.json` | RSS feeds, fetch interval, retention period, OpenBB piggyback toggle |
 | `compaction.json` | Context window limits, auto-compaction thresholds |
+| `risk.json` | Pre-trade hard risk limits (kill switch, leverage/order/position/daily loss caps) |
+| `news.json` | Multi-source institutional news aggregation (RSS feeds, lookback, dedupe, source priority) |
 | `heartbeat.json` | Heartbeat enable/disable, interval, active hours |
 
 Persona and heartbeat prompts use a **default + user override** pattern:
@@ -274,6 +313,7 @@ data/
   cron/                      # Cron job definitions (jobs.json)
   event-log/                 # Persistent event log (events.jsonl)
 docs/                        # Architecture documentation
+scripts/                     # Utility scripts (ML ensemble backend + evaluation helpers)
 ```
 
 ## Star History

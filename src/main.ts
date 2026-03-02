@@ -54,25 +54,34 @@ import { createCronEngine, createCronListener, createCronTools } from './task/cr
 import { createHeartbeat } from './task/heartbeat/index.js'
 import { NewsCollectorStore, NewsCollector, wrapNewsToolsForPiggyback, createNewsArchiveTools } from './extension/news-collector/index.js'
 
-const WALLET_FILE = resolve('data/crypto-trading/commit.json')
-const SEC_WALLET_FILE = resolve('data/securities-trading/commit.json')
-const BRAIN_FILE = resolve('data/brain/commit.json')
-const FRONTAL_LOBE_FILE = resolve('data/brain/frontal-lobe.md')
-const EMOTION_LOG_FILE = resolve('data/brain/emotion-log.md')
-const PERSONA_FILE = resolve('data/brain/persona.md')
-const PERSONA_DEFAULT = resolve('data/default/persona.default.md')
+const WALLET_FILE = resolve("data/crypto-trading/commit.json");
+const SEC_WALLET_FILE = resolve("data/securities-trading/commit.json");
+const BRAIN_FILE = resolve("data/brain/commit.json");
+const FRONTAL_LOBE_FILE = resolve("data/brain/frontal-lobe.md");
+const EMOTION_LOG_FILE = resolve("data/brain/emotion-log.md");
+const PERSONA_FILE = resolve("data/brain/persona.md");
+const PERSONA_DEFAULT = resolve("data/default/persona.default.md");
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 /** Read a file, copying from default if it doesn't exist yet. */
-async function readWithDefault(target: string, defaultFile: string): Promise<string> {
-  try { return await readFile(target, 'utf-8') } catch { /* not found — copy default */ }
+async function readWithDefault(
+  target: string,
+  defaultFile: string
+): Promise<string> {
   try {
-    const content = await readFile(defaultFile, 'utf-8')
-    await mkdir(dirname(target), { recursive: true })
-    await writeFile(target, content)
-    return content
-  } catch { return '' }
+    return await readFile(target, "utf-8");
+  } catch {
+    /* not found — copy default */
+  }
+  try {
+    const content = await readFile(defaultFile, "utf-8");
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+    return content;
+  } catch {
+    return "";
+  }
 }
 
 async function main() {
@@ -109,14 +118,42 @@ async function main() {
   // ==================== Commit callbacks ====================
 
   const onCryptoCommit = async (state: WalletExportState) => {
-    await mkdir(resolve('data/crypto-trading'), { recursive: true })
-    await writeFile(WALLET_FILE, JSON.stringify(state, null, 2))
-  }
+    await mkdir(resolve("data/crypto-trading"), { recursive: true });
+    await writeFile(WALLET_FILE, JSON.stringify(state, null, 2));
+  };
+
+  // Safety infrastructure (must be created before dispatcher)
+  const ticketStore = new DecisionTicketStore({
+    required: config.decisionTicket.required,
+    ttlMs: config.decisionTicket.ttlMs,
+  });
+
+  const intentLedger = new IntentLedger(
+    resolve("data/crypto-trading/intents.jsonl")
+  );
+  await intentLedger.init();
+  const idempotencyStore = new TradeIdempotencyStore(
+    resolve("data/runtime/trade_idempotency.json")
+  );
+
+  const killSwitch = new KillSwitch({
+    defaultPolicy: config.killSwitch.defaultPolicy,
+  });
+
+  const pnlTracker = new PnLTracker({
+    reconciliationThresholdPct: config.reconciliation.thresholdPct,
+  });
+
+  // Derive exchange ID from crypto config
+  const exchangeId =
+    config.crypto.provider.type === "ccxt"
+      ? config.crypto.provider.exchange
+      : undefined;
 
   const onSecCommit = async (state: SecWalletExportState) => {
-    await mkdir(resolve('data/securities-trading'), { recursive: true })
-    await writeFile(SEC_WALLET_FILE, JSON.stringify(state, null, 2))
-  }
+    await mkdir(resolve("data/securities-trading"), { recursive: true });
+    await writeFile(SEC_WALLET_FILE, JSON.stringify(state, null, 2));
+  };
 
   // ==================== Securities Trading ====================
 
@@ -138,17 +175,17 @@ async function main() {
       }
     : {
         executeOperation: async (_op: SecOperation) => {
-          throw new Error('Securities trading service not connected')
+          throw new Error("Securities trading service not connected");
         },
         getWalletState: async () => {
-          throw new Error('Securities trading service not connected')
+          throw new Error("Securities trading service not connected");
         },
         onCommit: onSecCommit,
-      }
+      };
 
   const secWallet = secSavedState
     ? SecWallet.restore(secSavedState, secWalletConfig)
-    : new SecWallet(secWalletConfig)
+    : new SecWallet(secWalletConfig);
 
   // Mutable wallet references — updated on reconnect so REST getters always return current instance
   let currentCryptoWallet: InstanceType<typeof Wallet> | null = null
@@ -161,42 +198,56 @@ async function main() {
 
   const brainDir = resolve('data/brain')
   const brainOnCommit = async (state: BrainExportState) => {
-    await mkdir(brainDir, { recursive: true })
-    await writeFile(BRAIN_FILE, JSON.stringify(state, null, 2))
-    await writeFile(FRONTAL_LOBE_FILE, state.state.frontalLobe)
-    const latest = state.commits[state.commits.length - 1]
-    if (latest?.type === 'emotion') {
-      const prev = state.commits.length > 1
-        ? state.commits[state.commits.length - 2]?.stateAfter.emotion ?? 'unknown'
-        : 'unknown'
-      await appendFile(EMOTION_LOG_FILE,
-        `## ${latest.timestamp}\n**${prev} → ${latest.stateAfter.emotion}**\n${latest.message}\n\n`)
+    await mkdir(brainDir, { recursive: true });
+    await writeFile(BRAIN_FILE, JSON.stringify(state, null, 2));
+    await writeFile(FRONTAL_LOBE_FILE, state.state.frontalLobe);
+    const latest = state.commits[state.commits.length - 1];
+    if (latest?.type === "emotion") {
+      const prev =
+        state.commits.length > 1
+          ? (state.commits[state.commits.length - 2]?.stateAfter.emotion ??
+            "unknown")
+          : "unknown";
+      await appendFile(
+        EMOTION_LOG_FILE,
+        `## ${latest.timestamp}\n**${prev} → ${latest.stateAfter.emotion}**\n${latest.message}\n\n`
+      );
     }
-  }
+  };
 
   const brain = brainExport
     ? Brain.restore(brainExport, { onCommit: brainOnCommit })
-    : new Brain({ onCommit: brainOnCommit })
+    : new Brain({ onCommit: brainOnCommit });
 
   const frontalLobe = brain.getFrontalLobe()
   const emotion = brain.getEmotion().current
   const instructions = [
     persona,
-    '---',
-    '## Current Brain State',
-    '',
-    `**Frontal Lobe:** ${frontalLobe || '(empty)'}`,
-    '',
+    "---",
+    "## Current Brain State",
+    "",
+    `**Frontal Lobe:** ${frontalLobe || "(empty)"}`,
+    "",
     `**Emotion:** ${emotion}`,
-  ].join('\n')
+  ].join("\n");
 
   // ==================== Event Log ====================
 
-  const eventLog = await createEventLog()
+  const eventLog = await createEventLog();
+
+  if (cryptoEngine) {
+    liveGateManager = await LiveGateManager.create({
+      engine: cryptoEngine,
+      klineStore,
+      riskConfig: config.risk,
+      eventLog,
+      baseDir: "data",
+    });
+  }
 
   // ==================== Cron ====================
 
-  const cronEngine = createCronEngine({ eventLog })
+  const cronEngine = createCronEngine({ eventLog });
 
   // ==================== News Collector Store ====================
 
@@ -262,8 +313,8 @@ async function main() {
   const claudeCodeProvider = new ClaudeCodeProvider(config.compaction, instructions)
   const router = new ProviderRouter(vercelProvider, claudeCodeProvider)
 
-  const agentCenter = new AgentCenter(router)
-  const engine = new Engine({ agentCenter })
+  const agentCenter = new AgentCenter(router);
+  const engine = new Engine({ agentCenter });
 
   // ==================== Connector Center ====================
 
@@ -286,7 +337,7 @@ async function main() {
   })
   await heartbeat.start()
   if (config.heartbeat.enabled) {
-    console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
+    console.log(`heartbeat: enabled (every ${config.heartbeat.every})`);
   }
 
   // ==================== News Collector ====================
@@ -510,7 +561,9 @@ async function main() {
 
   // ==================== Shutdown ====================
 
-  let stopped = false
+  let stopped = false;
+  let shutdownInProgress = false;
+
   const shutdown = async () => {
     stopped = true
     newsCollector?.stop()
@@ -536,7 +589,7 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('fatal:', err)
-  process.exit(1)
-})
+main().catch(err => {
+  console.error("fatal:", err);
+  process.exit(1);
+});

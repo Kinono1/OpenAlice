@@ -1,0 +1,70 @@
+{
+  "profileName": "gates_v4_turnover_control",
+  "mainOrder": ["H0", "H10", "H11", "H12"],
+  "mainConfigs": {
+    "H0": {
+      "calibration_method": "sigmoid",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {}
+    },
+    "H10": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--min-confidence": "0.70",
+        "--min-expected-return-pct": "0.08",
+        "--conformal-alpha": "0.08",
+        "--decision-use-conformal-lower-bound": "true",
+        "--oof-min-coverage-soft": "0.70",
+        "--oof-hard-floor": "0.30",
+        "--soft-fail-max-weight": "0.10",
+        "--risk-clamp-on-soft-stat-warn": "0.25"
+      }
+    },
+    "H11": {
+      "calibration_method": "isotonic",
+      "regime_method": "kmeans",
+      "regime_scheme": "kmeans_v1",
+      "regime_schema_version": "v1_kmeans_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--min-confidence": "0.70",
+        "--min-expected-return-pct": "0.08",
+        "--conformal-alpha": "0.10",
+        "--conformal-shift-weight-clip-min": "0.50",
+        "--conformal-shift-weight-clip-max": "3.0",
+        "--decision-use-conformal-lower-bound": "true",
+        "--oof-min-coverage-soft": "0.70",
+        "--oof-hard-floor": "0.30",
+        "--soft-fail-max-weight": "0.10",
+        "--risk-clamp-on-soft-stat-warn": "0.25"
+      }
+    },
+    "H12": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost,ridge",
+      "extra_args": {
+        "--min-confidence": "0.72",
+        "--min-expected-return-pct": "0.09",
+        "--conformal-alpha": "0.08",
+        "--decision-use-conformal-lower-bound": "true",
+        "--model-safety-min-robust-cost-aware-utility": "0.03",
+        "--model-safety-min-cost-aware-utility": "0.01",
+        "--model-safety-min-net-return-pct-after-cost": "0.0",
+        "--oof-min-coverage-soft": "0.72",
+        "--oof-hard-floor": "0.35",
+        "--soft-fail-max-weight": "0.08",
+        "--risk-clamp-on-soft-stat-warn": "0.20"
+      }
+    }
+  }
+}

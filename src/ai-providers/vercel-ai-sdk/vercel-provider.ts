@@ -28,6 +28,7 @@ export class VercelAIProvider implements AIProvider {
     private instructions: string,
     private maxSteps: number,
     private compaction: CompactionConfig,
+    private openaiStoreMode: "default" | "force-false" = "default"
   ) {}
 
   /** Lazily create or return the cached agent, re-creating when config or tools change. */
@@ -61,7 +62,7 @@ export class VercelAIProvider implements AIProvider {
   async askWithSession(prompt: string, session: SessionStore, _opts?: AskOptions): Promise<ProviderResult> {
     const agent = await this.resolveAgent()
 
-    await session.appendUser(prompt, 'human')
+    await session.appendUser(prompt, "human");
 
     const compactionResult = await compactIfNeeded(
       session,
@@ -72,8 +73,9 @@ export class VercelAIProvider implements AIProvider {
       },
     )
 
-    const entries = compactionResult.activeEntries ?? await session.readActive()
-    const messages = toModelMessages(entries)
+    const entries =
+      compactionResult.activeEntries ?? (await session.readActive());
+    const messages = toModelMessages(entries);
 
     const media: MediaAttachment[] = []
     const result = await agent.generate({
@@ -85,8 +87,8 @@ export class VercelAIProvider implements AIProvider {
       },
     })
 
-    const text = result.text ?? ''
-    await session.appendAssistant(text, 'engine')
-    return { text, media }
+    const text = result.text ?? "";
+    await session.appendAssistant(text, "engine");
+    return { text, media };
   }
 }

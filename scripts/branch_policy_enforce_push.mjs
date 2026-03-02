@@ -114,6 +114,9 @@ function enforce(policy, args, updates) {
     }
 
     if (!update.from) {
+      violations.push(
+        `non-branch source ref "${update.localRef}" cannot update protected branch ${update.to}; use refs/heads/<branch> as source.`
+      );
       continue;
     }
 

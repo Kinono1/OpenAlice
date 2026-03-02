@@ -1,0 +1,98 @@
+[
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/AdaptiveConformal_TS_2022.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/AdaptiveConformal_TS_2022.txt",
+    "pages": 29,
+    "ok": true,
+    "txt_bytes": 199687,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/Autoformer_NeurIPS2021.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/Autoformer_NeurIPS2021.txt",
+    "pages": 20,
+    "ok": true,
+    "txt_bytes": 133763,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/CQR_NeurIPS2019.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/CQR_NeurIPS2019.txt",
+    "pages": 19,
+    "ok": true,
+    "txt_bytes": 66095,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/CalibratedSharpUncertainty_ICML2022.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/CalibratedSharpUncertainty_ICML2022.txt",
+    "pages": 16,
+    "ok": true,
+    "txt_bytes": 77144,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/Conformal_CovariateShift_ICML2020.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/Conformal_CovariateShift_ICML2020.txt",
+    "pages": 17,
+    "ok": true,
+    "txt_bytes": 114849,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/DeepLOB_2018.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/DeepLOB_2018.txt",
+    "pages": 12,
+    "ok": true,
+    "txt_bytes": 102890,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/EmpiricalAssetPricing_GuKellyXiu_w25398.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/EmpiricalAssetPricing_GuKellyXiu_w25398.txt",
+    "pages": 80,
+    "ok": true,
+    "txt_bytes": 305942,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/HFTPredictability_NBER30265.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/HFTPredictability_NBER30265.txt",
+    "pages": 184,
+    "ok": true,
+    "txt_bytes": 751453,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/NonstationaryTransformer_NeurIPS2022.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/NonstationaryTransformer_NeurIPS2022.txt",
+    "pages": 21,
+    "ok": true,
+    "txt_bytes": 207505,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/PatchTST_ICLR2023.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/PatchTST_ICLR2023.txt",
+    "pages": 24,
+    "ok": true,
+    "txt_bytes": 114560,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/VirtueComplexity_NBER29330.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/VirtueComplexity_NBER29330.txt",
+    "pages": 62,
+    "ok": true,
+    "txt_bytes": 232853,
+    "err": ""
+  },
+  {
+    "pdf": "docs/research/papers/top_venue_20260228/pdf/iTransformer_ICLR2024.pdf",
+    "txt": "docs/research/papers/top_venue_20260228/text/iTransformer_ICLR2024.txt",
+    "pages": 25,
+    "ok": true,
+    "txt_bytes": 130291,
+    "err": ""
+  }
+]

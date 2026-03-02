@@ -1,0 +1,71 @@
+{
+  "profileName": "gates_v6_orthogonal_redesign",
+  "mainOrder": ["H0", "H16", "H17", "H18"],
+  "mainConfigs": {
+    "H0": {
+      "calibration_method": "sigmoid",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {}
+    },
+    "H16": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--horizon-bars": "2",
+        "--labeling-mode": "triple_barrier",
+        "--barrier-tp-atr": "2.0",
+        "--barrier-sl-atr": "1.0",
+        "--barrier-max-horizon-bars": "8",
+        "--min-confidence": "0.58",
+        "--min-expected-return-pct": "0.04",
+        "--decision-use-conformal-lower-bound": "true",
+        "--model-safety-max-turnover-per-bar": "0.12"
+      }
+    },
+    "H17": {
+      "calibration_method": "sigmoid",
+      "regime_method": "kmeans",
+      "regime_scheme": "kmeans_v1",
+      "regime_schema_version": "v1_kmeans_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--ensemble-mode": "regime_moe",
+        "--regime-count": "4",
+        "--selection-objective": "robustCostAwareUtility",
+        "--selection-mode": "max",
+        "--conformal-alpha": "0.08",
+        "--conformal-min-regime-samples": "35",
+        "--decision-use-conformal-lower-bound": "true",
+        "--min-confidence": "0.57",
+        "--min-expected-return-pct": "0.04",
+        "--model-safety-max-turnover-per-bar": "0.12"
+      }
+    },
+    "H18": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost,ridge",
+      "extra_args": {
+        "--selection-objective": "netSharpeAfterCost",
+        "--selection-mode": "max",
+        "--labeling-mode": "triple_barrier",
+        "--barrier-tp-atr": "1.2",
+        "--barrier-sl-atr": "1.2",
+        "--barrier-max-horizon-bars": "6",
+        "--cost-latency-bars": "2",
+        "--oof-min-coverage-soft": "0.70",
+        "--oof-hard-floor": "0.35",
+        "--soft-fail-max-weight": "0.10",
+        "--model-safety-max-turnover-per-bar": "0.11"
+      }
+    }
+  }
+}

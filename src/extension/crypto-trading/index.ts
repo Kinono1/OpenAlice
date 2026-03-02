@@ -1,5 +1,5 @@
 // Extension adapter
-export { createCryptoTradingTools } from './adapter';
+export { createCryptoTradingTools } from "./adapter";
 
 // Trading domain types
 export type {
@@ -13,8 +13,8 @@ export type {
 } from './interfaces';
 
 // Wallet domain
-export { Wallet } from './wallet/Wallet';
-export type { IWallet, WalletConfig } from './wallet/interfaces';
+export { Wallet } from "./wallet/Wallet";
+export type { IWallet, WalletConfig } from "./wallet/interfaces";
 export type {
   Operation,
   WalletCommit,
@@ -22,7 +22,7 @@ export type {
   CommitHash,
   OrderStatusUpdate,
   SyncResult,
-} from './wallet/types';
+} from "./wallet/types";
 
 // Provider infrastructure
 export { createCryptoTradingEngine } from './factory';

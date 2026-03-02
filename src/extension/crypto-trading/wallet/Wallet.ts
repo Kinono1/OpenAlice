@@ -158,7 +158,12 @@ export class Wallet implements IWallet {
 
     // Categorize results
     const filled = results.filter((r) => r.status === 'filled');
-    const pending = results.filter((r) => r.status === 'pending');
+    const partiallyFilled = results.filter(
+      (r) => r.status === 'partially_filled',
+    );
+    const pending = results.filter(
+      (r) => r.status === 'pending' || r.status === 'partially_filled',
+    );
     const rejected = results.filter(
       (r) => r.status === 'rejected' || !r.success,
     );
@@ -168,6 +173,7 @@ export class Wallet implements IWallet {
       message,
       operationCount: operations.length,
       filled,
+      partiallyFilled,
       pending,
       rejected,
     };
@@ -255,6 +261,16 @@ export class Wallet implements IWallet {
         if (result?.status === 'filled') {
           const price = result.filledPrice ? ` @${result.filledPrice}` : '';
           return `${direction} +${sizeStr}${price}`;
+        }
+        if (result?.status === 'partially_filled') {
+          const filled = result.filledSize ?? 0;
+          const remaining =
+            result.remainingSize ??
+            ((params.size as number | undefined) ?? 0) - filled;
+          return `${direction} +${sizeStr} (partial filled=${filled}, remaining=${Math.max(
+            0,
+            remaining,
+          )})`;
         }
         return `${direction} +${sizeStr} (${result?.status || 'unknown'})`;
       }
@@ -683,19 +699,34 @@ export class Wallet implements IWallet {
       };
     }
 
-    const status = order.status as string;
-    const isFilled = status === 'filled';
-    const isPending = status === 'pending';
+    const status = (order.status as string | undefined) ?? 'pending';
+    const normalizedStatus =
+      status === 'filled'
+        ? 'filled'
+        : status === 'partially_filled'
+          ? 'partially_filled'
+          : status === 'pending'
+            ? 'pending'
+            : status === 'cancelled'
+              ? 'cancelled'
+              : 'rejected';
+    const hasFillData =
+      normalizedStatus === 'filled' || normalizedStatus === 'partially_filled';
 
     return {
       action: op.action,
       success: true,
       orderId: order.id as string | undefined,
-      status: isFilled ? 'filled' : isPending ? 'pending' : 'rejected',
-      filledPrice: isFilled ? (order.filledPrice as number) : undefined,
-      filledSize: isFilled
-        ? ((order.filledQuantity ?? order.size) as number)
-        : undefined,
+      status: normalizedStatus,
+      requestedSize: order.requestedSize as number | undefined,
+      remainingSize: order.remainingSize as number | undefined,
+      filledPrice: hasFillData ? (order.filledPrice as number) : undefined,
+      filledSize:
+        hasFillData
+          ? ((order.filledQuantity ?? order.size) as number)
+          : undefined,
+      firstFillAtMs: order.firstFillAtMs as number | undefined,
+      completedAtMs: order.completedAtMs as number | undefined,
       raw,
     };
   }

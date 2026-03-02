@@ -1,0 +1,90 @@
+{
+  "profileName": "gates_v6b_variance_squeeze",
+  "mainOrder": ["H0", "H19", "H20", "H21"],
+  "mainConfigs": {
+    "H0": {
+      "calibration_method": "sigmoid",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {}
+    },
+    "H19": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--horizon-bars": "2",
+        "--labeling-mode": "triple_barrier",
+        "--barrier-tp-atr": "2.0",
+        "--barrier-sl-atr": "1.0",
+        "--barrier-max-horizon-bars": "8",
+        "--min-confidence": "0.64",
+        "--min-expected-return-pct": "0.06",
+        "--conformal-alpha": "0.06",
+        "--decision-use-conformal-lower-bound": "true",
+        "--cost-latency-bars": "2",
+        "--oof-min-coverage-soft": "0.72",
+        "--oof-hard-floor": "0.40",
+        "--soft-fail-max-weight": "0.08",
+        "--risk-clamp-on-soft-stat-warn": "0.20",
+        "--model-safety-max-turnover-per-bar": "0.10"
+      }
+    },
+    "H20": {
+      "calibration_method": "isotonic",
+      "regime_method": "kmeans",
+      "regime_scheme": "kmeans_v1",
+      "regime_schema_version": "v1_kmeans_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost",
+      "extra_args": {
+        "--horizon-bars": "2",
+        "--labeling-mode": "triple_barrier",
+        "--barrier-tp-atr": "1.8",
+        "--barrier-sl-atr": "1.0",
+        "--barrier-max-horizon-bars": "8",
+        "--ensemble-mode": "regime_moe",
+        "--regime-count": "4",
+        "--selection-objective": "robustCostAwareUtility",
+        "--selection-mode": "max",
+        "--min-confidence": "0.62",
+        "--min-expected-return-pct": "0.05",
+        "--conformal-alpha": "0.08",
+        "--conformal-min-regime-samples": "35",
+        "--decision-use-conformal-lower-bound": "true",
+        "--cost-latency-bars": "2",
+        "--oof-min-coverage-soft": "0.72",
+        "--oof-hard-floor": "0.40",
+        "--soft-fail-max-weight": "0.08",
+        "--model-safety-max-turnover-per-bar": "0.10"
+      }
+    },
+    "H21": {
+      "calibration_method": "isotonic",
+      "regime_method": "rule",
+      "regime_scheme": "rule_v1",
+      "regime_schema_version": "v1_rule_3regime",
+      "include_models": "randomForest,xgboost,lightgbm,catboost,ridge",
+      "extra_args": {
+        "--selection-objective": "netSharpeAfterCost",
+        "--selection-mode": "max",
+        "--horizon-bars": "2",
+        "--labeling-mode": "triple_barrier",
+        "--barrier-tp-atr": "1.5",
+        "--barrier-sl-atr": "1.1",
+        "--barrier-max-horizon-bars": "8",
+        "--min-confidence": "0.63",
+        "--min-expected-return-pct": "0.06",
+        "--decision-use-conformal-lower-bound": "true",
+        "--cost-latency-bars": "2",
+        "--model-safety-min-robust-cost-aware-utility": "0.02",
+        "--model-safety-min-cost-aware-utility": "0.01",
+        "--model-safety-min-net-return-pct-after-cost": "0.0",
+        "--model-safety-max-turnover-per-bar": "0.10"
+      }
+    }
+  }
+}

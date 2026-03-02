@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/champion_registry.schema.v1.json",
+  "title": "Champion Registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "version",
+    "updatedAt",
+    "writer",
+    "protocolHash",
+    "datasetSnapshotId",
+    "championConfigId",
+    "status",
+    "fallbackConfigId"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "writer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "previousHash": {
+      "type": "string",
+      "pattern": "^phash:v1:[a-f0-9]{64}$"
+    },
+    "protocolHash": {
+      "type": "string",
+      "pattern": "^phash:v1:[a-f0-9]{64}$"
+    },
+    "datasetSnapshotId": {
+      "type": "string",
+      "pattern": "^dsnap:v1:[a-f0-9]{24}$"
+    },
+    "championConfigId": {
+      "type": "string",
+      "pattern": "^H[0-9]+$"
+    },
+    "fallbackConfigId": {
+      "type": "string",
+      "const": "H0"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "degraded_h0",
+        "paused_new_opens",
+        "recovery_shadow"
+      ]
+    },
+    "releaseGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowPaperTrading": {
+          "type": "boolean"
+        },
+        "allowLiveTrading": {
+          "type": "boolean"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceReportPath": {
+          "type": "string"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "robustMean": {
+          "type": "number"
+        },
+        "robustCiLb95": {
+          "type": "number"
+        },
+        "netTrim10Mean": {
+          "type": "number"
+        },
+        "transferPass": {
+          "type": "boolean"
+        }
+      }
+    },
+    "decisionContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "experimentId": {
+          "type": "string"
+        },
+        "decisionPath": {
+          "type": "string"
+        },
+        "comparabilityReportPath": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
