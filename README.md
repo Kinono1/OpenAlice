@@ -12,7 +12,7 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 
 ## GitHub Branch Guide
 
-Current branch: `work/kino-mainline`  
+Current branch: `dev`  
 Branch-specific guide: [`README.github.md`](README.github.md)
 
 - **File-driven** — Markdown defines persona and tasks, JSON defines config, JSONL stores conversations. Both humans and AI control Alice by reading and modifying files. The same read/write primitives that power vibe coding transfer directly to vibe trading. No database, no containers, just files.

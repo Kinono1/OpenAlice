@@ -1,22 +1,22 @@
-# OpenAlice Branch README: work/kino-mainline
+# OpenAlice Branch README: dev
 
 ## Branch Identity
 
-- Branch name: `work/kino-mainline`
-- Owner: Kino
-- Purpose: personal mainline branch for daily implementation, plan execution, and phased delivery.
+- Branch name: `dev`
+- Role: integration and validation branch.
+- Purpose: receive reviewed changes from work branches and verify branch-level stability.
 
 ## What This Branch Is For
 
-- Land feature implementation first.
-- Keep execution logs and MVP pipeline outputs aligned with the active plan.
-- Prepare changes for controlled merge into `dev`.
+- Integrate changes from `work/*` branches.
+- Run integration-level checks before promotion.
+- Keep branch policy and governance checks green.
 
 ## Recommended Workflow
 
-1. Implement and verify in `work/kino-mainline`.
-2. Run key checks (`env:verify`, `freeze:verify`, `gates:preflight`, target tests).
-3. Merge to `dev` for integration validation.
+1. Merge verified work-branch changes into `dev`.
+2. Run integration and governance checks on `dev`.
+3. Confirm no integration breakage before moving to upstream release flow.
 
 ## Notes
 
