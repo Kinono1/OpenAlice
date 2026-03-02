@@ -76,6 +76,12 @@ export interface PushResult {
   summary: { succeeded: number; failed: number; skipped: number };
 }
 
+export interface CryptoOperationDispatcher {
+  (op: Operation): Promise<unknown>;
+  dispatch: (op: Operation) => Promise<unknown>;
+  push: (commitId: string, operations: Operation[]) => Promise<PushResult>;
+}
+
 interface SimpleActionResult {
   success: boolean;
   error?: string;
@@ -258,10 +264,7 @@ function isRiskConfig(value: unknown): value is RiskConfig {
 export function createCryptoOperationDispatcher(
   engine: ICryptoTradingEngine,
   optionsOrRiskConfig?: CryptoOperationDispatcherOptions | RiskConfig
-): {
-  dispatch: (op: Operation) => Promise<unknown>;
-  push: (commitId: string, operations: Operation[]) => Promise<PushResult>;
-} {
+): CryptoOperationDispatcher {
   const options = normalizeDispatcherOptions(optionsOrRiskConfig);
   let placeOrderQueue: Promise<void> = Promise.resolve();
 
@@ -709,7 +712,6 @@ export function createCryptoOperationDispatcher(
         walletResult: {
           success: false,
           error: orderResult.error,
-          risk: { ...riskResult.details, riskContext },
         },
       };
     }
@@ -961,7 +963,11 @@ export function createCryptoOperationDispatcher(
     return { commitId, operations: results, summary };
   }
 
-  return { dispatch, push };
+  const dispatcher = (async (op: Operation) =>
+    dispatch(op)) as CryptoOperationDispatcher;
+  dispatcher.dispatch = dispatch;
+  dispatcher.push = push;
+  return dispatcher;
 }
 
 function sanitizeIdempotencyRecord(
@@ -1030,11 +1036,11 @@ export async function executeCommit(
         }
       : undefined,
   };
-  const { push } = createCryptoOperationDispatcher(deps.engine, opts);
+  const dispatcher = createCryptoOperationDispatcher(deps.engine, opts);
   const commitId = randomUUID();
   const ops: Operation[] = operations.map(o => ({
     action: o.action as Operation["action"],
     params: { ...o.params, ticketId: o.ticketId },
   }));
-  return push(commitId, ops);
+  return dispatcher.push(commitId, ops);
 }

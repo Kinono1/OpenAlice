@@ -20,6 +20,14 @@ import type {
   CryptoOrderBookLevel,
 } from '../../interfaces.js';
 import { SymbolMapper } from './symbol-map.js';
+import { getExchangeCapability } from '../../exchange-capabilities.js';
+import {
+  extractRealizedPnlDetailsFromBalancePayload,
+  extractRealizedPnlDetailsFromClosedTradesLedger,
+} from './ccxt-pnl.js';
+
+const DEFAULT_LEDGER_FALLBACK_PAGE_LIMIT = 500;
+const DEFAULT_LEDGER_FALLBACK_MAX_PAGES = 3;
 
 export interface CcxtEngineConfig {
   exchange: string;
@@ -29,6 +37,7 @@ export interface CcxtEngineConfig {
   sandbox: boolean;
   demoTrading?: boolean;
   defaultMarketType: 'spot' | 'swap';
+  allowedSymbols?: string[];
   options?: Record<string, unknown>;
   realizedPnlLedgerFallback?: {
     pageLimit?: number;
@@ -59,7 +68,7 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
       apiKey: config.apiKey,
       secret: config.apiSecret,
       password: config.password,
-      options: config.options,
+      ...exchangeOptions,
     });
 
     // OKX can fail on startup when CCXT fetches authenticated currency metadata.
@@ -381,10 +390,7 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
   async getAccount(): Promise<CryptoAccountInfo> {
     this.ensureInit();
 
-    const [balance, rawPositions] = await Promise.all([
-      this.exchange.fetchBalance(),
-      this.exchange.fetchPositions(),
-    ]);
+    const balance = await this.exchange.fetchBalance();
 
     // CCXT Balance uses indexer to access currency
     const bal = balance as unknown as Record<string, Record<string, unknown>>;
@@ -398,13 +404,29 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
       String(bal["used"]?.["USDT"] ?? bal["used"]?.["USD"] ?? 0)
     );
 
-    // Aggregate PnL from raw positions
-    let unrealizedPnL = 0;
-    let realizedPnL = 0;
-    for (const p of rawPositions) {
-      if (!this.symbolMapper.tryToInternal(p.symbol)) continue;
-      unrealizedPnL += parseFloat(String(p.unrealizedPnl ?? 0));
-      realizedPnL += parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0));
+    // Aggregate unrealizedPnL from positions
+    const positions = await this.getPositions();
+    const unrealizedPnL = positions.reduce(
+      (sum, p) => sum + p.unrealizedPnL,
+      0
+    );
+    const realizedPnlDetails =
+      extractRealizedPnlDetailsFromBalancePayload(balance);
+    let realizedPnL = realizedPnlDetails.realizedPnl;
+    let realizedPnlSource: CryptoAccountInfo["realizedPnlSource"] =
+      "derived_fallback";
+    let realizedPnlConfidence = 0.2;
+
+    if (realizedPnlDetails.found) {
+      realizedPnlSource = "balance_payload";
+      realizedPnlConfidence = 0.9;
+    } else {
+      const ledgerFallback = await this.extractRealizedPnlFromClosedTrades();
+      if (ledgerFallback.found) {
+        realizedPnL = ledgerFallback.realizedPnl;
+        realizedPnlSource = "closed_trades_ledger";
+        realizedPnlConfidence = 0.75;
+      }
     }
 
     return {
@@ -414,6 +436,8 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
       equity: total,
       realizedPnL,
       totalPnL: realizedPnL + unrealizedPnL,
+      realizedPnlSource,
+      realizedPnlConfidence,
     };
   }
 

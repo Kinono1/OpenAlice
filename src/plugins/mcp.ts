@@ -6,6 +6,8 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { Tool } from 'ai'
 import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
+import { createRequireAuth, createRequireTrade } from '../core/auth.js'
+import { createMcpAuthMiddleware } from '../core/mcp-auth-policy.js'
 
 type McpContent =
   | { type: "text"; text: string }
@@ -79,7 +81,7 @@ export class McpPlugin implements Plugin {
     private port: number,
   ) {}
 
-  async start(_ctx: EngineContext) {
+  async start(ctx: EngineContext) {
     const toolCenter = this.toolCenter
 
     const createMcpServer = async () => {
@@ -118,11 +120,21 @@ export class McpPlugin implements Plugin {
       return mcp;
     };
 
-    const app = new Hono();
+    const app = new Hono()
 
-    const requireAuth = createRequireAuth(ctx.config.auth.enforceAuth);
-    const requireTrade = createRequireTrade(ctx.config.auth.enforceAuth);
-    const mcpAuth = createMcpAuthMiddleware(requireAuth, requireTrade);
+    const requireAuth = createRequireAuth(ctx.config.auth.enforceAuth)
+    const requireTrade = createRequireTrade(ctx.config.auth.enforceAuth)
+    const mcpAuth = createMcpAuthMiddleware(requireAuth, requireTrade)
+
+    app.use('*', cors({
+      origin: '*',
+      allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+      allowHeaders: ['Content-Type', 'Authorization', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
+      exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
+    }))
+
+    // Apply MCP auth (read/write split based on JSON-RPC method)
+    app.use('/mcp', mcpAuth)
 
     app.all('/mcp', async (c) => {
       const transport = new WebStandardStreamableHTTPServerTransport()
@@ -131,22 +143,12 @@ export class McpPlugin implements Plugin {
       return transport.handleRequest(c.req.raw)
     })
 
-    // Apply MCP auth (read/write split based on JSON-RPC method)
-    app.use("/mcp", mcpAuth);
-
-    app.all("/mcp", async c => {
-      const transport = new WebStandardStreamableHTTPServerTransport();
-      const mcp = createMcpServer();
-      await mcp.connect(transport);
-      return transport.handleRequest(c.req.raw);
-    });
-
-    this.server = serve({ fetch: app.fetch, port: this.port }, info => {
-      console.log(`mcp plugin listening on http://localhost:${info.port}/mcp`);
-    });
+    this.server = serve({ fetch: app.fetch, port: this.port }, (info) => {
+      console.log(`mcp plugin listening on http://localhost:${info.port}/mcp`)
+    })
   }
 
   async stop() {
-    this.server?.close();
+    this.server?.close()
   }
 }
