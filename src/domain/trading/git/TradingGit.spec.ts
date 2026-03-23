@@ -487,6 +487,79 @@ describe('TradingGit', () => {
       expect(git.status().commitCount).toBe(1)
     })
 
+    it('skips a repeat sync when the latest persisted status is unchanged', async () => {
+      const state = makeGitState()
+      const first = await git.sync(
+        [
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'filled',
+            filledPrice: 155,
+            filledQty: 10,
+          },
+        ],
+        state,
+      )
+
+      expect(first.updatedCount).toBe(1)
+      expect(git.status().commitCount).toBe(1)
+
+      const second = await git.sync(
+        [
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'filled',
+            filledPrice: 155,
+            filledQty: 10,
+          },
+        ],
+        state,
+      )
+
+      expect(second.updatedCount).toBe(0)
+      expect(second.hash).toBe(first.hash)
+      expect(second.updates).toEqual([])
+      expect(git.status().commitCount).toBe(1)
+      expect(git.status().head).toBe(first.hash)
+    })
+
+    it('collapses duplicate orderIds within a single sync batch', async () => {
+      const state = makeGitState()
+      const result = await git.sync(
+        [
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'cancelled',
+          },
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'filled',
+            filledPrice: 155,
+            filledQty: 10,
+          },
+        ],
+        state,
+      )
+
+      expect(result.updatedCount).toBe(1)
+      expect(result.updates).toHaveLength(1)
+      expect(result.updates[0].currentStatus).toBe('filled')
+
+      const commit = git.show(result.hash)
+      expect(commit).not.toBeNull()
+      expect(commit!.results).toHaveLength(1)
+      expect(commit!.results[0].orderId).toBe('order-1')
+      expect(commit!.results[0].status).toBe('filled')
+    })
+
     it('returns empty result for no updates', async () => {
       const result = await git.sync([], makeGitState())
       expect(result.updatedCount).toBe(0)

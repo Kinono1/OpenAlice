@@ -457,6 +457,73 @@ describe('UTA — sync', () => {
     expect(result.updates[0].currentStatus).toBe('filled')
   })
 
+  it('treats an immediate second sync after fill as a no-op without growing history', async () => {
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      side: 'buy',
+      type: 'limit',
+      qty: 10,
+      price: 150,
+    })
+    uta.commit('limit buy')
+    const pushResult = await uta.push()
+    const orderId = pushResult.submitted[0]?.orderId
+    expect(orderId).toBeDefined()
+
+    broker.fillPendingOrder(orderId!, 149)
+
+    const firstSync = await uta.sync()
+    expect(firstSync.updatedCount).toBe(1)
+    expect(firstSync.updates).toHaveLength(1)
+    expect(firstSync.updates[0].orderId).toBe(orderId)
+    expect(firstSync.updates[0].currentStatus).toBe('filled')
+
+    const commitCountAfterFirstSync = uta.status().commitCount
+    const logLengthAfterFirstSync = uta.log().length
+
+    const secondSync = await uta.sync()
+    expect(secondSync.updatedCount).toBe(0)
+    expect(secondSync.updates).toEqual([])
+    expect(uta.status().commitCount).toBe(commitCountAfterFirstSync)
+    expect(uta.log().length).toBe(logLengthAfterFirstSync)
+    expect(uta.getPendingOrderIds()).toEqual([])
+  })
+
+  it('collapses duplicate pending order ids before querying the broker', async () => {
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      side: 'buy',
+      type: 'limit',
+      qty: 10,
+      price: 150,
+    })
+    uta.commit('limit buy')
+    const pushResult = await uta.push()
+    const orderId = pushResult.submitted[0]?.orderId
+    expect(orderId).toBeDefined()
+
+    broker.fillPendingOrder(orderId!, 149)
+
+    vi.spyOn(uta.git, 'getPendingOrderIds').mockReturnValue([
+      { orderId: orderId!, symbol: 'AAPL' },
+      { orderId: orderId!, symbol: 'AAPL' },
+    ])
+    const getOrderSpy = vi.spyOn(broker, 'getOrder')
+
+    const result = await uta.sync()
+
+    expect(result.updatedCount).toBe(1)
+    expect(result.updates).toHaveLength(1)
+    expect(result.updates[0].orderId).toBe(orderId)
+    expect(getOrderSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('does not update when pending order not found in broker', async () => {
     const { uta, broker } = createUTA()
 

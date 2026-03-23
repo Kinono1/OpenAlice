@@ -449,7 +449,12 @@ export class UnifiedTradingAccount {
   }
 
   async sync(opts?: { delayMs?: number }): Promise<SyncResult> {
-    const pendingOrders = this.git.getPendingOrderIds()
+    const pendingByOrderId = new Map<string, { orderId: string; symbol: string }>()
+    for (const pendingOrder of this.git.getPendingOrderIds()) {
+      pendingByOrderId.delete(pendingOrder.orderId)
+      pendingByOrderId.set(pendingOrder.orderId, pendingOrder)
+    }
+    const pendingOrders = [...pendingByOrderId.values()]
     if (pendingOrders.length === 0) {
       return { hash: '', updatedCount: 0, updates: [] }
     }
@@ -457,7 +462,7 @@ export class UnifiedTradingAccount {
     // Optional delay — gives exchange APIs time to settle before querying
     if (opts?.delayMs) await new Promise(r => setTimeout(r, opts.delayMs))
 
-    const updates: OrderStatusUpdate[] = []
+    const updatesByOrderId = new Map<string, OrderStatusUpdate>()
 
     for (const { orderId, symbol } of pendingOrders) {
       const brokerOrder = await this._callBroker(() => this.broker.getOrder(orderId))
@@ -465,7 +470,7 @@ export class UnifiedTradingAccount {
 
       const status = brokerOrder.orderState.status
       if (status !== 'Submitted' && status !== 'PreSubmitted') {
-        updates.push({
+        updatesByOrderId.set(orderId, {
           orderId,
           symbol,
           previousStatus: 'submitted',
@@ -474,6 +479,7 @@ export class UnifiedTradingAccount {
       }
     }
 
+    const updates = [...updatesByOrderId.values()]
     if (updates.length === 0) {
       return { hash: '', updatedCount: 0, updates: [] }
     }

@@ -356,13 +356,49 @@ export class TradingGit implements ITradingGit {
 
   // ==================== Sync ====================
 
+  private getLatestOrderStatuses(): Map<string, OperationStatus> {
+    const orderStatus = new Map<string, OperationStatus>()
+
+    for (let i = this.commits.length - 1; i >= 0; i--) {
+      for (const result of this.commits[i].results) {
+        if (result.orderId && !orderStatus.has(result.orderId)) {
+          orderStatus.set(result.orderId, result.status)
+        }
+      }
+    }
+
+    return orderStatus
+  }
+
+  private normalizeSyncUpdates(updates: OrderStatusUpdate[]): OrderStatusUpdate[] {
+    const latestByOrderId = new Map<string, OrderStatusUpdate>()
+
+    for (const update of updates) {
+      // Preserve the last observation for an order within a single sync batch.
+      latestByOrderId.delete(update.orderId)
+      latestByOrderId.set(update.orderId, update)
+    }
+
+    return [...latestByOrderId.values()]
+  }
+
   async sync(updates: OrderStatusUpdate[], currentState: GitState): Promise<SyncResult> {
     if (updates.length === 0) {
       return { hash: this.head ?? '', updatedCount: 0, updates: [] }
     }
 
+    const normalizedUpdates = this.normalizeSyncUpdates(updates)
+    const latestStatuses = this.getLatestOrderStatuses()
+    const novelUpdates = normalizedUpdates.filter(
+      update => latestStatuses.get(update.orderId) !== update.currentStatus,
+    )
+
+    if (novelUpdates.length === 0) {
+      return { hash: this.head ?? '', updatedCount: 0, updates: [] }
+    }
+
     const hash = generateCommitHash({
-      updates,
+      updates: novelUpdates,
       timestamp: new Date().toISOString(),
       parentHash: this.head,
     })
@@ -370,9 +406,9 @@ export class TradingGit implements ITradingGit {
     const commit: GitCommit = {
       hash,
       parentHash: this.head,
-      message: `[sync] ${updates.length} order(s) updated`,
+      message: `[sync] ${novelUpdates.length} order(s) updated`,
       operations: [{ action: 'syncOrders' as const }],
-      results: updates.map((u) => ({
+      results: novelUpdates.map((u) => ({
         action: 'syncOrders' as const,
         success: true,
         orderId: u.orderId,
@@ -388,20 +424,11 @@ export class TradingGit implements ITradingGit {
 
     await this.config.onCommit?.(this.exportState())
 
-    return { hash, updatedCount: updates.length, updates }
+    return { hash, updatedCount: novelUpdates.length, updates: novelUpdates }
   }
 
   getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
-    // Scan newest→oldest to find latest known status per orderId
-    const orderStatus = new Map<string, string>()
-
-    for (let i = this.commits.length - 1; i >= 0; i--) {
-      for (const result of this.commits[i].results) {
-        if (result.orderId && !orderStatus.has(result.orderId)) {
-          orderStatus.set(result.orderId, result.status)
-        }
-      }
-    }
+    const orderStatus = this.getLatestOrderStatuses()
 
     // Collect orders still pending
     const pending: Array<{ orderId: string; symbol: string }> = []
