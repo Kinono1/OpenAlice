@@ -118,6 +118,10 @@ function toRequiredParams(
     bbStdDev: r.bbStdDev,
     breakoutPeriod: r.breakoutPeriod,
     breakoutExitPeriod: r.breakoutExitPeriod,
+    volWindowBars: r.volWindowBars,
+    volBaselineBars: r.volBaselineBars,
+    volTriggerRatio: r.volTriggerRatio,
+    volCooldownBars: r.volCooldownBars,
     ensembleThreshold: r.ensembleThreshold,
     ensembleWeights: r.ensembleWeights,
   };

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "execution_result.v1",
+  "generatedAt": "2026-03-26T12:00:00.000Z",
+  "symbol": "BTC/USD",
+  "action": "placeOrder",
+  "success": true,
+  "provenance": {
+    "producer": "openalice.live_gate_manager",
+    "environment": "paper"
+  },
+  "request": {
+    "side": "buy",
+    "reduceOnly": false,
+    "type": "market",
+    "idempotencyKey": "intent-001"
+  },
+  "outcome": {
+    "orderId": "ord-123",
+    "orderStatus": "filled",
+    "requestedQty": 0.2,
+    "filledQty": 0.2,
+    "expectedPrice": 100,
+    "actualPrice": 101,
+    "slippageBps": 100,
+    "submittedAtMs": 1774000000000,
+    "firstFillAtMs": 1774000000500,
+    "completedAtMs": 1774000001000,
+    "message": "paper fill completed"
+  }
+}

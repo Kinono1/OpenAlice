@@ -1,0 +1,360 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-11T04:25:17Z",
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "STC2_BASIS_C1",
+      "strategyName": "stagec2_basis_compression_breakout_19_9",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_BASIS_C2",
+      "strategyName": "stagec2_basis_compression_breakout_22_10",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 22,
+        "breakoutExitPeriod": 10,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_BASIS_C3",
+      "strategyName": "stagec2_basis_compression_breakout_25_12",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_BASIS_C4",
+      "strategyName": "stagec2_basis_compression_breakout_28_13",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 28,
+        "breakoutExitPeriod": 13,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_BASIS_C5",
+      "strategyName": "stagec2_basis_compression_breakout_31_15",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 31,
+        "breakoutExitPeriod": 15,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_TREND_C1",
+      "strategyName": "stagec2_vol_confirmed_trend_16_75",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 16,
+        "trendSlowPeriod": 75,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_TREND_C2",
+      "strategyName": "stagec2_vol_confirmed_trend_18_81",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 81,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_TREND_C3",
+      "strategyName": "stagec2_vol_confirmed_trend_20_87",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 87,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_TREND_C4",
+      "strategyName": "stagec2_vol_confirmed_trend_22_97",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 22,
+        "trendSlowPeriod": 97,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_TREND_C5",
+      "strategyName": "stagec2_vol_confirmed_trend_24_105",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 24,
+        "trendSlowPeriod": 105,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "STC2_ENSEMBLE_C1",
+      "strategyName": "stagec2_conservative_ensemble_1",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": false,
+        "ensembleThreshold": 0.4495,
+        "ensembleWeights": {
+          "trend": 1.8,
+          "meanReversion": 0.6,
+          "breakout": 1.0
+        },
+        "rsiPeriod": 12,
+        "rsiOversold": 30,
+        "rsiOverbought": 68,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 87,
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12
+      }
+    },
+    {
+      "strategyId": "STC2_ENSEMBLE_C2",
+      "strategyName": "stagec2_conservative_ensemble_2",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": false,
+        "ensembleThreshold": 0.4695,
+        "ensembleWeights": {
+          "trend": 1.7,
+          "meanReversion": 0.7,
+          "breakout": 1.0
+        },
+        "rsiPeriod": 12,
+        "rsiOversold": 30,
+        "rsiOverbought": 68,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 87,
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12
+      }
+    },
+    {
+      "strategyId": "STC2_ENSEMBLE_C3",
+      "strategyName": "stagec2_conservative_ensemble_3",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": false,
+        "ensembleThreshold": 0.4895,
+        "ensembleWeights": {
+          "trend": 1.6,
+          "meanReversion": 0.8,
+          "breakout": 1.0
+        },
+        "rsiPeriod": 12,
+        "rsiOversold": 30,
+        "rsiOverbought": 68,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 87,
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12
+      }
+    },
+    {
+      "strategyId": "STC2_ENSEMBLE_C4",
+      "strategyName": "stagec2_conservative_ensemble_4",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": false,
+        "ensembleThreshold": 0.5195,
+        "ensembleWeights": {
+          "trend": 1.5,
+          "meanReversion": 0.8,
+          "breakout": 1.1
+        },
+        "rsiPeriod": 12,
+        "rsiOversold": 30,
+        "rsiOverbought": 68,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 87,
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12
+      }
+    },
+    {
+      "strategyId": "STC2_ENSEMBLE_C5",
+      "strategyName": "stagec2_conservative_ensemble_5",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": false,
+        "ensembleThreshold": 0.5495,
+        "ensembleWeights": {
+          "trend": 1.4,
+          "meanReversion": 0.9,
+          "breakout": 1.1
+        },
+        "rsiPeriod": 12,
+        "rsiOversold": 30,
+        "rsiOverbought": 68,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 87,
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12
+      }
+    }
+  ],
+  "hypothesisCompile": {
+    "schemaVersion": "hypothesis_candidate_compile.v1",
+    "runId": "20260303T120652Z",
+    "generatedAt": "2026-03-03T12:06:52Z",
+    "plan": "A",
+    "inputs": {
+      "hypotheses": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/hypotheses/backlog.v1.json",
+      "baseCandidates": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/docs/research/strategy_candidates.v1.json",
+      "bestTripletSource": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/local_search/best_trend_triplet.latest.v1.json",
+      "bestTripletSchemaVersion": "best_trend_triplet.v1",
+      "bestTripletSourceType": "object"
+    },
+    "stats": {
+      "inspectedHypotheses": 20,
+      "outputCandidates": 3,
+      "themeCounts": {
+        "bestTriplet": 3
+      },
+      "candidateModeRequested": "blend",
+      "candidateModeEffective": "blend",
+      "complexityProfile": "default",
+      "bestTripletLoaded": true,
+      "bestTripletSeedCount": 3,
+      "bestTripletLoadError": ""
+    },
+    "themesUsed": [
+      "bestTriplet",
+      "bestTriplet",
+      "bestTriplet"
+    ]
+  },
+  "stageCCompile": {
+    "schemaVersion": "stage_c_candidate_generator.v1",
+    "generatedAt": "2026-03-11T04:25:17Z",
+    "profile": "v2",
+    "sourceFeatureRoot": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m",
+    "symbols": [
+      {
+        "instId": "BTC-USDT",
+        "path": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m/okx_inst_id=BTC-USDT/data.csv.zst",
+        "sampleRows": 12000,
+        "stats": {
+          "spreadMedian": 4.727995095298069e-05,
+          "basisStd": 8.643404568531022e-05,
+          "volumeZMedian": 0.5570021271677982,
+          "rvMedian": 0.0013605220175903093,
+          "smaGapMedian": 0.0007785719159585924,
+          "labelLongBias": 0.49916666666666665
+        }
+      },
+      {
+        "instId": "ETH-USDT",
+        "path": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m/okx_inst_id=ETH-USDT/data.csv.zst",
+        "sampleRows": 12000,
+        "stats": {
+          "spreadMedian": 5.161091008900702e-05,
+          "basisStd": 0.00010201775276146183,
+          "volumeZMedian": 0.5377896918130454,
+          "rvMedian": 0.00165279850087379,
+          "smaGapMedian": 0.0009558271067675594,
+          "labelLongBias": 0.49775
+        }
+      },
+      {
+        "instId": "SOL-USDT",
+        "path": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m/okx_inst_id=SOL-USDT/data.csv.zst",
+        "sampleRows": 12000,
+        "stats": {
+          "spreadMedian": 0.00012207031250006245,
+          "basisStd": 0.0001674967637318207,
+          "volumeZMedian": 0.5436453101508102,
+          "rvMedian": 0.001896492556022048,
+          "smaGapMedian": 0.001101082059102143,
+          "labelLongBias": 0.48383333333333334
+        }
+      }
+    ],
+    "aggregateStats": {
+      "spreadMedian": 7.365372451401671e-05,
+      "basisStd": 0.00011864952072619759,
+      "volumeZMedian": 0.5461457097105512,
+      "rvMedian": 0.0016366043581620491,
+      "smaGapMedian": 0.0009451603606094316,
+      "labelLongBias": 0.4935833333333333
+    },
+    "families": [
+      {
+        "family": "compressed_basis_breakout_long_only",
+        "hypothesis": "Keep the only Sprint 1 direction that improved PBO, but make it long-only and slower so DSR does not collapse immediately.",
+        "candidateCount": 5
+      },
+      {
+        "family": "volume_confirmed_trend_long_only",
+        "hypothesis": "Use slower trend confirmation windows and remove short-side churn before expanding the candidate pool again.",
+        "candidateCount": 5
+      },
+      {
+        "family": "conservative_trend_dominant_ensemble",
+        "hypothesis": "Raise ensemble thresholds and force trend-dominant weighting to test whether weaker adaptive variants were the main source of DSR collapse.",
+        "candidateCount": 5
+      }
+    ],
+    "outputCandidateCount": 15
+  }
+}

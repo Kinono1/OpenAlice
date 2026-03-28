@@ -5,6 +5,11 @@ import type { IWallet } from './wallet/interfaces';
 import type { OrderStatusUpdate, WalletState } from './wallet/types';
 import { createCryptoWalletToolsImpl } from './wallet/adapter';
 
+export interface SyncedCryptoOrderUpdate extends OrderStatusUpdate {
+  side?: 'buy' | 'sell';
+  reduceOnly?: boolean;
+}
+
 /**
  * Create crypto trading AI tools (market interaction + wallet management)
  *
@@ -21,6 +26,7 @@ export function createCryptoTradingTools(
   tradingEngine: ICryptoTradingEngine,
   wallet: IWallet,
   getWalletState?: () => Promise<WalletState>,
+  onSyncedOrderUpdates?: (updates: SyncedCryptoOrderUpdate[]) => Promise<void>,
 ) {
   return {
     // ==================== Wallet operations ====================
@@ -50,7 +56,7 @@ Returns the number of orders that changed status.
         }
 
         const exchangeOrders = await tradingEngine.getOrders();
-        const updates: OrderStatusUpdate[] = [];
+        const updates: SyncedCryptoOrderUpdate[] = [];
 
         for (const { orderId, symbol } of pendingOrders) {
           const exchangeOrder = exchangeOrders.find(o => o.id === orderId);
@@ -65,6 +71,12 @@ Returns the number of orders that changed status.
               currentStatus: newStatus,
               filledPrice: exchangeOrder.filledPrice,
               filledSize: exchangeOrder.filledSize,
+              previousFilledSize: 0,
+              currentFilledSize: exchangeOrder.filledSize,
+              remainingSize: exchangeOrder.remainingSize,
+              exchangeUpdateTs: exchangeOrder.exchangeUpdateTs,
+              side: exchangeOrder.side,
+              reduceOnly: exchangeOrder.reduceOnly,
             });
           }
         }
@@ -77,7 +89,11 @@ Returns the number of orders that changed status.
         }
 
         const state = await getWalletState();
-        return await wallet.sync(updates, state);
+        const result = await wallet.sync(updates, state);
+        if (onSyncedOrderUpdates) {
+          await onSyncedOrderUpdates(updates);
+        }
+        return result;
       },
     }),
 

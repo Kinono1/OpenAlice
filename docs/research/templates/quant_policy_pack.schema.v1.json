@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/quant_policy_pack.schema.v1.json",
+  "title": "OpenAlice Quant Policy Pack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "policyMode",
+    "inputs",
+    "principles",
+    "productionPolicy",
+    "governanceCadence",
+    "gatePolicy",
+    "escalationRules"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "quant_policy_pack.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "policyMode": {
+      "type": "string",
+      "enum": ["rebuild_mode", "optimize_mode"]
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["stageAResult", "stageBPacket", "precontinueDecision"],
+      "properties": {
+        "stageAResult": { "type": "string", "minLength": 1 },
+        "stageBPacket": { "type": "string", "minLength": 1 },
+        "precontinueDecision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "principles": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "productionPolicy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["thresholdFreeze", "exceptionPolicy"],
+      "properties": {
+        "thresholdFreeze": { "type": "object" },
+        "exceptionPolicy": { "type": "object" }
+      }
+    },
+    "governanceCadence": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["internalReview", "advisorReview", "decisionSLAHours"],
+      "properties": {
+        "internalReview": { "type": "string", "minLength": 1 },
+        "advisorReview": { "type": "string", "minLength": 1 },
+        "decisionSLAHours": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "gatePolicy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["recommendedRoute"],
+      "properties": {
+        "recommendedRoute": { "type": "string", "minLength": 1 }
+      }
+    },
+    "escalationRules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["ruleId", "description"],
+        "properties": {
+          "ruleId": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

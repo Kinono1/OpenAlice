@@ -15,6 +15,17 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 Current branch: `work/kino-mainline`  
 Branch-specific guide: [`README.github.md`](README.github.md)
 
+## Session Handoff
+
+Before starting any new Codex session on this repo, load these files first:
+
+1. `chatgpt/Memory.md`
+2. `chatgpt/task_plan.md`
+3. `chatgpt/findings.md`
+4. `chatgpt/progress.md`
+
+These four files are the canonical continuity pack for OpenAlice. Any future OpenAlice-related session should update them instead of relying on chat history alone.
+
 - **File-driven** — Markdown defines persona and tasks, JSON defines config, JSONL stores conversations. Both humans and AI control Alice by reading and modifying files. The same read/write primitives that power vibe coding transfer directly to vibe trading. No database, no containers, just files.
 - **Reasoning-driven** — every trading decision is based on continuous reasoning and signal mixing.
 - **OS-native** — Alice can interact with your operating system. Search the web through your browser, send messages via Telegram, and connect to local devices.
@@ -162,6 +173,13 @@ pnpm dev        # start backend (port 3002) with watch mode
 pnpm dev:ui     # start frontend dev server (port 5173) with hot reload
 pnpm build      # production build (backend + UI)
 pnpm data:download:okx -- --universe config --timeframe 1h --start 2023-01-01
+pnpm data:download:okx:full -- --datasetRoot data/market/okx_historical --timeframes 1h,15m,5m --indexBars 1H,1D,1Dutc --maxDiskBytes 120GB
+pnpm data:download:okx:candles -- --datasetRoot data/market/okx_historical --timeframes 1h,15m,5m --maxDiskBytes 120GB
+pnpm data:download:okx:index -- --datasetRoot data/market/okx_historical --bars 1H,1D,1Dutc
+pnpm data:download:okx:trades -- --datasetRoot data/market/okx_historical --instType all --maxDiskBytes 120GB
+pnpm data:import:okx:trades-history -- --datasetRoot data/market/okx_historical --inputDir data/raw/okx/historical/trades
+pnpm data:report:okx:coverage -- --datasetRoot data/market/okx_historical
+pnpm data:materialize:okx:training -- --datasetRoot data/market/okx_historical --timeframe 1h --outputDir data/market/okx
 pnpm data:download:binance -- --source okx-usdt --market both --timeframe 1d --startMonth 2020-01
 pnpm data:report:universe -- --quote USDT
 pnpm ml:eval    # run ML Ensemble V1 evaluation on recent OKX candles
@@ -169,6 +187,26 @@ pnpm test       # run tests
 ```
 
 > **Note:** Port 3002 serves the UI only after `pnpm build`. For frontend development, use `pnpm dev:ui` (port 5173) which proxies to the backend and provides hot reload.
+
+## OKX Historical Dataset Pipeline
+
+Historical market datasets are written under `data/market/okx_historical` and include:
+
+- candles (`candles/{timeframe}/{spot|swap}/{instId}/{YYYY-MM}.csv.zst`)
+- index candles (`index_candles/{bar}/{instId}/{YYYY-MM}.csv.zst`)
+- trades (`trades/{instId}/{YYYY-MM-DD}.ndjson.zst`)
+- run state and reports (`state/*.json`, `reports/*.json`)
+
+Supported candle bars for OKX historical endpoints include:
+
+- minute: `1m`, `3m`, `5m`, `15m`, `30m`
+- hour/day/week/month: `1H`, `2H`, `4H`, `6H`, `12H`, `1D`, `2D`, `3D`, `1W`, `1M`, `3M`
+- UTC-aligned variants: `6Hutc`, `12Hutc`, `1Dutc`, `2Dutc`, `3Dutc`, `1Wutc`, `1Mutc`, `3Mutc`
+
+Notes:
+
+- `history-trades` API is limited to a recent window; use `data:import:okx:trades-history` to import older local historical packages.
+- `--maxDiskBytes` is enforced by the downloaders. When budget is hit, they stop gracefully and emit pending queue reports for resume.
 
 ## Branch Workflow
 

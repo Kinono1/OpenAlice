@@ -49,7 +49,52 @@
       "properties": {
         "meanPbo": { "type": "number" },
         "meanDsrProbability": { "type": "number" },
-        "fdrQ": { "type": "number" }
+        "fdrQ": { "type": "number" },
+        "fdrMethod": {
+          "type": "string",
+          "enum": [
+            "bh",
+            "by",
+            "storey_bh",
+            "regime_segmented_bh",
+            "cv_storey_bh",
+            "stability_bh"
+          ]
+        },
+        "fdrDiagnostics": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "required": [
+            "method",
+            "alpha",
+            "candidateCount",
+            "harmonicFactorCm",
+            "storeyPi0",
+            "storeyLambda"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "bh",
+                "by",
+                "storey_bh",
+                "regime_segmented_bh",
+                "cv_storey_bh",
+                "stability_bh"
+              ]
+            },
+            "alpha": { "type": "number" },
+            "candidateCount": { "type": "integer", "minimum": 1 },
+            "harmonicFactorCm": { "type": ["number", "null"] },
+            "storeyPi0": { "type": ["number", "null"] },
+            "storeyLambda": { "type": ["number", "null"] }
+          }
+        },
+        "regimeFdrDiagnostics": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        }
       }
     },
     "candidates": {
@@ -76,7 +121,9 @@
             "properties": {
               "pbo": { "type": "number" },
               "dsrProbability": { "type": "number" },
-              "fdrQ": { "type": "number" }
+              "fdrQ": { "type": "number" },
+              "hardGapTotal": { "type": "number" },
+              "wfoRiskScore": { "type": "number" }
             }
           },
           "releaseGate": {

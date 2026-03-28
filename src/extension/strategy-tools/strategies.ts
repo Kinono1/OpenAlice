@@ -77,6 +77,14 @@ export function resolveStrategyParams(
       params?.breakoutPeriod ?? DEFAULT_STRATEGY_PARAMS.breakoutPeriod,
     breakoutExitPeriod:
       params?.breakoutExitPeriod ?? DEFAULT_STRATEGY_PARAMS.breakoutExitPeriod,
+    volWindowBars:
+      params?.volWindowBars ?? DEFAULT_STRATEGY_PARAMS.volWindowBars,
+    volBaselineBars:
+      params?.volBaselineBars ?? DEFAULT_STRATEGY_PARAMS.volBaselineBars,
+    volTriggerRatio:
+      params?.volTriggerRatio ?? DEFAULT_STRATEGY_PARAMS.volTriggerRatio,
+    volCooldownBars:
+      params?.volCooldownBars ?? DEFAULT_STRATEGY_PARAMS.volCooldownBars,
     ensembleThreshold,
     ensembleWeights: resolveEnsembleWeights(params?.ensembleWeights),
   };
@@ -87,11 +95,22 @@ export function getStrategyMinimumBars(
   params?: StrategyParams
 ): number {
   const p = resolveStrategyParams(params);
+  const volGateBars = p.volWindowBars + p.volBaselineBars + 2;
   if (strategy === "trend") return p.trendSlowPeriod;
   if (strategy === "meanReversion")
     return Math.max(p.rsiPeriod + 1, p.bbPeriod);
   const breakoutBars = Math.max(p.breakoutPeriod + 1, p.breakoutExitPeriod + 1);
   if (strategy === "breakout") return breakoutBars;
+  if (strategy === "volNoTradeFilter") return volGateBars;
+  if (strategy === "volTrend") {
+    return Math.max(p.trendSlowPeriod, volGateBars);
+  }
+  if (strategy === "volBreakout") {
+    return Math.max(
+      breakoutBars,
+      volGateBars
+    );
+  }
   return Math.max(
     p.trendSlowPeriod,
     Math.max(p.rsiPeriod + 1, p.bbPeriod),
@@ -120,7 +139,94 @@ export function evaluateStrategy({
   if (strategy === "breakout") {
     return evaluateBreakout(candles, index, currentPosition, resolved);
   }
+  if (strategy === "volNoTradeFilter") {
+    return evaluateVolNoTradeFilter(candles, index, currentPosition, resolved);
+  }
+  if (strategy === "volBreakout") {
+    return evaluateVolBreakout(candles, index, currentPosition, resolved);
+  }
+  if (strategy === "volTrend") {
+    return evaluateVolTrend(candles, index, currentPosition, resolved);
+  }
   return evaluateEnsemble(candles, index, currentPosition, resolved);
+}
+
+function realizedVolOverWindow(
+  candles: MarketData[],
+  endInclusive: number,
+  windowBars: number
+): number | null {
+  if (endInclusive < windowBars) {
+    return null;
+  }
+  const values: number[] = [];
+  for (let idx = endInclusive - windowBars + 1; idx <= endInclusive; idx++) {
+    const prev = candles[idx - 1]?.close;
+    const current = candles[idx]?.close;
+    if (!prev || !current || prev <= 0 || current <= 0) continue;
+    values.push(Math.log(current / prev));
+  }
+  if (values.length < Math.max(5, Math.floor(windowBars / 4))) {
+    return null;
+  }
+  const variance =
+    values.reduce((sum, value) => sum + value * value, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 1) return ordered[mid];
+  return (ordered[mid - 1] + ordered[mid]) / 2;
+}
+
+interface VolGateState {
+  currentVol: number;
+  baselineVol: number;
+  volRatio: number;
+  gateOpen: boolean;
+}
+
+function getVolGateState(
+  candles: MarketData[],
+  index: number,
+  p: ResolvedStrategyParams
+): VolGateState {
+  const currentVol = realizedVolOverWindow(candles, index, p.volWindowBars);
+  const baselineVols: number[] = [];
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && baselineVols.length < p.volBaselineBars;
+    cursor--
+  ) {
+    const vol = realizedVolOverWindow(candles, cursor, p.volWindowBars);
+    if (typeof vol === "number" && Number.isFinite(vol) && vol > 0) {
+      baselineVols.push(vol);
+    }
+  }
+  const baselineVol = median(baselineVols);
+  const volRatio = currentVol && baselineVol > 0 ? currentVol / baselineVol : 0;
+  return {
+    currentVol: currentVol ?? 0,
+    baselineVol,
+    volRatio,
+    gateOpen: volRatio >= p.volTriggerRatio,
+  };
+}
+
+function volGateIndicators(
+  state: VolGateState,
+  p: ResolvedStrategyParams
+): Record<string, number> {
+  return {
+    currentVol: state.currentVol,
+    baselineVol: state.baselineVol,
+    volRatio: state.volRatio,
+    volTriggerRatio: p.volTriggerRatio,
+    volGateOpen: state.gateOpen ? 1 : 0,
+  };
 }
 
 function evaluateTrend(
@@ -284,6 +390,194 @@ function evaluateBreakout(
       breakoutLow,
       exitHigh,
       exitLow,
+    },
+  };
+}
+
+function evaluateVolNoTradeFilter(
+  candles: MarketData[],
+  index: number,
+  currentPosition: PositionSignal,
+  p: ResolvedStrategyParams
+): StrategyDecision {
+  const minBars = p.volWindowBars + p.volBaselineBars + 2;
+  if (index + 1 < minBars) {
+    return {
+      strategy: "volNoTradeFilter",
+      signal: 0,
+      reason: "Not enough bars for vol no-trade filter.",
+      indicators: { bars: index + 1 },
+    };
+  }
+
+  const state = getVolGateState(candles, index, p);
+  const close = candles[index].close;
+  const reason = state.gateOpen
+    ? "High-vol filter active; stay flat."
+    : "Filter-only control remains flat while volatility stays below the suppression threshold.";
+
+  return {
+    strategy: "volNoTradeFilter",
+    signal: 0,
+    reason,
+    indicators: {
+      close,
+      ...volGateIndicators(state, p),
+      volFilterActive: state.gateOpen ? 1 : 0,
+      priorPosition: currentPosition,
+    },
+  };
+}
+
+function evaluateVolBreakout(
+  candles: MarketData[],
+  index: number,
+  currentPosition: PositionSignal,
+  p: ResolvedStrategyParams
+): StrategyDecision {
+  const breakoutBars = Math.max(p.breakoutPeriod + 1, p.breakoutExitPeriod + 1);
+  const minBars = Math.max(
+    breakoutBars,
+    p.volWindowBars + p.volBaselineBars + 2
+  );
+  if (index + 1 < minBars) {
+    return {
+      strategy: "volBreakout",
+      signal: 0,
+      reason: "Not enough bars for vol-breakout signal.",
+      indicators: { bars: index + 1 },
+    };
+  }
+
+  const state = getVolGateState(candles, index, p);
+  const close = candles[index].close;
+  const breakoutHigh = Math.max(
+    ...highs(candles, index - p.breakoutPeriod, index - 1)
+  );
+  const breakoutLow = Math.min(
+    ...lows(candles, index - p.breakoutPeriod, index - 1)
+  );
+  const exitHigh = Math.max(
+    ...highs(candles, index - p.breakoutExitPeriod, index - 1)
+  );
+  const exitLow = Math.min(
+    ...lows(candles, index - p.breakoutExitPeriod, index - 1)
+  );
+
+  let signal: PositionSignal = currentPosition;
+  let reason = state.gateOpen
+    ? "Vol gate open but no breakout trigger."
+    : "Vol gate closed; breakout entries suppressed.";
+
+  let cooldownActive = false;
+  if (currentPosition === 0 && state.gateOpen && p.volCooldownBars > 0) {
+    const cooldownStart = Math.max(minBars - 1, index - p.volCooldownBars);
+    for (let cursor = cooldownStart; cursor < index; cursor++) {
+      const priorHigh = Math.max(
+        ...highs(candles, cursor - p.breakoutPeriod, cursor - 1)
+      );
+      const priorLow = Math.min(
+        ...lows(candles, cursor - p.breakoutPeriod, cursor - 1)
+      );
+      const priorClose = candles[cursor].close;
+      if (priorClose > priorHigh || priorClose < priorLow) {
+        cooldownActive = true;
+        break;
+      }
+    }
+  }
+
+  if (currentPosition === 0) {
+    if (state.gateOpen && !cooldownActive && close > breakoutHigh) {
+      signal = 1;
+      reason = "Vol gate open and close broke above breakout channel.";
+    } else if (state.gateOpen && !cooldownActive && close < breakoutLow) {
+      signal = p.allowShort ? -1 : 0;
+      reason = p.allowShort
+        ? "Vol gate open and close broke below breakout channel."
+        : "Vol gate open but downside breakout ignored because shorting is disabled.";
+    } else if (state.gateOpen && cooldownActive) {
+      reason = "Vol gate open but cooldown suppresses repeated breakout entries.";
+    }
+  } else if (currentPosition === 1) {
+    if (close < exitLow) {
+      signal = 0;
+      reason = "Long exit: close fell below trailing exit channel.";
+    }
+  } else if (currentPosition === -1) {
+    if (close > exitHigh) {
+      signal = 0;
+      reason = "Short exit: close rose above trailing exit channel.";
+    }
+  }
+
+  return {
+    strategy: "volBreakout",
+    signal,
+    reason,
+    indicators: {
+      close,
+      breakoutHigh,
+      breakoutLow,
+      exitHigh,
+      exitLow,
+      ...volGateIndicators(state, p),
+      volCooldownBars: p.volCooldownBars,
+      cooldownActive: cooldownActive ? 1 : 0,
+    },
+  };
+}
+
+function evaluateVolTrend(
+  candles: MarketData[],
+  index: number,
+  currentPosition: PositionSignal,
+  p: ResolvedStrategyParams
+): StrategyDecision {
+  const minBars = Math.max(
+    p.trendSlowPeriod,
+    p.volWindowBars + p.volBaselineBars + 2
+  );
+  if (index + 1 < minBars) {
+    return {
+      strategy: "volTrend",
+      signal: 0,
+      reason: "Not enough bars for vol-trend signal.",
+      indicators: { bars: index + 1 },
+    };
+  }
+
+  const state = getVolGateState(candles, index, p);
+  if (currentPosition === 0 && !state.gateOpen) {
+    return {
+      strategy: "volTrend",
+      signal: 0,
+      reason: "Vol gate closed; trend entries suppressed.",
+      indicators: {
+        close: candles[index].close,
+        ...volGateIndicators(state, p),
+      },
+    };
+  }
+
+  const trend = evaluateTrend(candles, index, currentPosition, p);
+  let reason = trend.reason;
+  if (currentPosition === 0 && state.gateOpen) {
+    reason =
+      trend.signal === 0
+        ? "Vol gate open but trend signal is neutral."
+        : `Vol gate open. ${trend.reason}`;
+  } else if (currentPosition !== 0 && !state.gateOpen) {
+    reason = `Vol gate closed, but existing position still follows trend exit logic. ${trend.reason}`;
+  }
+
+  return {
+    strategy: "volTrend",
+    signal: trend.signal,
+    reason,
+    indicators: {
+      ...trend.indicators,
+      ...volGateIndicators(state, p),
     },
   };
 }

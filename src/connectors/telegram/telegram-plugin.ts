@@ -14,6 +14,39 @@ import { readAIConfig, writeAIConfig, type AIBackend } from '../../core/ai-confi
 import type { ConnectorCenter, Connector } from '../../core/connector-center.js'
 
 const MAX_MESSAGE_LENGTH = 4096
+const AUTH_REPLY_THROTTLE_TTL_MS = 60 * 60_000
+const AUTH_REPLY_THROTTLE_PRUNE_INTERVAL_MS = 15 * 60_000
+let warnedLegacyTelegramPlugin = false
+
+export function pruneThrottleEntries(
+  throttle: Map<number, number>,
+  now = Date.now(),
+  ttlMs = AUTH_REPLY_THROTTLE_TTL_MS,
+): number {
+  let removed = 0
+  for (const [chatId, lastSentAt] of throttle.entries()) {
+    if (now - lastSentAt > ttlMs) {
+      throttle.delete(chatId)
+      removed += 1
+    }
+  }
+  return removed
+}
+
+function createTelegramFetch(): typeof fetch {
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    const normalizedInit = init ? { ...init } : undefined
+    if (
+      normalizedInit &&
+      "signal" in normalizedInit &&
+      normalizedInit.signal &&
+      !(normalizedInit.signal instanceof AbortSignal)
+    ) {
+      delete normalizedInit.signal
+    }
+    return fetch(input, normalizedInit)
+  }
+}
 
 const BACKEND_LABELS: Record<AIBackend, string> = {
   'claude-code': 'Claude Code',
@@ -34,6 +67,7 @@ export class TelegramPlugin implements Plugin {
 
   /** Throttle: last time we sent an auth-guidance reply per chatId. */
   private authReplyThrottle = new Map<number, number>()
+  private authReplyThrottlePruneTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
     config: Omit<TelegramConfig, 'pollingTimeout'> & { pollingTimeout?: number },
@@ -44,6 +78,13 @@ export class TelegramPlugin implements Plugin {
   }
 
   async start(engineCtx: EngineContext) {
+    if (!warnedLegacyTelegramPlugin && process.env.OPENALICE_SILENCE_TELEGRAM_LEGACY_WARNING !== '1') {
+      warnedLegacyTelegramPlugin = true
+      console.warn(
+        'telegram: using legacy OpenAlice standalone connector. ' +
+        'Production multi-account Telegram behavior may come from the installed OpenClaw runtime instead of this file.'
+      )
+    }
     this.connectorCenter = engineCtx.connectorCenter
 
     // Inject agent config into Claude Code config (used by /compact command)
@@ -53,7 +94,15 @@ export class TelegramPlugin implements Plugin {
       ...this.claudeCodeConfig,
     }
 
-    const bot = new Bot(this.config.token)
+    const bot = new Bot(this.config.token, {
+      client: {
+        // Force grammY to use Node's global fetch so the app-wide undici
+        // dispatcher/proxy settings apply to Telegram API traffic. grammY's
+        // Node platform can pass an AbortSignal implementation that undici
+        // does not accept, so normalize the signal before forwarding.
+        fetch: createTelegramFetch(),
+      },
+    })
 
     // Auto-retry on 429 rate limits
     bot.api.config.use(autoRetry())
@@ -63,6 +112,10 @@ export class TelegramPlugin implements Plugin {
       console.error('telegram bot error:', err)
     })
 
+    this.authReplyThrottlePruneTimer = setInterval(() => {
+      pruneThrottleEntries(this.authReplyThrottle)
+    }, AUTH_REPLY_THROTTLE_PRUNE_INTERVAL_MS)
+
     // ── Middleware: auth guard (always active) ──
     bot.use(async (ctx, next) => {
       const chatId = ctx.chat?.id
@@ -71,6 +124,7 @@ export class TelegramPlugin implements Plugin {
 
       // Unauthorized — log chat ID for operator, throttle reply (60s)
       const now = Date.now()
+      pruneThrottleEntries(this.authReplyThrottle, now)
       const last = this.authReplyThrottle.get(chatId) ?? 0
       if (now - last > 60_000) {
         this.authReplyThrottle.set(chatId, now)
@@ -189,6 +243,11 @@ export class TelegramPlugin implements Plugin {
   async stop() {
     this.merger?.flush()
     await this.bot?.stop()
+    if (this.authReplyThrottlePruneTimer) {
+      clearInterval(this.authReplyThrottlePruneTimer)
+      this.authReplyThrottlePruneTimer = null
+    }
+    this.authReplyThrottle.clear()
     this.unregisterConnector?.()
   }
 

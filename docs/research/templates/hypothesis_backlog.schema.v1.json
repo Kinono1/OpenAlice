@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/hypothesis_backlog.schema.v1.json",
+  "title": "OpenAlice Hypothesis Backlog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "hypotheses"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "hypothesis_backlog.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scan", "breakdown"],
+      "properties": {
+        "scan": {
+          "type": "string",
+          "minLength": 1
+        },
+        "breakdown": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shortlist": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "failureModes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "selectionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minMethodFamilyDiversityRequested",
+        "observedMethodFamilyDiversity",
+        "observedMethodFamilies",
+        "shortlistLoaded",
+        "shortlistRows"
+      ],
+      "properties": {
+        "minMethodFamilyDiversityRequested": { "type": "integer", "minimum": 0 },
+        "observedMethodFamilyDiversity": { "type": "integer", "minimum": 0 },
+        "observedMethodFamilies": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "shortlistLoaded": { "type": "boolean" },
+        "shortlistRows": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "paperId",
+          "title",
+          "source",
+          "actionHint",
+          "expectedImpact",
+          "targetMetric",
+          "testPlan",
+          "priority"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^HYP-[0-9]{3,}$"
+          },
+          "paperId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "methodFamily": {
+            "type": "string",
+            "minLength": 1
+          },
+          "experimentTemplateId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidenceType": {
+            "type": "string",
+            "enum": ["digest", "shortlist", "digest+shortlist"]
+          },
+          "actionHint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expectedImpact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetMetric": {
+            "type": "string",
+            "minLength": 1
+          },
+          "testPlan": {
+            "type": "string",
+            "minLength": 1
+          },
+          "priority": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  }
+}

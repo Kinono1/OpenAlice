@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "project": "OpenAlice",
+  "workspaceMode": "flat",
+  "canonicalHandoffPath": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/chatgpt",
+  "readAllFilesInDirectory": true,
+  "readOrder": [
+    "Memory.md",
+    "task_plan.md",
+    "findings.md",
+    "progress.md"
+  ],
+  "conflictResolution": {
+    "rule": "if README_ARCHIVED.md conflicts with active handoff files, prefer active handoff files in readOrder, then newer timestamps in this same directory, and treat README_ARCHIVED.md as lowest precedence",
+    "precedence": [
+      "Memory.md",
+      "task_plan.md",
+      "findings.md",
+      "progress.md",
+      "newer_timestamps_in_same_directory",
+      "README_ARCHIVED.md"
+    ]
+  },
+  "externalPathPolicy": {
+    "doNotJumpToPaths": [
+      "/Users/kino/Files/work_projects/chatgpt",
+      "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/docs/OpenAlice/chatgpt"
+    ],
+    "exception": "only if the user explicitly asks to validate, compare, or migrate another handoff source"
+  },
+  "purpose": [
+    "lock file location boundary",
+    "lock source-of-truth boundary",
+    "lock read-order boundary"
+  ]
+}

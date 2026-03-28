@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/pdf_extract_report.schema.v1.json",
+  "title": "OpenAlice PDF Extract Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "runId",
+    "digestPath",
+    "outDir",
+    "config",
+    "summary",
+    "papers",
+    "errors"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "pdf_extract_report.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "digestPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxPapers", "timeoutSec", "minTextChars", "dryRun"],
+      "properties": {
+        "maxPapers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeoutSec": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minTextChars": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dryRun": {
+          "type": "boolean"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalDigestEntries",
+        "withPdfUrl",
+        "selected",
+        "processed",
+        "succeeded",
+        "failed",
+        "downloaded",
+        "skippedExistingPdf",
+        "dryRunCount"
+      ],
+      "properties": {
+        "totalDigestEntries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "withPdfUrl": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selected": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "succeeded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "downloaded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skippedExistingPdf": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dryRunCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "papers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paperIndex",
+          "safeId",
+          "paperId",
+          "title",
+          "pdfUrl",
+          "pdfPath",
+          "textPath",
+          "status",
+          "downloadStatus",
+          "method",
+          "pages",
+          "textChars",
+          "errors"
+        ],
+        "properties": {
+          "paperIndex": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "safeId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "paperId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "pdfUrl": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pdfPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "textPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "success", "failed", "dry_run"]
+          },
+          "downloadStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "downloaded",
+              "skipped_existing",
+              "failed",
+              "dry_run"
+            ]
+          },
+          "method": {
+            "type": "string",
+            "enum": ["none", "pypdf", "pdfplumber", "pdftotext"]
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "textChars": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

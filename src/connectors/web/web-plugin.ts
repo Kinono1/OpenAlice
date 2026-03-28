@@ -16,9 +16,31 @@ import { createCryptoRoutes } from './routes/crypto.js'
 import { createSecuritiesRoutes } from './routes/securities.js'
 import { createDevRoutes } from './routes/dev.js'
 import { createToolsRoutes } from './routes/tools.js'
+import { RequestBodyTooLargeError } from './request-body.js'
 
 export interface WebConfig {
   port: number;
+}
+
+export function broadcastSseClients(
+  sseClients: Map<string, SSEClient>,
+  data: string,
+): number {
+  const staleClientIds: string[] = []
+
+  for (const [clientId, client] of sseClients.entries()) {
+    try {
+      client.send(data)
+    } catch {
+      staleClientIds.push(clientId)
+    }
+  }
+
+  for (const clientId of staleClientIds) {
+    sseClients.delete(clientId)
+  }
+
+  return sseClients.size
 }
 
 export class WebPlugin implements Plugin {
@@ -37,6 +59,9 @@ export class WebPlugin implements Plugin {
     const app = new Hono()
 
     app.onError((err, c) => {
+      if (err instanceof RequestBodyTooLargeError) {
+        return c.json({ error: 'Request body too large' }, 413)
+      }
       if (err instanceof SyntaxError) {
         return c.json({ error: 'Invalid JSON' }, 400)
       }
@@ -80,10 +105,10 @@ export class WebPlugin implements Plugin {
   }
 
   async stop() {
-    this.stoppedRef.value = true;
     this.sseClients.clear();
     this.unregisterConnector?.();
     this.server?.close();
+    this.server = null;
   }
 
   private createConnector(
@@ -110,9 +135,7 @@ export class WebPlugin implements Plugin {
           source: payload.source,
         })
 
-        for (const client of sseClients.values()) {
-          try { client.send(data) } catch { /* client disconnected */ }
-        }
+        const deliveredCount = broadcastSseClients(sseClients, data)
 
         // Persist to session so history survives page refresh (text + image blocks)
         const blocks: ContentBlock[] = [
@@ -124,7 +147,7 @@ export class WebPlugin implements Plugin {
           source: payload.source,
         })
 
-        return { delivered: sseClients.size > 0 }
+        return { delivered: deliveredCount > 0 }
       },
     }
   }

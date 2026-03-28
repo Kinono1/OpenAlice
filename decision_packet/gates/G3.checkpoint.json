@@ -1,7 +1,7 @@
 {
   "schemaVersion": "gate_checkpoint.v1",
   "gateId": "G3",
-  "generatedAt": "2026-03-02T10:41:02Z",
+  "generatedAt": "2026-03-03T12:06:55Z",
   "hardGate": true,
   "status": "fail",
   "summary": {
@@ -37,21 +37,21 @@
       "passed": false,
       "severity": "hard",
       "reasonCode": "HARD_MEAN_PBO_THRESHOLD_FAIL",
-      "detail": "meanPbo=1.0, threshold=0.2"
+      "detail": "meanPbo=0.8857142857142857, threshold=0.2"
     },
     {
       "name": "mean_dsr_probability_threshold",
       "passed": false,
       "severity": "hard",
       "reasonCode": "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
-      "detail": "meanDsrProbability=0.0493492933392912, threshold=0.5"
+      "detail": "meanDsrProbability=0.17528947232399147, threshold=0.5"
     },
     {
       "name": "fdr_q_threshold",
       "passed": false,
       "severity": "hard",
       "reasonCode": "HARD_FDR_THRESHOLD_FAIL",
-      "detail": "fdrQ=1.0, threshold=0.1"
+      "detail": "fdrQ=0.9999997082664652, threshold=0.1"
     },
     {
       "name": "release_gate_status_exists",

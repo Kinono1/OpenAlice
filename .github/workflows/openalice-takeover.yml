@@ -1,0 +1,28 @@
+name: OpenAlice Takeover Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  takeover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate takeover docs
+        run: python3 scripts/takeover/validate_openalice_takeover.py
+
+      - name: Emit takeover refresh hints
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/takeover/check_watchlist.py --base "$BASE_SHA" --head "$HEAD_SHA"

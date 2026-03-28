@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/advisor_committee_packet.schema.v1.json",
+  "title": "OpenAlice Advisor Committee Packet v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "meetingObjective",
+    "inputs",
+    "context",
+    "agendaMethods",
+    "questionsForAdvisors",
+    "actionOwners"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "advisor_committee_packet.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "meetingObjective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["shortlist", "backlog", "stageBPacket", "matrixReport"],
+      "properties": {
+        "shortlist": { "type": "string", "minLength": 1 },
+        "backlog": { "type": "string", "minLength": 1 },
+        "stageBPacket": { "type": "string", "minLength": 1 },
+        "matrixReport": { "type": "string", "minLength": 1 }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["stageBRecommendedOption"],
+      "properties": {
+        "stageBRecommendedOption": { "type": "string", "minLength": 1 }
+      }
+    },
+    "agendaMethods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["methodId", "paperId", "actionHint"],
+        "properties": {
+          "methodId": { "type": "string", "minLength": 1 },
+          "paperId": { "type": "string", "minLength": 1 },
+          "actionHint": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "questionsForAdvisors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "actionOwners": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["owner", "role", "task"],
+        "properties": {
+          "owner": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "task": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

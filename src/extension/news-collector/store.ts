@@ -46,10 +46,12 @@ export class NewsCollectorStore implements INewsProvider {
 
   /** In-memory buffer, sorted by pubTs ascending */
   private buffer: NewsRecord[] = []
-  /** All known dedup keys (survives beyond retention window) */
-  private dedupSet: Set<string> = new Set()
+  /** Dedup keys retained within the current retention window. */
+  private dedupKeys = new Map<string, number>()
   /** Monotonic sequence counter */
   private seq: number = 0
+  /** Highest publication timestamp observed so far. */
+  private latestPubTsSeen: number = 0
 
   constructor(opts?: NewsCollectorStoreOpts) {
     this.logPath = opts?.logPath ?? DEFAULT_LOG_PATH
@@ -74,7 +76,7 @@ export class NewsCollectorStore implements INewsProvider {
 
     if (!raw.trim()) return
 
-    const retentionCutoff = Date.now() - this.retentionDays * 24 * 60 * 60 * 1000
+    const retentionMs = this.retentionDays * 24 * 60 * 60 * 1000
     const lines = raw.split('\n')
 
     for (const line of lines) {
@@ -82,13 +84,14 @@ export class NewsCollectorStore implements INewsProvider {
       try {
         const record: NewsRecord = JSON.parse(line)
 
-        // Always track dedup key (full history)
-        this.dedupSet.add(record.dedupKey)
+        this.latestPubTsSeen = Math.max(this.latestPubTsSeen, record.pubTs)
+        this.dedupKeys.set(record.dedupKey, record.pubTs)
 
         // Track highest seq
         if (record.seq > this.seq) this.seq = record.seq
 
         // Only load recent items into buffer
+        const retentionCutoff = Math.max(0, this.latestPubTsSeen - retentionMs)
         if (record.pubTs >= retentionCutoff) {
           this.buffer.push(record)
         }
@@ -96,6 +99,10 @@ export class NewsCollectorStore implements INewsProvider {
         // Skip malformed lines
       }
     }
+
+    const finalRetentionCutoff =
+      this.latestPubTsSeen - retentionMs
+    this.buffer = this.buffer.filter((record) => record.pubTs >= finalRetentionCutoff)
 
     // Sort buffer by pubTs ascending
     this.buffer.sort((a, b) => a.pubTs - b.pubTs)
@@ -105,8 +112,10 @@ export class NewsCollectorStore implements INewsProvider {
       this.buffer = this.buffer.slice(-this.maxInMemory)
     }
 
+    this.pruneDedupKeys()
+
     console.log(
-      `news-collector-store: recovered ${this.dedupSet.size} dedup keys, ${this.buffer.length} items in memory`,
+      `news-collector-store: recovered ${this.dedupKeys.size} dedup keys, ${this.buffer.length} items in memory`,
     )
   }
 
@@ -120,7 +129,9 @@ export class NewsCollectorStore implements INewsProvider {
     dedupKey: string
     metadata: Record<string, string | null>
   }): Promise<boolean> {
-    if (this.dedupSet.has(item.dedupKey)) return false
+    if (this.dedupKeys.has(item.dedupKey)) return false
+
+    this.latestPubTsSeen = Math.max(this.latestPubTsSeen, item.pubTime.getTime())
 
     this.seq += 1
     const record: NewsRecord = {
@@ -138,8 +149,9 @@ export class NewsCollectorStore implements INewsProvider {
     await appendFile(this.logPath, jsonLine, 'utf-8')
 
     // Memory
-    this.dedupSet.add(item.dedupKey)
+    this.dedupKeys.set(item.dedupKey, record.pubTs)
     this.buffer.push(record)
+    this.pruneDedupKeys()
 
     // Evict oldest if over limit
     if (this.buffer.length > this.maxInMemory) {
@@ -171,7 +183,7 @@ export class NewsCollectorStore implements INewsProvider {
 
   /** Check if a dedup key already exists */
   has(dedupKey: string): boolean {
-    return this.dedupSet.has(dedupKey)
+    return this.dedupKeys.has(dedupKey)
   }
 
   /** Number of items in memory */
@@ -181,7 +193,7 @@ export class NewsCollectorStore implements INewsProvider {
 
   /** Number of dedup keys tracked (includes items beyond retention) */
   get dedupCount(): number {
-    return this.dedupSet.size
+    return this.dedupKeys.size
   }
 
   // ==================== INewsProvider ====================
@@ -232,7 +244,20 @@ export class NewsCollectorStore implements INewsProvider {
 
   async close(): Promise<void> {
     this.buffer = []
-    this.dedupSet.clear()
+    this.dedupKeys.clear()
+  }
+
+  private pruneDedupKeys(): void {
+    if (this.latestPubTsSeen <= 0) {
+      return
+    }
+    const retentionCutoff =
+      this.latestPubTsSeen - this.retentionDays * 24 * 60 * 60 * 1000
+    for (const [key, pubTs] of this.dedupKeys.entries()) {
+      if (pubTs < retentionCutoff) {
+        this.dedupKeys.delete(key)
+      }
+    }
   }
 }
 

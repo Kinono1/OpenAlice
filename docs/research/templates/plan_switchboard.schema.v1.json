@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/plan_switchboard.schema.v1.json",
+  "title": "Plan Switchboard v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "mode",
+    "windowDays",
+    "weights",
+    "plans",
+    "streaks",
+    "decision",
+    "source"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "plan_switchboard.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "dual_track"
+      ]
+    },
+    "windowDays": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fdr",
+        "wfo"
+      ],
+      "properties": {
+        "fdr": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "wfo": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "plans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "A",
+        "B"
+      ],
+      "properties": {
+        "A": {
+          "$ref": "#/$defs/planMetrics"
+        },
+        "B": {
+          "$ref": "#/$defs/planMetrics"
+        }
+      }
+    },
+    "streaks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonPositiveDays",
+        "lowFdrImprovementDays"
+      ],
+      "properties": {
+        "nonPositiveDays": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lowFdrImprovementDays": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nextPrimaryPlan",
+        "nextSecondaryPlan",
+        "forcedC",
+        "reasonCodes"
+      ],
+      "properties": {
+        "nextPrimaryPlan": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "nextSecondaryPlan": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "forcedC": {
+          "type": "boolean"
+        },
+        "reasonCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "archiveRoot",
+        "evaluatedDays"
+      ],
+      "properties": {
+        "archiveRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluatedDays": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "planMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "fdrQ",
+        "wfoFailureDensity",
+        "deltaFdrQ",
+        "deltaWfo",
+        "score"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fdrQ": {
+          "type": "number"
+        },
+        "wfoFailureDensity": {
+          "type": "number"
+        },
+        "deltaFdrQ": {
+          "type": "number"
+        },
+        "deltaWfo": {
+          "type": "number"
+        },
+        "score": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}

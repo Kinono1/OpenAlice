@@ -1,0 +1,36 @@
+# OpenAlice takeover watchlist
+# If a changed path matches one of the entries below, emit a takeover refresh warning.
+# major_refresh_hint = composition root, runtime gate, artifact schema, execution entrypoint
+# minor_refresh_hint = support boundary, route surface, tests, CI, operator surfaces
+
+major_refresh_hint src/main.ts
+major_refresh_hint src/core/config.ts
+major_refresh_hint src/core/ai-provider.ts
+major_refresh_hint src/runtime/paper_champion_registry.ts
+major_refresh_hint src/runtime/paper_gate_status.ts
+major_refresh_hint src/runtime/runtime_faithful_simulation.ts
+major_refresh_hint src/runtime/paper_demo_executor.ts
+major_refresh_hint src/runtime/live_gate_manager.ts
+major_refresh_hint src/extension/crypto-trading/operation-dispatcher.ts
+major_refresh_hint src/extension/crypto-trading/providers/ccxt/CcxtTradingEngine.ts
+major_refresh_hint src/extension/strategy-tools/strategies.ts
+major_refresh_hint scripts/run_runtime_faithful_simulation.ts
+major_refresh_hint scripts/run_paper_demo_executor_cycle.ts
+major_refresh_hint chatgpt/Memory.md
+major_refresh_hint chatgpt/task_plan.md
+
+minor_refresh_hint src/connectors/web/web-plugin.ts
+minor_refresh_hint src/connectors/web/routes/chat.ts
+minor_refresh_hint src/connectors/web/routes/config.ts
+minor_refresh_hint src/task/cron/engine.ts
+minor_refresh_hint src/task/cron/listener.ts
+minor_refresh_hint src/task/heartbeat/heartbeat.ts
+minor_refresh_hint src/extension/news-collector/store.ts
+minor_refresh_hint src/extension/browser/adapter.ts
+minor_refresh_hint src/openclaw/config/config.ts
+minor_refresh_hint README.md
+minor_refresh_hint package.json
+minor_refresh_hint src/runtime/*.spec.ts
+minor_refresh_hint src/extension/crypto-trading/*.spec.ts
+minor_refresh_hint src/extension/strategy-tools/*.spec.ts
+minor_refresh_hint .github/workflows/*

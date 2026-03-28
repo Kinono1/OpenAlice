@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/provisional_baseline.schema.v1.json",
+  "title": "OpenAlice Provisional Baseline v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "status",
+    "summary",
+    "thresholds",
+    "source",
+    "notes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "provisional_baseline.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fdrQ", "meanPbo", "meanDsrProbability", "passesProductionThresholds"],
+      "properties": {
+        "fdrQ": { "type": "number" },
+        "meanPbo": { "type": "number" },
+        "meanDsrProbability": { "type": ["number", "null"] },
+        "passesProductionThresholds": { "type": "boolean" }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fdrQMax", "meanPboMax"],
+      "properties": {
+        "fdrQMax": { "type": "number" },
+        "meanPboMax": { "type": "number" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "path"],
+      "properties": {
+        "type": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

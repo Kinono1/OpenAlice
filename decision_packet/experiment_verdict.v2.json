@@ -1,6 +1,6 @@
 {
   "schemaVersion": "experiment_verdict.v2",
-  "generatedAt": "2026-03-02T10:40:55.970Z",
+  "generatedAt": "2026-03-03T12:06:53.715Z",
   "result": "NO_GO",
   "reasonCodes": [
     "HARD_MEAN_PBO_THRESHOLD_FAIL",
@@ -15,19 +15,53 @@
     "fdrQMax": 0.1
   },
   "aggregateMetrics": {
-    "meanPbo": 1,
-    "meanDsrProbability": 0.0493492933392912,
-    "fdrQ": 1
+    "meanPbo": 0.8857142857142857,
+    "meanDsrProbability": 0.17528947232399147,
+    "fdrQ": 0.9999997082664652,
+    "fdrMethod": "cv_storey_bh",
+    "fdrDiagnostics": {
+      "method": "cv_storey_bh",
+      "alpha": 0.1,
+      "candidateCount": 3,
+      "harmonicFactorCm": null,
+      "storeyPi0": 1,
+      "storeyLambda": 0.5,
+      "cvAggQuantile": 0.9,
+      "candidateWindowCounts": [
+        24,
+        24,
+        24
+      ]
+    },
+    "regimeFdrDiagnostics": {
+      "enabled": false,
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "method": "none",
+      "aggregation": "max",
+      "maxSegments": 3,
+      "minSegmentBars": 720,
+      "minWindows": 4,
+      "segmentationDiagnostics": null,
+      "candidateCount": 3,
+      "segmentCount": 0,
+      "usableSegmentCount": 0,
+      "droppedSegments": [],
+      "segmentedFdrDiagnostics": null,
+      "fallbackFdrDiagnostics": null
+    }
   },
   "candidates": [
     {
-      "strategyId": "S1",
-      "strategyName": "trend_baseline",
+      "strategyId": "LPS_T047_C1",
+      "strategyName": "search_local_baseline_trend_21_80_lo",
       "status": "fail",
       "metrics": {
-        "pbo": 1,
-        "dsrProbability": 0.1480391698025213,
-        "fdrQ": 1
+        "pbo": 0.8857142857142857,
+        "dsrProbability": 0.2261208428807006,
+        "fdrQ": 0.9999997082664652,
+        "hardGapTotal": 1.8595931511000503,
+        "wfoRiskScore": 1.4166666666666665
       },
       "releaseGate": {
         "allowPaperTrading": false,
@@ -41,13 +75,15 @@
       "failureReasonCode": "HARD_PBO_THRESHOLD_FAIL"
     },
     {
-      "strategyId": "S2",
-      "strategyName": "mean_reversion_rsi_bb",
+      "strategyId": "LPS_T047_C2",
+      "strategyName": "search_local_baseline_trend_30_80_lo",
       "status": "fail",
       "metrics": {
-        "pbo": 1,
-        "dsrProbability": 0.000008710215352314421,
-        "fdrQ": 1
+        "pbo": 0.8857142857142857,
+        "dsrProbability": 0.12252196896048678,
+        "fdrQ": 0.9999997082664652,
+        "hardGapTotal": 1.9631920250202641,
+        "wfoRiskScore": 6.827356556403085
       },
       "releaseGate": {
         "allowPaperTrading": false,
@@ -61,13 +97,15 @@
       "failureReasonCode": "HARD_PBO_THRESHOLD_FAIL"
     },
     {
-      "strategyId": "S3",
-      "strategyName": "breakout_classic",
+      "strategyId": "LPS_T047_C3",
+      "strategyName": "search_local_baseline_trend_24_80_lo",
       "status": "fail",
       "metrics": {
-        "pbo": 1,
-        "dsrProbability": 0,
-        "fdrQ": 1
+        "pbo": 0.8857142857142857,
+        "dsrProbability": 0.177225605130787,
+        "fdrQ": 0.9999997082664652,
+        "hardGapTotal": 1.908488388849964,
+        "wfoRiskScore": 1.375
       },
       "releaseGate": {
         "allowPaperTrading": false,
@@ -85,5 +123,5 @@
     "validationRuns": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/strategy_validation_runs.json",
     "releaseGateStatus": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/runtime/release_gate_status.json"
   },
-  "notes": "champion=S1"
+  "notes": "champion=LPS_T047_C1"
 }

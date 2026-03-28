@@ -1,8 +1,8 @@
+import { performance } from "node:perf_hooks";
 import { join } from "node:path";
 import type { EventLog } from "../core/event-log.js";
 import { RampUpStore } from "../deployment/ramp_up_store.js";
 import type { RampUpEvaluation } from "../deployment/ramp_up.js";
-import type { KlineStore } from "../extension/analysis-kit/kline/KlineStore.js";
 import type {
   CryptoOrderResult,
   CryptoPlaceOrderRequest,
@@ -20,6 +20,10 @@ import type {
 } from "../live/execution_quality.js";
 import { loadManualOverride } from "./manual_override.js";
 import { RiskBreakerStore } from "./risk_breaker_state.js";
+import {
+  evaluateLiveCanaryGate,
+  safeReadCanaryState,
+} from "./canary_state.js";
 import { writeDailyGateSummary } from "./daily_gate_summary.js";
 import { detectRegimeShift, type RegimeShiftResult } from "./regime_shift.js";
 import {
@@ -27,10 +31,53 @@ import {
   type IdempotencyGovernanceSummary,
 } from "./idempotency_event_summary.js";
 import {
-  isReleaseGateStatusBlocking,
+  isLiveReleaseGateStatusBlocking,
+  isPaperReleaseGateStatusBlocking,
   loadReleaseGateStatus,
+  type ReleaseGateMode,
   type PersistedReleaseGateStatus,
 } from "./release_gate_status.js";
+import {
+  loadLiveRolloutReadiness,
+  type LiveRolloutReadinessArtifact,
+} from "./live_rollout_readiness.js";
+
+export interface LiveMarketDataBar {
+  symbol: string;
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  tsOpenMs?: number;
+  barIntervalMs?: number;
+  barCloseMs?: number;
+  completed?: boolean;
+  sourceDomain?: string;
+  instId?: string;
+  ccxtSymbol?: string;
+  clockSkewMs?: number;
+}
+
+export interface LiveMarketDataProvider {
+  getMarketData(
+    time: Date,
+    symbol: string
+  ): Promise<LiveMarketDataBar>;
+  getMarketDataRange(
+    startTime: Date,
+    endTime: Date,
+    symbol: string
+  ): Promise<LiveMarketDataBar[]>;
+}
+
+export interface LiveMarketContext {
+  marketDataProvider: LiveMarketDataProvider;
+  getPlayheadTime(): Date;
+  calculatePreviousTime(lookbackBars: number): Date;
+  getAvailableSymbols(): string[];
+}
 
 export interface LiveGateManagerConfig {
   executionGate: SlippageDriftGateConfig;
@@ -38,8 +85,22 @@ export interface LiveGateManagerConfig {
   volatilityHistoryBars: number;
   volatilitySymbol?: string;
   requireReleaseGatePass: boolean;
+  gateMode: ReleaseGateMode;
   releaseGateStatusPath: string;
   releaseGateStatusCacheTtlMs: number;
+  liveCanary: {
+    enabled: boolean;
+    statePath: string;
+  };
+  rolloutReadiness: {
+    enabled: boolean;
+    statusPath: string;
+  };
+  gateFailureCircuit: {
+    threshold: number;
+    baseBackoffMs: number;
+    maxBackoffMs: number;
+  };
   regimeShift: {
     enabled: boolean;
     symbol?: string;
@@ -57,7 +118,9 @@ export interface LiveGateManagerConfig {
 
 export interface LiveGateManagerOptions {
   engine: ICryptoTradingEngine;
-  klineStore: KlineStore;
+  marketContext?: LiveMarketContext;
+  /** @deprecated Temporary compatibility alias while callers migrate. */
+  klineStore?: LiveMarketContext;
   riskConfig?: Pick<RiskConfig, "cvarLookbackDays" | "cvarTailAlpha">;
   eventLog?: EventLog;
   baseDir?: string;
@@ -75,8 +138,22 @@ const DEFAULT_CONFIG: LiveGateManagerConfig = {
   volatilityCurrentWindowBars: 24,
   volatilityHistoryBars: 24 * 90,
   requireReleaseGatePass: true,
+  gateMode: "live",
   releaseGateStatusPath: "data/runtime/release_gate_status.json",
   releaseGateStatusCacheTtlMs: 60_000,
+  liveCanary: {
+    enabled: true,
+    statePath: "data/runtime/canary_state.json",
+  },
+  rolloutReadiness: {
+    enabled: false,
+    statusPath: "data/runtime/live_rollout_readiness.latest.json",
+  },
+  gateFailureCircuit: {
+    threshold: 3,
+    baseBackoffMs: 30_000,
+    maxBackoffMs: 15 * 60_000,
+  },
   regimeShift: {
     enabled: true,
     checkIntervalMs: 60_000,
@@ -90,6 +167,17 @@ const DEFAULT_CONFIG: LiveGateManagerConfig = {
     highStageReduction: 2,
   },
 };
+
+export class GateEvalError extends Error {
+  constructor(
+    public readonly scope: string,
+    message: string,
+    public readonly causeValue?: unknown,
+  ) {
+    super(message);
+    this.name = "GateEvalError";
+  }
+}
 
 export class LiveGateManager {
   static async create(opts: LiveGateManagerOptions): Promise<LiveGateManager> {
@@ -113,6 +201,10 @@ export class LiveGateManager {
     atMs: number;
     status: PersistedReleaseGateStatus | null;
   } | null = null;
+  private rolloutReadinessCache: {
+    atMs: number;
+    artifact: LiveRolloutReadinessArtifact | null;
+  } | null = null;
   private regimeShiftCache: {
     atMs: number;
     result: RegimeShiftResult | null;
@@ -134,6 +226,18 @@ export class LiveGateManager {
         ...DEFAULT_CONFIG.executionGate,
         ...(opts.config?.executionGate ?? {}),
       },
+      liveCanary: {
+        ...DEFAULT_CONFIG.liveCanary,
+        ...(opts.config?.liveCanary ?? {}),
+      },
+      rolloutReadiness: {
+        ...DEFAULT_CONFIG.rolloutReadiness,
+        ...(opts.config?.rolloutReadiness ?? {}),
+      },
+      gateFailureCircuit: {
+        ...DEFAULT_CONFIG.gateFailureCircuit,
+        ...(opts.config?.gateFailureCircuit ?? {}),
+      },
       regimeShift: {
         ...DEFAULT_CONFIG.regimeShift,
         ...(opts.config?.regimeShift ?? {}),
@@ -146,15 +250,164 @@ export class LiveGateManager {
     return this.rampStore.getCurrentStageLabel();
   }
 
+  private getMarketContext(): LiveMarketContext | null {
+    return this.opts.marketContext ?? this.opts.klineStore ?? null;
+  }
+
+  private async evaluateCanaryLiveGate(
+    req: CryptoPlaceOrderRequest,
+  ): Promise<string | null> {
+    const readResult = await safeReadCanaryState(
+      this.config.liveCanary.statePath,
+    );
+    if (!readResult.ok) {
+      await this.appendEvent("canary.invalid_state", {
+        reason: readResult.reason,
+        error: readResult.error ?? null,
+        path: this.config.liveCanary.statePath,
+      });
+      return `canary_state_${readResult.reason}`;
+    }
+
+    const state = readResult.state;
+    const [account, positions] = await Promise.all([
+      this.opts.engine.getAccount(),
+      this.opts.engine.getPositions(),
+    ]);
+
+    const expectedPrice =
+      typeof req.usd_size === "number" && req.usd_size > 0
+        ? undefined
+        : await this.estimateExpectedPrice(req);
+    const expectedNotionalUsd =
+      typeof req.usd_size === "number" && req.usd_size > 0
+        ? req.usd_size
+        : typeof req.size === "number" &&
+            req.size > 0 &&
+            typeof expectedPrice === "number" &&
+            expectedPrice > 0
+          ? req.size * expectedPrice
+          : undefined;
+
+    const result = evaluateLiveCanaryGate({
+      state,
+      request: req,
+      now: new Date(),
+      accountEquity: account.equity,
+      openPositionSymbols: positions
+        .filter((position) => position.size > 0)
+        .map((position) => position.symbol),
+      expectedNotionalUsd,
+    });
+
+    if (!result.approved && result.reason === "canary_state_expired") {
+      await this.appendEvent("canary.expired", {
+        expiresAt: state.window.expiresAt ?? null,
+        path: this.config.liveCanary.statePath,
+      });
+    }
+    if (!result.approved) {
+      await this.appendEvent("canary.blocked", {
+        reason: result.reason ?? "unknown",
+        symbol: req.symbol,
+        expectedNotionalUsd: expectedNotionalUsd ?? null,
+      });
+    }
+
+    return result.approved ? null : result.reason ?? "unknown";
+  }
+
+  private monotonicNow(): number {
+    return performance.now();
+  }
+
+  private async recordGateEvalSuccess(): Promise<void> {
+    await this.riskBreakerStore.recordGateEvaluationSuccess().catch(() => {});
+  }
+
+  private async recordGateEvalFailure(
+    error: GateEvalError,
+  ): Promise<Awaited<ReturnType<RiskBreakerStore["recordGateEvaluationFailure"]>>> {
+    const result = await this.riskBreakerStore.recordGateEvaluationFailure({
+      scope: error.scope,
+      error: error.message,
+      threshold: this.config.gateFailureCircuit.threshold,
+      baseBackoffMs: this.config.gateFailureCircuit.baseBackoffMs,
+      maxBackoffMs: this.config.gateFailureCircuit.maxBackoffMs,
+    });
+    await this.appendEvent("gate.eval_error", {
+      scope: error.scope,
+      error: error.message,
+    });
+    if (result.opened) {
+      await this.appendEvent("gate.circuit_open", {
+        scope: error.scope,
+        consecutiveFailures: result.consecutiveFailures,
+        backoffMs: result.backoffMs,
+        blockedUntilMs: result.blockedUntilMs,
+      });
+    }
+    return result;
+  }
+
+  private async failGateEvaluation(
+    scope: string,
+    err: unknown,
+  ): Promise<never> {
+    const gateError =
+      err instanceof GateEvalError
+        ? err
+        : new GateEvalError(
+            scope,
+            err instanceof Error ? err.message : String(err),
+            err,
+          );
+    await this.recordGateEvalFailure(gateError);
+    throw gateError;
+  }
+
   async beforePlaceOrder(
     req: CryptoPlaceOrderRequest
   ): Promise<RiskCheckResult | undefined> {
-    const manualOverride = await loadManualOverride(this.manualOverridePath);
-    if (!req.reduceOnly && manualOverride.pauseNewOpens) {
+    const block = async (reason: string): Promise<RiskCheckResult> => {
+      await this.appendEvent("live-gate.blocked", {
+        symbol: req.symbol,
+        reason,
+        gateMode: this.config.gateMode,
+        reduceOnly: Boolean(req.reduceOnly),
+      });
       return {
         approved: false,
-        reason: "Manual override is pausing new opens.",
+        reason,
       };
+    };
+    const succeed = async (
+      result: RiskCheckResult | undefined,
+    ): Promise<RiskCheckResult | undefined> => {
+      await this.recordGateEvalSuccess();
+      return result;
+    };
+    const manualOverride = await loadManualOverride(this.manualOverridePath);
+    if (!req.reduceOnly && manualOverride.pauseNewOpens) {
+      return block("Manual override is pausing new opens.");
+    }
+
+    if (
+      !req.reduceOnly &&
+      this.config.gateMode === "live" &&
+      this.config.liveCanary.enabled
+    ) {
+      const canaryBlockReason = await this.evaluateCanaryLiveGate(req);
+      if (canaryBlockReason) {
+        return block(`Live canary blocking new opens: ${canaryBlockReason}`);
+      }
+    }
+
+    if (!req.reduceOnly && this.riskBreakerStore.isGateFailureBreakerActive()) {
+      return block(
+        this.riskBreakerStore.getGateFailureBreakerReason() ??
+          "Gate evaluation circuit breaker is active.",
+      );
     }
 
     if (
@@ -162,36 +415,65 @@ export class LiveGateManager {
       this.config.requireReleaseGatePass &&
       !manualOverride.ignoreReleaseGate
     ) {
-      const gateStatus = await this.loadReleaseGateStatus();
-      const blocked = isReleaseGateStatusBlocking(gateStatus);
+      const gateStatus = await this.loadReleaseGateStatus(false, false);
+      const blocked =
+        this.config.gateMode === "paper"
+          ? isPaperReleaseGateStatusBlocking(gateStatus)
+          : isLiveReleaseGateStatusBlocking(gateStatus);
       if (blocked.blocking) {
-        return {
-          approved: false,
-          reason: `Release gate blocking new opens: ${blocked.reason ?? "unknown"}`,
-        };
+        return succeed(
+          await block(
+            `Release gate blocking new opens: ${blocked.reason ?? "unknown"}`,
+          ),
+        );
+      }
+    }
+
+    if (
+      !req.reduceOnly &&
+      this.config.gateMode === "live" &&
+      this.config.rolloutReadiness.enabled
+    ) {
+      const rolloutReadiness = await this.loadLiveRolloutReadiness(false, false);
+      if (!rolloutReadiness?.readyForMicroLive) {
+        const reason =
+          rolloutReadiness?.blockingReasons[0] ??
+          "live_rollout_readiness_missing";
+        await this.appendEvent("live_gate.rollout_readiness_blocked", {
+          symbol: req.symbol,
+          reason,
+          gateMode: this.config.gateMode,
+          reduceOnly: Boolean(req.reduceOnly),
+        });
+        return succeed(await block(`live_rollout_not_ready:${reason}`));
       }
     }
 
     if (!req.reduceOnly && !manualOverride.ignoreRegimeShift) {
-      const regime = await this.refreshRegimeShiftSignal();
+      const regime = await this.refreshRegimeShiftSignal(false, false);
       if (regime && regime.triggered && regime.severity === "high") {
-        return {
-          approved: false,
-          reason: `Regime-shift high severity: ${regime.reason}; new opens are paused.`,
-        };
+        return succeed(
+          await block(
+            `Regime-shift high severity: ${regime.reason}; new opens are paused.`,
+          ),
+        );
       }
     }
 
     if (!req.reduceOnly && this.riskBreakerStore.isExecutionBreakerActive()) {
-      return {
-        approved: false,
-        reason:
+      return succeed(
+        await block(
           this.riskBreakerStore.getExecutionBreakerReason() ??
-          "Execution-quality breaker is active.",
-      };
+            "Execution-quality breaker is active.",
+        ),
+      );
     }
 
-    return undefined;
+    if (req.reduceOnly) {
+      return undefined;
+    }
+
+    return succeed(undefined);
   }
 
   async buildRiskContext(): Promise<RiskCheckContext | undefined> {
@@ -252,16 +534,21 @@ export class LiveGateManager {
     }
 
     try {
+      const marketContext = this.getMarketContext();
+      if (!marketContext) {
+        return undefined;
+      }
       const marketData =
-        await this.opts.klineStore.marketDataProvider.getMarketData(
-          this.opts.klineStore.getPlayheadTime(),
+        await marketContext.marketDataProvider.getMarketData(
+          marketContext.getPlayheadTime(),
           req.symbol
         );
       if (Number.isFinite(marketData.close) && marketData.close > 0) {
+        await this.recordGateEvalSuccess();
         return marketData.close;
       }
-    } catch {
-      // no-op: fall through to undefined
+    } catch (err) {
+      return this.failGateEvaluation("estimate_expected_price", err);
     }
 
     return undefined;
@@ -423,30 +710,38 @@ export class LiveGateManager {
   }
 
   private async estimateVolatilityQuantile(): Promise<number | undefined> {
-    const nowMs = Date.now();
+    const nowMs = this.monotonicNow();
     if (this.volatilityCache && nowMs - this.volatilityCache.atMs <= 60_000) {
+      await this.recordGateEvalSuccess();
       return this.volatilityCache.quantile;
+    }
+
+    const marketContext = this.getMarketContext();
+    if (!marketContext) {
+      return undefined;
     }
 
     const symbol =
       this.config.volatilitySymbol ??
-      this.opts.klineStore.getAvailableSymbols()[0];
+      marketContext.getAvailableSymbols()[0];
     if (!symbol) {
+      await this.recordGateEvalSuccess();
       return undefined;
     }
 
     try {
-      const end = this.opts.klineStore.getPlayheadTime();
-      const start = this.opts.klineStore.calculatePreviousTime(
+      const end = marketContext.getPlayheadTime();
+      const start = marketContext.calculatePreviousTime(
         this.config.volatilityHistoryBars
       );
       const bars =
-        await this.opts.klineStore.marketDataProvider.getMarketDataRange(
+        await marketContext.marketDataProvider.getMarketDataRange(
           start,
           end,
           symbol
         );
       if (bars.length < this.config.volatilityCurrentWindowBars + 2) {
+        await this.recordGateEvalSuccess();
         return undefined;
       }
 
@@ -454,6 +749,7 @@ export class LiveGateManager {
         .map(bar => bar.close)
         .filter(value => Number.isFinite(value) && value > 0);
       if (closes.length < this.config.volatilityCurrentWindowBars + 2) {
+        await this.recordGateEvalSuccess();
         return undefined;
       }
 
@@ -475,6 +771,7 @@ export class LiveGateManager {
         vols.push(stdDev(window));
       }
       if (vols.length < 2) {
+        await this.recordGateEvalSuccess();
         return undefined;
       }
 
@@ -483,9 +780,10 @@ export class LiveGateManager {
       const quantile = lessOrEqual / vols.length;
 
       this.volatilityCache = { atMs: nowMs, quantile };
+      await this.recordGateEvalSuccess();
       return quantile;
-    } catch {
-      return undefined;
+    } catch (err) {
+      return this.failGateEvaluation("volatility_quantile", err);
     }
   }
 
@@ -496,50 +794,114 @@ export class LiveGateManager {
   }
 
   private async loadReleaseGateStatus(
-    forceRefresh = false
+    forceRefresh = false,
+    recordSuccess = true,
   ): Promise<PersistedReleaseGateStatus | null> {
-    const now = Date.now();
+    const now = this.monotonicNow();
     if (
       !forceRefresh &&
       this.releaseGateCache &&
       now - this.releaseGateCache.atMs <=
         this.config.releaseGateStatusCacheTtlMs
     ) {
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
       return this.releaseGateCache.status;
     }
 
-    const status = await loadReleaseGateStatus(
-      this.config.releaseGateStatusPath
-    );
-    this.releaseGateCache = {
-      atMs: now,
-      status,
-    };
-    return status;
+    try {
+      const status = await loadReleaseGateStatus(
+        this.config.releaseGateStatusPath
+      );
+      this.releaseGateCache = {
+        atMs: now,
+        status,
+      };
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
+      return status;
+    } catch (err) {
+      return this.failGateEvaluation("release_gate_status", err);
+    }
+  }
+
+  private async loadLiveRolloutReadiness(
+    forceRefresh = false,
+    recordSuccess = true,
+  ): Promise<LiveRolloutReadinessArtifact | null> {
+    const now = this.monotonicNow();
+    if (
+      !forceRefresh &&
+      this.rolloutReadinessCache &&
+      now - this.rolloutReadinessCache.atMs <=
+        this.config.releaseGateStatusCacheTtlMs
+    ) {
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
+      return this.rolloutReadinessCache.artifact;
+    }
+
+    try {
+      const artifact = await loadLiveRolloutReadiness(
+        this.config.rolloutReadiness.statusPath,
+      );
+      this.rolloutReadinessCache = {
+        atMs: now,
+        artifact,
+      };
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
+      return artifact;
+    } catch (err) {
+      return this.failGateEvaluation("live_rollout_readiness", err);
+    }
   }
 
   private async refreshRegimeShiftSignal(
-    forceRefresh = false
+    forceRefresh = false,
+    recordSuccess = true,
   ): Promise<RegimeShiftResult | null> {
     if (!this.config.regimeShift.enabled) {
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
       return null;
     }
 
-    const nowMs = Date.now();
+    const nowMs = this.monotonicNow();
     if (
       !forceRefresh &&
       this.regimeShiftCache &&
       nowMs - this.regimeShiftCache.atMs <=
         this.config.regimeShift.checkIntervalMs
     ) {
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
       return this.regimeShiftCache.result;
     }
 
     const symbol =
       this.config.regimeShift.symbol ??
-      this.opts.klineStore.getAvailableSymbols()[0];
+      this.getMarketContext()?.getAvailableSymbols()[0];
     if (!symbol) {
       this.regimeShiftCache = { atMs: nowMs, result: null };
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
+      return null;
+    }
+
+    const marketContext = this.getMarketContext();
+    if (!marketContext) {
+      this.regimeShiftCache = { atMs: nowMs, result: null };
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
       return null;
     }
 
@@ -548,16 +910,19 @@ export class LiveGateManager {
       this.config.regimeShift.recentBars +
       2;
     try {
-      const end = this.opts.klineStore.getPlayheadTime();
-      const start = this.opts.klineStore.calculatePreviousTime(barsNeeded);
+      const end = marketContext.getPlayheadTime();
+      const start = marketContext.calculatePreviousTime(barsNeeded);
       const bars =
-        await this.opts.klineStore.marketDataProvider.getMarketDataRange(
+        await marketContext.marketDataProvider.getMarketDataRange(
           start,
           end,
           symbol
         );
       if (bars.length < barsNeeded) {
         this.regimeShiftCache = { atMs: nowMs, result: null };
+        if (recordSuccess) {
+          await this.recordGateEvalSuccess();
+        }
         return null;
       }
 
@@ -577,10 +942,13 @@ export class LiveGateManager {
         atMs: nowMs,
         result,
       };
+      if (recordSuccess) {
+        await this.recordGateEvalSuccess();
+      }
       return result;
-    } catch {
+    } catch (err) {
       this.regimeShiftCache = { atMs: nowMs, result: null };
-      return null;
+      return this.failGateEvaluation("regime_shift", err);
     }
   }
 

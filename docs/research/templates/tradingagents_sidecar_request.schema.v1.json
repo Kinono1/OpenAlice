@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/tradingagents_sidecar_request.schema.v1.json",
+  "title": "OpenAlice TradingAgents Sidecar Request v1",
+  "description": "Authoritative OpenAlice-owned request artifact for advisory-only TradingAgents sidecar runs. requestMeta plus payload are the machine contract; derivedContext and supplementalContext are optional enrichments and must not replace authoritative payload fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "requestMeta",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "tradingagents_sidecar_request.v1"
+    },
+    "requestMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sourceId",
+        "requestId",
+        "sidecarRunId",
+        "generatedAt",
+        "inputHash"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "tradingagents_sidecar_request.v1"
+        },
+        "sourceId": {
+          "type": "string",
+          "const": "tradingagents.sidecar"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sidecarRunId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "inputHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "marketContext",
+        "newsContext",
+        "decisionContext"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "marketContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lookbackBars",
+            "windowStart",
+            "windowEnd",
+            "candles"
+          ],
+          "properties": {
+            "lookbackBars": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "windowStart": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "windowEnd": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "candles": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "time",
+                  "open",
+                  "high",
+                  "low",
+                  "close",
+                  "volume"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "time": {
+                    "type": "integer"
+                  },
+                  "open": {
+                    "type": "number"
+                  },
+                  "high": {
+                    "type": "number"
+                  },
+                  "low": {
+                    "type": "number"
+                  },
+                  "close": {
+                    "type": "number"
+                  },
+                  "volume": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "newsContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lookback",
+            "items"
+          ],
+          "properties": {
+            "lookback": {
+              "type": "string",
+              "minLength": 1
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "time",
+                  "title",
+                  "content"
+                ],
+                "properties": {
+                  "time": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "content": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "decisionContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "releaseGateMode",
+            "requireReleaseGatePass",
+            "selectedAnalysts",
+            "researchDepth"
+          ],
+          "properties": {
+            "releaseGateMode": {
+              "type": "string",
+              "enum": [
+                "paper",
+                "live",
+                "auto"
+              ]
+            },
+            "requireReleaseGatePass": {
+              "type": "boolean"
+            },
+            "selectedAnalysts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "market",
+                  "social",
+                  "news",
+                  "fundamentals"
+                ]
+              }
+            },
+            "researchDepth": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "derivedContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "featureSummary": {
+              "type": "string"
+            },
+            "promptReadySummary": {
+              "type": "string"
+            },
+            "aggregatedIndicators": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "supplementalContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fundamentals": {
+              "type": "string"
+            },
+            "macroSummary": {
+              "type": "string"
+            },
+            "globalNewsSummary": {
+              "type": "string"
+            },
+            "toolDiagnostics": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "providerMetadata": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

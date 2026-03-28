@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createGuardPipeline } from './guard-pipeline.js';
+import { createGuardBatchPipeline, createGuardPipeline } from './guard-pipeline.js';
 import type { ICryptoTradingEngine } from '../interfaces.js';
 import type { OperationGuard } from './types.js';
 import type { Operation } from '../wallet/types.js';
@@ -104,5 +104,57 @@ describe('createGuardPipeline', () => {
     const result = await pipeline(placeOrderOp);
 
     expect(result).toEqual({ success: false, error: '[guard:async-blocker] async rejection' });
+  });
+});
+
+describe('createGuardBatchPipeline', () => {
+  let engine: ICryptoTradingEngine;
+  let dispatcher: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    engine = createMockEngine();
+    dispatcher = vi.fn().mockResolvedValue({ success: true, orderId: 'ord-001' });
+  });
+
+  it('executes operations in order and stops on first failed raw result', async () => {
+    dispatcher
+      .mockResolvedValueOnce({ success: true, orderId: 'ord-001' })
+      .mockResolvedValueOnce({ success: false, error: 'rejected' });
+    const pipeline = createGuardBatchPipeline(dispatcher, engine, []);
+
+    const results = await pipeline([
+      placeOrderOp,
+      { ...placeOrderOp, params: { ...placeOrderOp.params, symbol: 'ETH/USD' } },
+      { ...placeOrderOp, params: { ...placeOrderOp.params, symbol: 'SOL/USD' } },
+    ]);
+
+    expect(dispatcher).toHaveBeenCalledTimes(2);
+    expect(results).toEqual([
+      { success: true, orderId: 'ord-001' },
+      { success: false, error: 'rejected' },
+      { success: false, error: 'Skipped due to previous batch failure' },
+    ]);
+  });
+
+  it('rejects a guarded operation and skips the remainder', async () => {
+    const guard: OperationGuard = {
+      name: 'blocker',
+      check: (ctx) =>
+        ctx.operation.params.symbol === 'ETH/USD' ? 'too risky' : null,
+    };
+    const pipeline = createGuardBatchPipeline(dispatcher, engine, [guard]);
+
+    const results = await pipeline([
+      placeOrderOp,
+      { ...placeOrderOp, params: { ...placeOrderOp.params, symbol: 'ETH/USD' } },
+      { ...placeOrderOp, params: { ...placeOrderOp.params, symbol: 'SOL/USD' } },
+    ]);
+
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([
+      { success: true, orderId: 'ord-001' },
+      { success: false, error: '[guard:blocker] too risky' },
+      { success: false, error: 'Skipped due to previous batch failure' },
+    ]);
   });
 });

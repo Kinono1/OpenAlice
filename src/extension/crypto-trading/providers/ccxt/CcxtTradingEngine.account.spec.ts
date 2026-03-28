@@ -15,6 +15,101 @@ describe("CcxtTradingEngine.getAccount", () => {
     vi.restoreAllMocks();
   });
 
+  it("maps OKX test urls to demo urls before enabling demo trading", () => {
+    const engine = new CcxtTradingEngine({
+      exchange: "okx",
+      apiKey: "k",
+      apiSecret: "s",
+      password: "p",
+      sandbox: false,
+      demoTrading: true,
+      defaultMarketType: "swap",
+    });
+
+    const exchange = engine as unknown as {
+      exchange: {
+        urls: {
+          api: { rest: string };
+          demo?: { rest: string };
+          test?: { rest: string };
+        };
+      };
+    };
+
+    expect(exchange.exchange.urls.test?.rest).toBeDefined();
+    expect(exchange.exchange.urls.demo?.rest).toBe(
+      exchange.exchange.urls.test?.rest
+    );
+    expect(exchange.exchange.urls.api.rest).toBe(
+      exchange.exchange.urls.test?.rest
+    );
+  });
+
+  it("sets OKX posSide for swap opens and reduce-only closes", async () => {
+    const createOrder = vi.fn().mockResolvedValue({
+      id: "ord-1",
+      status: "closed",
+      filled: 1,
+      amount: 1,
+      average: 0.16,
+      price: 0.16,
+      timestamp: 1_700_000_000_000,
+    });
+    const engine = createEngineWithExchange(
+      {
+        createOrder,
+      },
+      {
+        exchange: "okx",
+        apiKey: "k",
+        apiSecret: "s",
+        password: "p",
+        sandbox: false,
+        demoTrading: false,
+        defaultMarketType: "swap",
+      }
+    );
+    (
+      engine as unknown as {
+        symbolMapper: { toCcxt: (symbol: string) => string };
+      }
+    ).symbolMapper = { toCcxt: () => "WIF/USDT:USDT" };
+
+    await engine.placeOrder({
+      symbol: "WIF/USD",
+      side: "buy",
+      type: "market",
+      size: 1,
+      leverage: 1,
+    });
+    await engine.placeOrder({
+      symbol: "WIF/USD",
+      side: "sell",
+      type: "market",
+      size: 1,
+      reduceOnly: true,
+    });
+
+    expect(createOrder).toHaveBeenNthCalledWith(
+      1,
+      "WIF/USDT:USDT",
+      "market",
+      "buy",
+      1,
+      undefined,
+      expect.objectContaining({ posSide: "long" })
+    );
+    expect(createOrder).toHaveBeenNthCalledWith(
+      2,
+      "WIF/USDT:USDT",
+      "market",
+      "sell",
+      1,
+      undefined,
+      expect.objectContaining({ posSide: "long", reduceOnly: true })
+    );
+  });
+
   it("prefers balance payload realized PnL when recognized key exists", async () => {
     const fetchMyTrades = vi.fn();
     const engine = createEngineWithExchange({
@@ -128,6 +223,56 @@ describe("CcxtTradingEngine.getAccount", () => {
     expect(fetchMyTrades.mock.calls[2][1]).toBeGreaterThan(
       fetchMyTrades.mock.calls[1][1]
     );
+  });
+
+  it("exports resolved market identities for promotion fingerprints", () => {
+    const engine = createEngineWithExchange(
+      {
+        markets: {
+          "BTC/USDT:USDT": {
+            id: "BTC-USDT-SWAP",
+            symbol: "BTC/USDT:USDT",
+            base: "BTC",
+            quote: "USDT",
+            settle: "USDT",
+            type: "swap",
+            info: {
+              instId: "BTC-USDT-SWAP",
+              instType: "SWAP",
+              settleCcy: "USDT",
+            },
+          },
+        },
+        hostname: "www.okx.com",
+      },
+      {
+        exchange: "okx",
+        apiKey: "k",
+        apiSecret: "s",
+        password: "p",
+        sandbox: false,
+        demoTrading: true,
+        defaultMarketType: "swap",
+      }
+    );
+    (
+      engine as unknown as {
+        symbolMapper: { toCcxt: (symbol: string) => string };
+      }
+    ).symbolMapper = { toCcxt: () => "BTC/USDT:USDT" };
+
+    const identities = engine.getResolvedMarketIdentities(["BTC/USD"]);
+
+    expect(identities["BTC/USD"]).toEqual({
+      internalSymbol: "BTC/USD",
+      ccxtSymbol: "BTC/USDT:USDT",
+      instId: "BTC-USDT-SWAP",
+      instType: "SWAP",
+      settleCcy: "USDT",
+      defaultMarketType: "swap",
+      domainBaseUrl: "www.okx.com",
+      demoMode: true,
+    });
   });
 });
 

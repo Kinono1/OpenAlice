@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/quant_hiring_scorecard.schema.v1.json",
+  "title": "OpenAlice Quant Hiring Scorecard v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "roleId",
+    "context",
+    "dimensions",
+    "scoringScale",
+    "hardRejectRules",
+    "decisionRule",
+    "interviewStages"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "quant_hiring_scorecard.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "roleId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["stageBPacketPath", "stageBRecommendedOption", "hiringRationale"],
+      "properties": {
+        "stageBPacketPath": { "type": "string", "minLength": 1 },
+        "stageBRecommendedOption": { "type": "string", "minLength": 1 },
+        "hiringRationale": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "weight", "minPassScore", "description"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+          "minPassScore": { "type": "number", "minimum": 1 },
+          "description": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "scoringScale": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "description"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "hardRejectRules": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "decisionRule": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["minWeightedScore", "requireNoHardReject", "approvalRequiredFrom"],
+      "properties": {
+        "minWeightedScore": { "type": "number", "minimum": 0 },
+        "requireNoHardReject": { "type": "boolean" },
+        "approvalRequiredFrom": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "interviewStages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["stage", "owner", "focus"],
+        "properties": {
+          "stage": { "type": "string", "minLength": 1 },
+          "owner": { "type": "string", "minLength": 1 },
+          "focus": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

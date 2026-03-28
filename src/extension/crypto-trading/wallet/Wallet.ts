@@ -112,22 +112,9 @@ export class Wallet implements IWallet {
     const message = this.pendingMessage;
     const hash = this.pendingHash;
 
-    // Execute all operations
-    const results: OperationResult[] = [];
-    for (const op of operations) {
-      try {
-        const raw = await this.config.executeOperation(op);
-        const result = this.parseOperationResult(op, raw);
-        results.push(result);
-      } catch (error) {
-        results.push({
-          action: op.action,
-          success: false,
-          status: 'rejected',
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    const results = this.config.executeBatch
+      ? await this.executeBatch(operations, message, hash)
+      : await this.executeIndividually(operations);
 
     // Get current wallet state
     const stateAfter = await this.config.getWalletState();
@@ -177,6 +164,50 @@ export class Wallet implements IWallet {
       pending,
       rejected,
     };
+  }
+
+  private async executeBatch(
+    operations: Operation[],
+    message: string,
+    hash: CommitHash,
+  ): Promise<OperationResult[]> {
+    const rawResults = await this.config.executeBatch!(operations, {
+      message,
+      hash,
+      parentHash: this.head,
+      round: this.currentRound,
+    });
+
+    return operations.map((op, index) => {
+      const raw =
+        index < rawResults.length
+          ? rawResults[index]
+          : {
+              success: false,
+              error: 'Skipped due to previous batch failure',
+            };
+      return this.parseOperationResult(op, raw);
+    });
+  }
+
+  private async executeIndividually(
+    operations: Operation[],
+  ): Promise<OperationResult[]> {
+    const results: OperationResult[] = [];
+    for (const op of operations) {
+      try {
+        const raw = await this.config.executeOperation(op);
+        results.push(this.parseOperationResult(op, raw));
+      } catch (error) {
+        results.push({
+          action: op.action,
+          success: false,
+          status: 'rejected',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return results;
   }
 
   // ==================== Query ====================

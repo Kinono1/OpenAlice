@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/multi_asset_matrix.schema.v1.json",
+  "title": "OpenAlice Multi Asset Matrix v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "runId",
+    "executeMode",
+    "source",
+    "summary",
+    "assets"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "multi_asset_matrix.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "executeMode": {
+      "type": "string",
+      "enum": ["execute", "dry_run"]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["assetUniverse", "baseCandidates", "fdrMethod", "wfoProfile", "lookbackBars"],
+      "properties": {
+        "assetUniverse": { "type": "string", "minLength": 1 },
+        "requestedAssets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "baseCandidates": { "type": "string", "minLength": 1 },
+        "fdrMethod": { "type": "string", "minLength": 1 },
+        "wfoProfile": { "type": "string", "minLength": 1 },
+        "lookbackBars": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "totalAssets",
+        "completedAssets",
+        "missingAssets",
+        "failedAssets",
+        "minAssetsSuccess",
+        "meetsMinAssetsSuccess"
+      ],
+      "properties": {
+        "totalAssets": { "type": "integer", "minimum": 0 },
+        "completedAssets": { "type": "integer", "minimum": 0 },
+        "missingAssets": { "type": "integer", "minimum": 0 },
+        "failedAssets": { "type": "integer", "minimum": 0 },
+        "minAssetsSuccess": { "type": "integer", "minimum": 0 },
+        "meetsMinAssetsSuccess": { "type": "boolean" },
+        "qualitySummary": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["validAssets", "invalidAssets", "invalidAssetNames"],
+          "properties": {
+            "validAssets": { "type": "integer", "minimum": 0 },
+            "invalidAssets": { "type": "integer", "minimum": 0 },
+            "invalidAssetNames": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["asset", "symbol", "inputCsv", "status"],
+        "properties": {
+          "asset": { "type": "string", "minLength": 1 },
+          "symbol": { "type": "string", "minLength": 1 },
+          "inputCsv": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "dry_run",
+              "missing_data",
+              "execution_error",
+              "parse_error"
+            ]
+          },
+          "result": { "type": ["string", "null"] },
+          "fdrQ": { "type": ["number", "null"] },
+          "meanPbo": { "type": ["number", "null"] },
+          "meanDsrProbability": { "type": ["number", "null"] },
+          "wfoFailureDensity": { "type": ["number", "null"] },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } },
+          "failedChecks": { "type": "array", "items": { "type": "string" } },
+          "pValueSummary": { "type": "object", "additionalProperties": true }
+          ,
+          "dataQuality": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["rows", "columnCount", "missingCells", "isValid"],
+            "properties": {
+              "rows": { "type": "integer", "minimum": 0 },
+              "columnCount": { "type": "integer", "minimum": 0 },
+              "missingCells": { "type": "integer", "minimum": 0 },
+              "missingRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+              "priceAnomalyCount": { "type": "integer", "minimum": 0 },
+              "priceAnomalyRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+              "isValid": { "type": "boolean" },
+              "invalidReason": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

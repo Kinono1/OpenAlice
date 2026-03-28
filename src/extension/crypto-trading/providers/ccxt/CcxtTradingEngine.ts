@@ -6,7 +6,7 @@
  */
 
 import ccxt from "ccxt";
-import type { Exchange, Order as CcxtOrder } from "ccxt";
+import type { Exchange, Market as CcxtMarket, Order as CcxtOrder } from "ccxt";
 import type {
   ICryptoTradingEngine,
   CryptoPlaceOrderRequest,
@@ -39,10 +39,22 @@ export interface CcxtEngineConfig {
   defaultMarketType: 'spot' | 'swap';
   allowedSymbols?: string[];
   options?: Record<string, unknown>;
+  httpsProxy?: string;
   realizedPnlLedgerFallback?: {
     pageLimit?: number;
     maxPages?: number;
   };
+}
+
+export interface CcxtResolvedMarketIdentity {
+  internalSymbol: string;
+  ccxtSymbol: string;
+  instId: string;
+  instType: string;
+  settleCcy: string;
+  defaultMarketType: string;
+  domainBaseUrl: string;
+  demoMode: boolean;
 }
 
 export class CcxtTradingEngine implements ICryptoTradingEngine {
@@ -71,6 +83,14 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
       ...exchangeOptions,
     });
 
+    if (config.httpsProxy) {
+      (
+        this.exchange as unknown as {
+          httpsProxy?: string;
+        }
+      ).httpsProxy = config.httpsProxy;
+    }
+
     // OKX can fail on startup when CCXT fetches authenticated currency metadata.
     // We only need markets + trading/account endpoints for this engine, so skip it.
     if (config.exchange === "okx") {
@@ -84,6 +104,20 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
     }
 
     if (config.demoTrading) {
+      if (config.exchange === "okx") {
+        const exchangeWithUrls = this.exchange as unknown as {
+          urls?: Record<string, unknown>;
+        };
+        const urls = exchangeWithUrls.urls as
+          | {
+              demo?: unknown;
+              test?: unknown;
+            }
+          | undefined;
+        if (urls && urls.demo == null && urls.test != null) {
+          urls.demo = urls.test;
+        }
+      }
       (
         this.exchange as unknown as {
           enableDemoTrading: (enable: boolean) => void;
@@ -142,6 +176,53 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
     this.initialized = true;
   }
 
+  getResolvedMarketIdentities(
+    internalSymbols: string[],
+  ): Record<string, CcxtResolvedMarketIdentity> {
+    this.ensureInit();
+
+    return Object.fromEntries(
+      internalSymbols.map((internalSymbol) => {
+        const ccxtSymbol = this.symbolMapper.toCcxt(internalSymbol);
+        const market = (this.exchange.markets as Record<string, CcxtMarket>)[
+          ccxtSymbol
+        ];
+        const info = (market?.info ?? {}) as Record<string, unknown>;
+        const instType =
+          typeof info.instType === "string" && info.instType
+            ? info.instType
+            : typeof market?.type === "string" && market.type
+              ? market.type.toUpperCase()
+              : this.config.defaultMarketType.toUpperCase();
+        const settleCcy =
+          typeof info.settleCcy === "string" && info.settleCcy
+            ? info.settleCcy
+            : typeof market?.settle === "string" && market.settle
+              ? market.settle
+              : typeof market?.quote === "string" && market.quote
+                ? market.quote
+                : "USD";
+
+        return [
+          internalSymbol,
+          {
+            internalSymbol,
+            ccxtSymbol,
+            instId:
+              typeof info.instId === "string" && info.instId
+                ? info.instId
+                : market?.id ?? ccxtSymbol,
+            instType,
+            settleCcy,
+            defaultMarketType: this.config.defaultMarketType,
+            domainBaseUrl: this.resolveDomainBaseUrl(),
+            demoMode: Boolean(this.config.demoTrading),
+          },
+        ] satisfies [string, CcxtResolvedMarketIdentity];
+      }),
+    );
+  }
+
   private async loadOkxMarketsWithHostFallback(): Promise<void> {
     const ex = this.exchange as unknown as {
       hostname?: string;
@@ -168,6 +249,20 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
     throw lastError instanceof Error
       ? lastError
       : new Error("OKX loadMarkets failed for all fallback hostnames");
+  }
+
+  private resolveDomainBaseUrl(): string {
+    const exchangeWithHost = this.exchange as Exchange & { hostname?: string };
+    if (
+      typeof exchangeWithHost.hostname === "string" &&
+      exchangeWithHost.hostname
+    ) {
+      return exchangeWithHost.hostname;
+    }
+    if (this.config.exchange === "okx") {
+      return "www.okx.com";
+    }
+    return `${this.config.exchange}.com`;
   }
 
   // ==================== ICryptoTradingEngine ====================
@@ -213,6 +308,15 @@ export class CcxtTradingEngine implements ICryptoTradingEngine {
 
       const params: Record<string, unknown> = {};
       if (order.reduceOnly) params.reduceOnly = true;
+      if (this.config.exchange === "okx" && this.config.defaultMarketType === "swap") {
+        params.posSide = order.reduceOnly
+          ? order.side === "buy"
+            ? "short"
+            : "long"
+          : order.side === "buy"
+            ? "long"
+            : "short";
+      }
       if (order.idempotencyKey) {
         const capability = getExchangeCapability(this.config.exchange);
         if (capability.supportsClientOrderId && capability.clientOrderIdField) {

@@ -32,7 +32,8 @@ export async function createModelFromConfig(): Promise<ModelFromConfig> {
       return { model: client(config.model), key }
     }
     case 'google': {
-      const { createGoogleGenerativeAI } = await import('@ai-sdk/google')
+      const googleModuleName = '@ai-sdk/google'
+      const { createGoogleGenerativeAI } = await import(googleModuleName)
       const client = createGoogleGenerativeAI({ apiKey: config.apiKeys.google || undefined, baseURL: config.baseUrl || undefined })
       return { model: client(config.model), key }
     }

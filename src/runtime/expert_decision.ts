@@ -1,5 +1,6 @@
 import {
   isReleaseGateStatusBlocking,
+  type ReleaseGateMode,
   type PersistedReleaseGateStatus,
 } from "./release_gate_status.js";
 import type { NewsImpactSummary } from "./news_impact.js";
@@ -37,6 +38,7 @@ export interface ExpertDecisionInput {
   ml?: ExpertMlSignal;
   news: NewsImpactSummary;
   releaseGateStatus?: PersistedReleaseGateStatus | null;
+  releaseGateMode?: ReleaseGateMode;
   policy?: Partial<ExpertDecisionPolicy>;
 }
 
@@ -175,7 +177,11 @@ export function evaluateExpertDecision(input: ExpertDecisionInput): ExpertDecisi
   const blockedBy: string[] = [];
 
   if (policy.requireReleaseGatePass) {
-    const gate = isReleaseGateStatusBlocking(input.releaseGateStatus ?? null);
+    const gate = isReleaseGateStatusBlocking(
+      input.releaseGateStatus ?? null,
+      new Date(),
+      input.releaseGateMode,
+    );
     if (gate.blocking) {
       blockedBy.push(gate.reason ?? "release_gate_blocked");
     }
@@ -249,4 +255,3 @@ export function evaluateExpertDecision(input: ExpertDecisionInput): ExpertDecisi
     policy,
   };
 }
-

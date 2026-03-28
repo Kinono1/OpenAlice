@@ -7,6 +7,7 @@
 import type { ICryptoTradingEngine } from './interfaces';
 import type { Config } from '../../core/config';
 import { CcxtTradingEngine } from './providers/ccxt/index';
+import { resolveOutboundProxyUrl } from '../../core/network-proxy.js';
 import {
   assertSafeTradingMode,
   assertTradingInterfaceAuthToken,
@@ -54,6 +55,7 @@ export async function createCryptoTradingEngine(
         demoTrading: providerConfig.demoTrading,
         defaultMarketType: providerConfig.defaultMarketType,
         options: providerConfig.options,
+        httpsProxy: resolveOutboundProxyUrl() ?? undefined,
       });
 
       await initWithRetry(engine, providerConfig.exchange);

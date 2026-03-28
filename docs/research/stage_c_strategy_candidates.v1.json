@@ -1,0 +1,359 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-11T00:54:37Z",
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "STC_BASIS_C1",
+      "strategyName": "stagec_basis_breakout_13_6",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 13,
+        "breakoutExitPeriod": 6,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_BASIS_C2",
+      "strategyName": "stagec_basis_breakout_16_7",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 16,
+        "breakoutExitPeriod": 7,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_BASIS_C3",
+      "strategyName": "stagec_basis_breakout_19_9",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_BASIS_C4",
+      "strategyName": "stagec_basis_breakout_22_10",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 22,
+        "breakoutExitPeriod": 10,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_BASIS_C5",
+      "strategyName": "stagec_basis_breakout_25_12",
+      "strategy": "breakout",
+      "params": {
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_VOL_C1",
+      "strategyName": "stagec_volume_trend_10_36",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 10,
+        "trendSlowPeriod": 36,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_VOL_C2",
+      "strategyName": "stagec_volume_trend_12_40",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 12,
+        "trendSlowPeriod": 40,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_VOL_C3",
+      "strategyName": "stagec_volume_trend_14_44",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 44,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_VOL_C4",
+      "strategyName": "stagec_volume_trend_16_52",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 16,
+        "trendSlowPeriod": 52,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_VOL_C5",
+      "strategyName": "stagec_volume_trend_18_56",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 56,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "STC_ADAPT_C1",
+      "strategyName": "stagec_adaptive_ensemble_1",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": true,
+        "ensembleThreshold": 0.2576,
+        "ensembleWeights": {
+          "trend": 1.1936,
+          "meanReversion": 1.0088,
+          "breakout": 0.9475
+        },
+        "rsiPeriod": 14,
+        "rsiOversold": 25,
+        "rsiOverbought": 72,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 44,
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9
+      }
+    },
+    {
+      "strategyId": "STC_ADAPT_C2",
+      "strategyName": "stagec_adaptive_ensemble_2",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": true,
+        "ensembleThreshold": 0.2776,
+        "ensembleWeights": {
+          "trend": 0.9936,
+          "meanReversion": 1.2088,
+          "breakout": 1.0475
+        },
+        "rsiPeriod": 14,
+        "rsiOversold": 25,
+        "rsiOverbought": 72,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 44,
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9
+      }
+    },
+    {
+      "strategyId": "STC_ADAPT_C3",
+      "strategyName": "stagec_adaptive_ensemble_3",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": true,
+        "ensembleThreshold": 0.2876,
+        "ensembleWeights": {
+          "trend": 0.9936,
+          "meanReversion": 1.0088,
+          "breakout": 1.0475
+        },
+        "rsiPeriod": 14,
+        "rsiOversold": 25,
+        "rsiOverbought": 72,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 44,
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9
+      }
+    },
+    {
+      "strategyId": "STC_ADAPT_C4",
+      "strategyName": "stagec_adaptive_ensemble_4",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": true,
+        "ensembleThreshold": 0.3076,
+        "ensembleWeights": {
+          "trend": 0.8936,
+          "meanReversion": 1.0088,
+          "breakout": 1.2475
+        },
+        "rsiPeriod": 14,
+        "rsiOversold": 25,
+        "rsiOverbought": 72,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 44,
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9
+      }
+    },
+    {
+      "strategyId": "STC_ADAPT_C5",
+      "strategyName": "stagec_adaptive_ensemble_5",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": true,
+        "ensembleThreshold": 0.3276,
+        "ensembleWeights": {
+          "trend": 1.0936,
+          "meanReversion": 0.9088,
+          "breakout": 1.1475
+        },
+        "rsiPeriod": 14,
+        "rsiOversold": 25,
+        "rsiOverbought": 72,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 44,
+        "breakoutPeriod": 19,
+        "breakoutExitPeriod": 9
+      }
+    }
+  ],
+  "hypothesisCompile": {
+    "schemaVersion": "hypothesis_candidate_compile.v1",
+    "runId": "20260303T120652Z",
+    "generatedAt": "2026-03-03T12:06:52Z",
+    "plan": "A",
+    "inputs": {
+      "hypotheses": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/hypotheses/backlog.v1.json",
+      "baseCandidates": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/docs/research/strategy_candidates.v1.json",
+      "bestTripletSource": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/local_search/best_trend_triplet.latest.v1.json",
+      "bestTripletSchemaVersion": "best_trend_triplet.v1",
+      "bestTripletSourceType": "object"
+    },
+    "stats": {
+      "inspectedHypotheses": 20,
+      "outputCandidates": 3,
+      "themeCounts": {
+        "bestTriplet": 3
+      },
+      "candidateModeRequested": "blend",
+      "candidateModeEffective": "blend",
+      "complexityProfile": "default",
+      "bestTripletLoaded": true,
+      "bestTripletSeedCount": 3,
+      "bestTripletLoadError": ""
+    },
+    "themesUsed": [
+      "bestTriplet",
+      "bestTriplet",
+      "bestTriplet"
+    ]
+  },
+  "stageCCompile": {
+    "schemaVersion": "stage_c_candidate_generator.v1",
+    "generatedAt": "2026-03-11T00:54:37Z",
+    "sourceFeatureRoot": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m",
+    "symbols": [
+      {
+        "instId": "BTC-USDT",
+        "path": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m/okx_inst_id=BTC-USDT/data.csv.zst",
+        "sampleRows": 12000,
+        "stats": {
+          "spreadMedian": 4.727995095298069e-05,
+          "basisStd": 8.643404568531022e-05,
+          "volumeZMedian": 0.5570021271677982,
+          "rvMedian": 0.0013605220175903093,
+          "smaGapMedian": 0.0007785719159585924,
+          "labelLongBias": 0.49916666666666665
+        }
+      },
+      {
+        "instId": "ETH-USDT",
+        "path": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m/okx_inst_id=ETH-USDT/data.csv.zst",
+        "sampleRows": 12000,
+        "stats": {
+          "spreadMedian": 5.161091008900702e-05,
+          "basisStd": 0.00010201775276146183,
+          "volumeZMedian": 0.5377896918130454,
+          "rvMedian": 0.00165279850087379,
+          "smaGapMedian": 0.0009558271067675594,
+          "labelLongBias": 0.49775
+        }
+      },
+      {
+        "instId": "SOL-USDT",
+        "path": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/market/core7_feature_base_1m/okx_inst_id=SOL-USDT/data.csv.zst",
+        "sampleRows": 12000,
+        "stats": {
+          "spreadMedian": 0.00012207031250006245,
+          "basisStd": 0.0001674967637318207,
+          "volumeZMedian": 0.5436453101508102,
+          "rvMedian": 0.001896492556022048,
+          "smaGapMedian": 0.001101082059102143,
+          "labelLongBias": 0.48383333333333334
+        }
+      }
+    ],
+    "aggregateStats": {
+      "spreadMedian": 7.365372451401671e-05,
+      "basisStd": 0.00011864952072619759,
+      "volumeZMedian": 0.5461457097105512,
+      "rvMedian": 0.0016366043581620491,
+      "smaGapMedian": 0.0009451603606094316,
+      "labelLongBias": 0.4935833333333333
+    },
+    "families": [
+      {
+        "family": "cross_exchange_basis_spread_regime",
+        "hypothesis": "Basis and spread compression/expansion signals can identify breakout regimes more cleanly than the frozen baseline.",
+        "candidateCount": 5
+      },
+      {
+        "family": "multi_timeframe_volume_volatility_regime",
+        "hypothesis": "Volume/volatility-regime cues can improve trend timing and reduce unstable high-vol entries.",
+        "candidateCount": 5
+      },
+      {
+        "family": "composite_momentum_mean_reversion_adaptive",
+        "hypothesis": "Adaptive ensemble weighting across momentum, breakout, and reversion signals can outperform single-family candidates.",
+        "candidateCount": 5
+      }
+    ],
+    "outputCandidateCount": 15
+  }
+}

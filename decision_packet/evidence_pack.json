@@ -2,12 +2,12 @@
   "evidencePackVersion": "v1",
   "decisionDate": "2026-02-28",
   "campaignId": "cvar24-campaign-001",
-  "generatedAt": "2026-03-02T10:41:07Z",
+  "generatedAt": "2026-03-03T12:06:55Z",
   "protocolHash": "phash:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "datasetSnapshotId": "dsnap:v1:bbbbbbbbbbbbbbbbbbbbbbbb",
   "releaseGateStatus": {
     "path": "decision_packet/release_gate_status.json",
-    "generatedAt": "2026-03-02T10:40:55.970Z",
+    "generatedAt": "2026-03-03T12:06:53.715Z",
     "expiresAt": null,
     "allowPaperTrading": false,
     "allowLiveTrading": false
@@ -39,10 +39,10 @@
     "releaseGateStatusAgeHoursMax": 24
   },
   "measured": {
-    "meanPbo": 1,
-    "meanDsrProbability": 0.0493492933392912,
-    "fdrQ": 1,
-    "releaseGateStatusAgeHours": 0.0032743311111111113
+    "meanPbo": 0.8857142857142857,
+    "meanDsrProbability": 0.17528947232399147,
+    "fdrQ": 0.9999997082664652,
+    "releaseGateStatusAgeHours": 0.00048593194444444446
   },
   "hardGateChecks": [
     {
@@ -141,16 +141,48 @@
       "HARD_NO_CANDIDATE_PASS"
     ],
     "aggregateMetrics": {
-      "meanPbo": 1,
-      "meanDsrProbability": 0.0493492933392912,
-      "fdrQ": 1
+      "meanPbo": 0.8857142857142857,
+      "meanDsrProbability": 0.17528947232399147,
+      "fdrQ": 0.9999997082664652,
+      "fdrMethod": "cv_storey_bh",
+      "fdrDiagnostics": {
+        "method": "cv_storey_bh",
+        "alpha": 0.1,
+        "candidateCount": 3,
+        "harmonicFactorCm": null,
+        "storeyPi0": 1,
+        "storeyLambda": 0.5,
+        "cvAggQuantile": 0.9,
+        "candidateWindowCounts": [
+          24,
+          24,
+          24
+        ]
+      },
+      "regimeFdrDiagnostics": {
+        "enabled": false,
+        "fallbackUsed": false,
+        "fallbackReason": null,
+        "method": "none",
+        "aggregation": "max",
+        "maxSegments": 3,
+        "minSegmentBars": 720,
+        "minWindows": 4,
+        "segmentationDiagnostics": null,
+        "candidateCount": 3,
+        "segmentCount": 0,
+        "usableSegmentCount": 0,
+        "droppedSegments": [],
+        "segmentedFdrDiagnostics": null,
+        "fallbackFdrDiagnostics": null
+      }
     },
     "thresholds": {
       "meanPboMax": 0.2,
       "meanDsrProbabilityMin": 0.5,
       "fdrQMax": 0.1
     },
-    "generatedAt": "2026-03-02T10:40:55.970Z"
+    "generatedAt": "2026-03-03T12:06:53.715Z"
   },
   "gateCheckpoints": {
     "dir": "decision_packet/gates",

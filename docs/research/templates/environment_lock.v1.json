@@ -1,13 +1,13 @@
 {
   "schemaVersion": "environment_lock.v1",
-  "generatedAt": "2026-03-02T16:10:00Z",
+  "generatedAt": "2026-03-03T10:10:00Z",
   "runtime": {
     "python": {
-      "versionSpec": "3.13.x",
+      "versionSpec": "3.14.x",
       "required": true
     },
     "node": {
-      "versionSpec": "22.21.x",
+      "versionSpec": "25.2.x",
       "required": true
     },
     "pnpm": {

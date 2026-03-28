@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { EngineContext } from '../../../core/types.js'
-import type { CronSchedule } from '../../../task/cron/engine.js'
+import type { CronJobPatch, CronSchedule } from '../../../task/cron/engine.js'
+import { readJsonWithLimit } from '../request-body.js'
 
 /** Cron routes: GET /jobs, POST /jobs, PUT /jobs/:id, DELETE /jobs/:id, POST /jobs/:id/run */
 export function createCronRoutes(ctx: EngineContext) {
@@ -12,12 +13,12 @@ export function createCronRoutes(ctx: EngineContext) {
 
   app.post('/jobs', async (c) => {
     try {
-      const body = await c.req.json<{
+      const body = await readJsonWithLimit<{
         name: string
         payload: string
         schedule: { kind: string; at?: string; every?: string; cron?: string }
         enabled?: boolean
-      }>()
+      }>(c)
       if (!body.name || !body.payload || !body.schedule?.kind) {
         return c.json({ error: 'name, payload, and schedule are required' }, 400)
       }
@@ -36,7 +37,7 @@ export function createCronRoutes(ctx: EngineContext) {
   app.put('/jobs/:id', async (c) => {
     try {
       const id = c.req.param('id')
-      const body = await c.req.json()
+      const body = await readJsonWithLimit<CronJobPatch>(c)
       await ctx.cronEngine.update(id, body)
       return c.json({ ok: true })
     } catch (err) {

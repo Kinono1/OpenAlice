@@ -1,3 +1,7 @@
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
 export interface PnLFill {
@@ -53,22 +57,56 @@ interface FIFOState {
   realizedPnL: number;
 }
 
+interface PersistedPnLEntry {
+  type: 'fill';
+  fill: PnLFill;
+}
+
+interface OrderFillProgress {
+  cumulativeSize: number;
+  averageFillPrice: number;
+}
+
 // ── PnLTracker ──────────────────────────────────────────────────────────────
 
 export class PnLTracker {
   private reconciliationThresholdPct: number;
+  private persistencePath: string | null;
+  private orderFillProgress = new Map<string, OrderFillProgress>();
   private avgCost: Map<string, AvgCostState> = new Map();
   private fifo: Map<string, FIFOState> = new Map();
 
-  constructor(config?: { reconciliationThresholdPct: number }) {
+  constructor(config?: { reconciliationThresholdPct?: number; persistencePath?: string }) {
     this.reconciliationThresholdPct = config?.reconciliationThresholdPct ?? 5;
+    this.persistencePath = null;
+    if (config?.persistencePath) {
+      throw new Error(
+        "PnLTracker persistence restore is async. Use PnLTracker.create() when persistencePath is configured.",
+      );
+    }
+  }
+
+  static async create(config?: {
+    reconciliationThresholdPct?: number;
+    persistencePath?: string;
+  }): Promise<PnLTracker> {
+    const tracker = new PnLTracker({
+      reconciliationThresholdPct: config?.reconciliationThresholdPct,
+    });
+    tracker.persistencePath = config?.persistencePath ?? null;
+    await tracker.restoreFromDisk();
+    return tracker;
   }
 
   // ── Fill recording ──────────────────────────────────────────────────────
 
   recordFill(fill: PnLFill): void {
-    this.applyFillAvgCost(fill);
-    this.applyFillFIFO(fill);
+    const acceptedFill = this.acceptFill(fill);
+    if (!acceptedFill) {
+      return;
+    }
+    this.applyFillAvgCost(acceptedFill);
+    this.applyFillFIFO(acceptedFill);
   }
 
   // ── AvgCost track ───────────────────────────────────────────────────────
@@ -269,5 +307,94 @@ export class PnLTracker {
   _resetForTest(): void {
     this.avgCost.clear();
     this.fifo.clear();
+    this.orderFillProgress.clear();
+  }
+
+  private async restoreFromDisk(): Promise<void> {
+    if (!this.persistencePath || !existsSync(this.persistencePath)) return;
+
+    const raw = await readFile(this.persistencePath, "utf-8");
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed) as PersistedPnLEntry;
+        if (entry?.type === "fill" && entry.fill) {
+          const acceptedFill = this.acceptFill(entry.fill, { persist: false });
+          if (!acceptedFill) {
+            continue;
+          }
+          this.applyFillAvgCost(acceptedFill);
+          this.applyFillFIFO(acceptedFill);
+        }
+      } catch {
+        // Ignore corrupt lines so runtime recovery stays best-effort.
+      }
+    }
+  }
+
+  private acceptFill(
+    fill: PnLFill,
+    options?: { persist?: boolean },
+  ): PnLFill | null {
+    const accepted = this.toAcceptedFill(fill);
+    if (!accepted) {
+      return null;
+    }
+
+    if (options?.persist !== false && this.persistencePath) {
+      mkdirSync(dirname(this.persistencePath), { recursive: true });
+      const entry: PersistedPnLEntry = { type: "fill", fill };
+      appendFileSync(this.persistencePath, `${JSON.stringify(entry)}\n`, "utf-8");
+    }
+
+    if (fill.orderId && accepted.progress) {
+      this.orderFillProgress.set(fill.orderId, accepted.progress);
+    }
+    return accepted.appliedFill;
+  }
+
+  private toAcceptedFill(
+    fill: PnLFill,
+  ): { appliedFill: PnLFill; progress?: OrderFillProgress } | null {
+    if (!fill.orderId) {
+      return { appliedFill: fill };
+    }
+
+    const previous = this.orderFillProgress.get(fill.orderId);
+    if (!previous) {
+      return {
+        appliedFill: fill,
+        progress: {
+          cumulativeSize: fill.size,
+          averageFillPrice: fill.price,
+        },
+      };
+    }
+
+    if (!(fill.size > previous.cumulativeSize)) {
+      return null;
+    }
+
+    const deltaSize = fill.size - previous.cumulativeSize;
+    let deltaPrice = fill.price;
+    const deltaNotional =
+      fill.price * fill.size -
+      previous.averageFillPrice * previous.cumulativeSize;
+    if (Number.isFinite(deltaNotional) && deltaNotional > 0) {
+      deltaPrice = deltaNotional / deltaSize;
+    }
+
+    return {
+      appliedFill: {
+        ...fill,
+        size: deltaSize,
+        price: deltaPrice,
+      },
+      progress: {
+        cumulativeSize: fill.size,
+        averageFillPrice: fill.price,
+      },
+    };
   }
 }

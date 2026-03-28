@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "generatedAt": "2026-03-02T10:41:07Z",
+  "generatedAt": "2026-03-03T12:06:55Z",
   "templatePath": "docs/research/templates/go_no_go_evidence_pack.template.json",
   "outputDir": "decision_packet",
   "missingCount": 0,
@@ -83,7 +83,7 @@
       "destinationPath": "decision_packet/release_gate_status.json",
       "copied": true,
       "exists": true,
-      "sha256": "0bc82347e8d1e7b73735281da68f0e4996024f900a338e1991ec281ed7550b96",
+      "sha256": "b260d55dafce7e71bfd15a95fd68a5a9148fa16711c9e43afc7c5e1ffcb977b2",
       "sizeBytes": 368
     },
     {
@@ -128,8 +128,8 @@
       "destinationPath": "decision_packet/experiment_verdict.v2.json",
       "copied": true,
       "exists": true,
-      "sha256": "7e908eff6f9e51a648988239e07c3fb468d313a80f043c5364d8728a0b911067",
-      "sizeBytes": 2292
+      "sha256": "6f78ed2f16403d1586bdcda06a4aac2a55fa649f2e94a4a7e0a12e155c490290",
+      "sizeBytes": 3586
     },
     {
       "key": "gateCheckpointG0",
@@ -137,7 +137,7 @@
       "destinationPath": "decision_packet/gates/G0.checkpoint.json",
       "copied": true,
       "exists": true,
-      "sha256": "1186542b4d3027b39347f2930469ff2b8659a4d5921f61f804c6c348ed630b51",
+      "sha256": "2e051d8d7239fb0781ac90282e8b8c28e1c00f42d74f8e49013004db790af73e",
       "sizeBytes": 1298
     },
     {
@@ -146,7 +146,7 @@
       "destinationPath": "decision_packet/gates/G1.checkpoint.json",
       "copied": true,
       "exists": true,
-      "sha256": "82f212c68c78652c7086a4fc766b6e347e29bd14e1f90293753cc52a53d581c1",
+      "sha256": "b33eebbb705bb4cc48101dc8c298a26179028890c93d16a990b938e6720fa98c",
       "sizeBytes": 990
     },
     {
@@ -155,7 +155,7 @@
       "destinationPath": "decision_packet/gates/G2.checkpoint.json",
       "copied": true,
       "exists": true,
-      "sha256": "eda9bf474959a55d92c99686dbec3dc1eddf17483e2c5d9b13be2d54c74ca247",
+      "sha256": "e117e066a0b3875738a0a9063b233a286c587bfa39ae86db65bb0cf8f04cfc4d",
       "sizeBytes": 2515
     },
     {
@@ -164,8 +164,8 @@
       "destinationPath": "decision_packet/gates/G3.checkpoint.json",
       "copied": true,
       "exists": true,
-      "sha256": "8d79ba37fc72533ca9fe724a5360c934ac1a19ffd5ab5db6862f4f8e81f8075b",
-      "sizeBytes": 2361
+      "sha256": "9706a8b1f251f001d1adf51daaa1d05a3681f58d4eabf7c0dd6e3d45aa9fad49",
+      "sizeBytes": 2392
     },
     {
       "key": "gateCheckpointG4",
@@ -173,7 +173,7 @@
       "destinationPath": "decision_packet/gates/G4.checkpoint.json",
       "copied": true,
       "exists": true,
-      "sha256": "800541c47c3046109cea1d7baab52831b748327526789ac01e9298e6ec075972",
+      "sha256": "2b14bb50538668672c498b9508bb40c42f13fa015a5237177d7b7ec8a0b94d2b",
       "sizeBytes": 1253
     },
     {
@@ -182,7 +182,7 @@
       "destinationPath": "decision_packet/gates/gate_checkpoints_index.v1.json",
       "copied": true,
       "exists": true,
-      "sha256": "6d820d8100f69337b9b4aa730db88597679bced0ceffc81e264a77a9782e621a",
+      "sha256": "8e9c98e90ff3e4b38954f498b3b28644c82510f5405b40588318ad21aa3c824a",
       "sizeBytes": 1604
     }
   ],

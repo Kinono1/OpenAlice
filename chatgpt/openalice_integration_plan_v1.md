@@ -164,6 +164,11 @@ Stop condition:
 Objective:
 - add a multi-agent crypto research layer inside OpenAlice
 
+Status update:
+- the first canonical decision contract now exists
+- `expertQuantDecision` already emits `research_decision.v1`
+- Phase 2 should therefore wire `TradingAgents` to that contract instead of introducing a parallel result format
+
 Scope:
 - no live execution changes
 - no multi-chain routing yet
@@ -226,6 +231,16 @@ Success criteria:
 
 Stop condition:
 - paper execution path consumes the new intent object safely
+
+## Phase 2.5 — TradingAgents sidecar wiring checklist
+
+Use the external checklist:
+- `../../phase2_tradingagents_sidecar_checklist.md`
+
+Contract alignment rules:
+- sidecar output must validate as `research_decision.v1`
+- any downstream order proposal must be convertible into `execution_intent.v1`
+- raw debate output may be stored as supplementary artifacts, but never as the primary machine contract
 
 ## First implementation slice (recommended)
 

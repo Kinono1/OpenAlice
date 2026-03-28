@@ -82,17 +82,20 @@ describe('NewsCollectorStore', () => {
   })
 
   it('persists to JSONL and recovers on init', async () => {
+    const article1Time = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    const article2Time = new Date(article1Time.getTime() + 60 * 60 * 1000)
+
     await store.ingest({
       title: 'Article 1',
       content: 'Content 1',
-      pubTime: new Date('2026-02-27T10:00:00Z'),
+      pubTime: article1Time,
       dedupKey: 'guid:1',
       metadata: { source: 'test' },
     })
     await store.ingest({
       title: 'Article 2',
       content: 'Content 2',
-      pubTime: new Date('2026-02-27T11:00:00Z'),
+      pubTime: article2Time,
       dedupKey: 'guid:2',
       metadata: { source: 'test' },
     })
@@ -111,7 +114,7 @@ describe('NewsCollectorStore', () => {
     const dup = await store2.ingest({
       title: 'Article 1',
       content: 'Content 1',
-      pubTime: new Date('2026-02-27T10:00:00Z'),
+      pubTime: article1Time,
       dedupKey: 'guid:1',
       metadata: { source: 'test' },
     })
@@ -148,6 +151,36 @@ describe('NewsCollectorStore', () => {
     expect(smallStore.count).toBe(3)
     expect(smallStore.dedupCount).toBe(5) // All dedup keys retained
     await smallStore.close()
+  })
+
+  it('evicts dedup keys outside the retention window', async () => {
+    const retentionStore = new NewsCollectorStore({
+      logPath: TEST_LOG_PATH,
+      maxInMemory: 100,
+      retentionDays: 7,
+    })
+    await retentionStore.init()
+
+    await retentionStore.ingest({
+      title: 'Old article',
+      content: 'Old content',
+      pubTime: new Date('2026-02-01T00:00:00Z'),
+      dedupKey: 'guid:old',
+      metadata: { source: 'test' },
+    })
+    await retentionStore.ingest({
+      title: 'Fresh article',
+      content: 'Fresh content',
+      pubTime: new Date('2026-02-20T00:00:00Z'),
+      dedupKey: 'guid:fresh',
+      metadata: { source: 'test' },
+    })
+
+    expect(retentionStore.has('guid:old')).toBe(false)
+    expect(retentionStore.has('guid:fresh')).toBe(true)
+    expect(retentionStore.dedupCount).toBe(1)
+
+    await retentionStore.close()
   })
 
   describe('INewsProvider', () => {

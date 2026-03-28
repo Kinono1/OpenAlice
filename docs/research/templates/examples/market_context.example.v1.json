@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "market_context.v1",
+  "generatedAt": "2026-03-26T12:00:00.000Z",
+  "symbol": "BTC/USD",
+  "interval": "1h",
+  "lookbackBars": 3,
+  "playheadTime": "2026-03-26T12:00:00.000Z",
+  "availableSymbols": ["BTC/USD", "ETH/USD"],
+  "source": {
+    "provider": "openbb",
+    "mode": "native"
+  },
+  "bars": [
+    {
+      "symbol": "BTC/USD",
+      "time": 1774483200,
+      "open": 87000,
+      "high": 87200,
+      "low": 86850,
+      "close": 87120,
+      "volume": 1000,
+      "tsOpenMs": 1774483200000,
+      "barIntervalMs": 3600000,
+      "barCloseMs": 1774486800000,
+      "completed": true,
+      "sourceDomain": "openbb"
+    },
+    {
+      "symbol": "BTC/USD",
+      "time": 1774486800,
+      "open": 87120,
+      "high": 87350,
+      "low": 87010,
+      "close": 87240,
+      "volume": 980,
+      "tsOpenMs": 1774486800000,
+      "barIntervalMs": 3600000,
+      "barCloseMs": 1774490400000,
+      "completed": true,
+      "sourceDomain": "openbb"
+    },
+    {
+      "symbol": "BTC/USD",
+      "time": 1774490400,
+      "open": 87240,
+      "high": 87500,
+      "low": 87180,
+      "close": 87410,
+      "volume": 1015,
+      "tsOpenMs": 1774490400000,
+      "barIntervalMs": 3600000,
+      "barCloseMs": 1774494000000,
+      "completed": true,
+      "sourceDomain": "openbb"
+    }
+  ]
+}

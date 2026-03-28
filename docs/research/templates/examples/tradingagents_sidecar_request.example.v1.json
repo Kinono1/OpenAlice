@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "tradingagents_sidecar_request.v1",
+  "requestMeta": {
+    "schemaVersion": "tradingagents_sidecar_request.v1",
+    "sourceId": "tradingagents.sidecar",
+    "requestId": "req_20260326_120000_btcusd_paper",
+    "sidecarRunId": "tarun_20260326_120005_btcusd",
+    "generatedAt": "2026-03-26T12:00:05.000Z",
+    "inputHash": "03412a4cfe09122a5cd16ccdb31e6d10d8a1ed64899a96fa8b036b650d5beaec"
+  },
+  "payload": {
+    "symbol": "BTC/USD",
+    "marketContext": {
+      "lookbackBars": 3,
+      "windowStart": "2026-03-26T09:00:00.000Z",
+      "windowEnd": "2026-03-26T12:00:00.000Z",
+      "candles": [
+        {
+          "symbol": "BTC/USD",
+          "time": 1774515600,
+          "open": 87240,
+          "high": 87480,
+          "low": 87190,
+          "close": 87390,
+          "volume": 812.5
+        },
+        {
+          "symbol": "BTC/USD",
+          "time": 1774519200,
+          "open": 87390,
+          "high": 87610,
+          "low": 87320,
+          "close": 87540,
+          "volume": 845.2
+        },
+        {
+          "symbol": "BTC/USD",
+          "time": 1774522800,
+          "open": 87540,
+          "high": 87680,
+          "low": 87490,
+          "close": 87610,
+          "volume": 801.1
+        }
+      ]
+    },
+    "newsContext": {
+      "lookback": "48h",
+      "items": [
+        {
+          "time": "2026-03-26T10:15:00.000Z",
+          "title": "Bitcoin ETF inflows remain positive",
+          "content": "Spot ETF products posted a fourth consecutive day of net inflows.",
+          "metadata": {
+            "source": "desk-wire",
+            "sentiment": "positive",
+            "url": null
+          }
+        },
+        {
+          "time": "2026-03-26T11:20:00.000Z",
+          "title": "Fed speakers reiterate data dependence",
+          "content": "Macro desks flagged rates sensitivity for crypto beta assets.",
+          "metadata": {
+            "source": "macro-wire",
+            "sentiment": "neutral"
+          }
+        }
+      ]
+    },
+    "decisionContext": {
+      "releaseGateMode": "paper",
+      "requireReleaseGatePass": true,
+      "selectedAnalysts": [
+        "market",
+        "news",
+        "social"
+      ],
+      "researchDepth": 2
+    },
+    "derivedContext": {
+      "featureSummary": "BTC/USD holding above the 20-bar mean with positive ETF flow support.",
+      "promptReadySummary": "Trend modestly bullish; macro remains neutral-to-cautious.",
+      "aggregatedIndicators": {
+        "rsi14": 58.4,
+        "atr14Pct": 2.1
+      }
+    },
+    "supplementalContext": {
+      "fundamentals": "Stablecoin transfer activity increased versus prior day.",
+      "macroSummary": "US rate path uncertainty remains elevated.",
+      "globalNewsSummary": "Asia session headlines were mixed with no new systemic risk flags.",
+      "toolDiagnostics": {
+        "marketDataProvider": "openbb",
+        "newsProvider": "internal-feed",
+        "newsItemsUsed": 2
+      },
+      "providerMetadata": {
+        "venue": "paper",
+        "requestPath": "openalice"
+      }
+    }
+  }
+}

@@ -19,7 +19,14 @@ import { z } from 'zod'
 import { glob } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import type { Plugin, EngineContext } from '../../core/types.js'
+import { createRequireAuth, createRequireTrade } from '../../core/auth.js'
+import { createMcpAuthMiddleware } from '../../core/mcp-auth-policy.js'
 import { SessionStore, toTextHistory } from '../../core/session.js'
+import {
+  createTrustedContext,
+  removeContext,
+  runWithContextAsync,
+} from '../../core/trusted-context.js'
 
 export interface McpAskConfig {
   port: number;
@@ -58,19 +65,6 @@ export class McpAskPlugin implements Plugin {
         { message: z.string().describe('The message to send to Alice'), sessionId: z.string().describe('Session identifier (caller-managed)') },
         async ({ message, sessionId }) => {
           const session = await plugin.getSession(sessionId)
-
-          const result = await ctx.engine.askWithSession(message, session, {
-            historyPreamble: 'The following is the conversation from an external MCP client. Use it as context if the caller references earlier messages.',
-          })
-
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({ text: result.text, sessionId }) }],
-          }
-        },
-        async ({ message, sessionId }) => {
-          const session = await plugin.getSession(sessionId);
-          touchInteraction("mcp-ask", sessionId);
-
           const trustedCtx = createTrustedContext({
             channel: "mcp-ask",
             sessionId: session.id,

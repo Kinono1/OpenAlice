@@ -96,6 +96,48 @@ describe('Wallet', () => {
       expect(config.getWalletState).toHaveBeenCalled();
     });
 
+    it('prefers executeBatch when configured', async () => {
+      const executeBatch = vi.fn().mockResolvedValue([
+        {
+          success: true,
+          order: {
+            id: 'ord-batch-1',
+            status: 'filled',
+            filledPrice: 95000,
+            filledQuantity: 0.1,
+          },
+        },
+        {
+          success: false,
+          error: 'Skipped due to previous batch failure',
+        },
+      ]);
+      config = createMockConfig({ executeBatch });
+      wallet = new Wallet(config);
+
+      wallet.add(makeOp());
+      wallet.add(
+        makeOp({
+          params: { symbol: 'ETH/USD', side: 'buy', type: 'market', size: 1 },
+        }),
+      );
+      const { hash } = wallet.commit('batch');
+      const result = await wallet.push();
+
+      expect(executeBatch).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          message: 'batch',
+          hash,
+          parentHash: null,
+        }),
+      );
+      expect(config.executeOperation).not.toHaveBeenCalled();
+      expect(result.filled).toHaveLength(1);
+      expect(result.rejected).toHaveLength(1);
+      expect(result.rejected[0].error).toBe('Skipped due to previous batch failure');
+    });
+
     it('records commit and updates head', async () => {
       wallet.add(makeOp());
       const { hash } = wallet.commit('test');

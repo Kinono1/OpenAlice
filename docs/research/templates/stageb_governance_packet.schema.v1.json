@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/stageb_governance_packet.schema.v1.json",
+  "title": "OpenAlice Stage-B Governance Packet v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "inputs",
+    "evidenceSummary",
+    "options",
+    "decision",
+    "signOffChecklist"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "stageb_governance_packet.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["stageaGateResult", "precontinueDecision", "sensitivityReport", "matrixReport"],
+      "properties": {
+        "stageaGateResult": { "type": "string", "minLength": 1 },
+        "precontinueDecision": { "type": "string", "minLength": 1 },
+        "sensitivityReport": { "type": "string", "minLength": 1 },
+        "matrixReport": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidenceSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["stageAPassed", "precontinuePrimaryRecommendation"],
+      "properties": {
+        "stageAPassed": { "type": "boolean" },
+        "stageANextStage": { "type": ["string", "null"] },
+        "precontinuePrimaryRecommendation": { "type": ["string", "null"] },
+        "matrixCompletedAssets": { "type": ["integer", "null"] },
+        "matrixFdrQMedian": { "type": ["number", "null"] },
+        "prodFrozenJointPassRate": { "type": ["number", "null"] },
+        "researchFdr15JointPassRate": { "type": ["number", "null"] },
+        "researchFdr15DeltaVsProd": { "type": ["number", "null"] }
+      }
+    },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "optionId",
+          "title",
+          "estimatedTime",
+          "successProbability",
+          "businessRisk",
+          "recommendationRank"
+        ],
+        "properties": {
+          "optionId": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "estimatedTime": { "type": "string", "minLength": 1 },
+          "successProbability": { "type": "string", "minLength": 1 },
+          "businessRisk": { "type": "string", "minLength": 1 },
+          "recommendationRank": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["recommendedOptionId", "rationale", "requiresBusinessSignOff", "deadline"],
+      "properties": {
+        "recommendedOptionId": { "type": "string", "minLength": 1 },
+        "rationale": { "type": "array", "items": { "type": "string" } },
+        "requiresBusinessSignOff": { "type": "boolean" },
+        "deadline": { "type": "string", "format": "date-time" }
+      }
+    },
+    "signOffChecklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["item", "approved"],
+        "properties": {
+          "item": { "type": "string", "minLength": 1 },
+          "approved": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

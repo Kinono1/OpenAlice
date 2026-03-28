@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { loadConfig, writeConfigSection, readAIProviderConfig, readOpenbbConfig, validSections, type ConfigSection } from '../../../core/config.js'
 import { readAIConfig, writeAIConfig, type AIBackend } from '../../../core/ai-config.js'
+import { readJsonWithLimit } from '../request-body.js'
 
 interface ConfigRouteOpts {
   onConnectorsChange?: () => Promise<void>
@@ -21,7 +22,7 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
 
   app.put('/ai-provider', async (c) => {
     try {
-      const body = await c.req.json<{ backend?: string }>()
+      const body = await readJsonWithLimit<{ backend?: string }>(c)
       const backend = body.backend
       if (backend !== 'claude-code' && backend !== 'vercel-ai-sdk') {
         return c.json({ error: 'Invalid backend. Must be "claude-code" or "vercel-ai-sdk".' }, 400)
@@ -39,7 +40,7 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
       if (!validSections.includes(section)) {
         return c.json({ error: `Invalid section "${section}". Valid: ${validSections.join(', ')}` }, 400)
       }
-      const body = await c.req.json()
+      const body = await readJsonWithLimit(c)
       const validated = await writeConfigSection(section, body)
       // Hot-reload connectors when their config changes
       if (section === 'connectors') {
@@ -87,7 +88,7 @@ export function createOpenbbRoutes() {
 
   app.post('/test-provider', async (c) => {
     try {
-      const { provider, key } = await c.req.json<{ provider: string; key: string }>()
+      const { provider, key } = await readJsonWithLimit<{ provider: string; key: string }>(c)
       const endpoint = TEST_ENDPOINTS[provider]
       if (!endpoint) return c.json({ ok: false, error: `Unknown provider: ${provider}` }, 400)
       if (!key) return c.json({ ok: false, error: 'No API key provided' }, 400)

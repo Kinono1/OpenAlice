@@ -1,0 +1,348 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-11T14:16:27Z",
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "STC_SEED_VB_R2_1",
+      "strategyName": "seed_r2_vol_breakout_12_6_1.05_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 12,
+        "breakoutExitPeriod": 6,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.05,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_2",
+      "strategyName": "seed_r2_vol_breakout_20_10_1.05_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.05,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_3",
+      "strategyName": "seed_r2_vol_breakout_30_15_1.05_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 15,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.05,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_4",
+      "strategyName": "seed_r2_vol_breakout_12_6_1.15_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 12,
+        "breakoutExitPeriod": 6,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.15,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_5",
+      "strategyName": "seed_r2_vol_breakout_20_10_1.15_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.15,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_6",
+      "strategyName": "seed_r2_vol_breakout_30_15_1.15_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 15,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.15,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_7",
+      "strategyName": "seed_r2_vol_breakout_12_6_1.25_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 12,
+        "breakoutExitPeriod": 6,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.25,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_8",
+      "strategyName": "seed_r2_vol_breakout_20_10_1.25_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.25,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_9",
+      "strategyName": "seed_r2_vol_breakout_30_15_1.25_cd0",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 15,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.25,
+        "volCooldownBars": 0
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_10",
+      "strategyName": "seed_r2_vol_breakout_12_6_1.05_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 12,
+        "breakoutExitPeriod": 6,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.05,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_11",
+      "strategyName": "seed_r2_vol_breakout_20_10_1.05_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.05,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_12",
+      "strategyName": "seed_r2_vol_breakout_30_15_1.05_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 15,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.05,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_13",
+      "strategyName": "seed_r2_vol_breakout_12_6_1.15_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 12,
+        "breakoutExitPeriod": 6,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.15,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_14",
+      "strategyName": "seed_r2_vol_breakout_20_10_1.15_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.15,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_15",
+      "strategyName": "seed_r2_vol_breakout_30_15_1.15_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 15,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.15,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_16",
+      "strategyName": "seed_r2_vol_breakout_12_6_1.25_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 12,
+        "breakoutExitPeriod": 6,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.25,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_17",
+      "strategyName": "seed_r2_vol_breakout_20_10_1.25_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.25,
+        "volCooldownBars": 12
+      }
+    },
+    {
+      "strategyId": "STC_SEED_VB_R2_18",
+      "strategyName": "seed_r2_vol_breakout_30_15_1.25_cd12",
+      "strategy": "volBreakout",
+      "params": {
+        "allowShort": false,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 15,
+        "volWindowBars": 6,
+        "volBaselineBars": 48,
+        "volTriggerRatio": 1.25,
+        "volCooldownBars": 12
+      }
+    }
+  ],
+  "hypothesisCompile": {
+    "schemaVersion": "hypothesis_candidate_compile.v1",
+    "runId": "20260303T120652Z",
+    "generatedAt": "2026-03-03T12:06:52Z",
+    "plan": "A",
+    "inputs": {
+      "hypotheses": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/hypotheses/backlog.v1.json",
+      "baseCandidates": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/docs/research/strategy_candidates.v1.json",
+      "bestTripletSource": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/local_search/best_trend_triplet.latest.v1.json",
+      "bestTripletSchemaVersion": "best_trend_triplet.v1",
+      "bestTripletSourceType": "object"
+    },
+    "stats": {
+      "inspectedHypotheses": 20,
+      "outputCandidates": 3,
+      "themeCounts": {
+        "bestTriplet": 3
+      },
+      "candidateModeRequested": "blend",
+      "candidateModeEffective": "blend",
+      "complexityProfile": "default",
+      "bestTripletLoaded": true,
+      "bestTripletSeedCount": 3,
+      "bestTripletLoadError": ""
+    },
+    "themesUsed": [
+      "bestTriplet",
+      "bestTriplet",
+      "bestTriplet"
+    ]
+  },
+  "stageCSeedFamily": {
+    "schemaVersion": "stage_c_seed_family_round2.v1",
+    "generatedAt": "2026-03-11T14:16:27Z",
+    "family": "vol_gated_breakout_seed",
+    "target": "target_realized_vol_1h",
+    "mapping": "gating_target",
+    "symbols": [
+      "BTC-USDT",
+      "ETH-USDT",
+      "SOL-USDT"
+    ],
+    "aggregateStats": {
+      "futureVolMedian": 0.0006740192436044899,
+      "futureVolP70": 0.0008510878387809396,
+      "futureVolP80": 0.0009703190229885689,
+      "futureVolP90": 0.0011483145918631903,
+      "rangePctMedian": 0.000753682712304931
+    },
+    "candidateCount": 18,
+    "volCooldownBars": [
+      0,
+      12
+    ]
+  }
+}

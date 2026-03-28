@@ -13,9 +13,12 @@ import {
   type StrategyName,
   type StrategyParams,
 } from "../strategy-tools/index.js";
+import { buildRegimeSnapshot } from "../../runtime/regime_snapshot.js";
+import { buildModelSignalArtifact } from "../../runtime/ml_artifact_contracts.js";
 import { analyzeNewsImpact } from "../../runtime/news_impact.js";
 import { evaluateExpertDecision } from "../../runtime/expert_decision.js";
 import { loadReleaseGateStatus } from "../../runtime/release_gate_status.js";
+import { buildResearchDecisionV1FromExpertQuantArtifact } from "../../runtime/research_execution_contracts.js";
 
 const StrategyParamsObjectSchema = z.object({
   allowShort: z.boolean().optional(),
@@ -106,6 +109,27 @@ function finiteOrUndefined(value: unknown): number | undefined {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function strategyFamilyFor(strategy: StrategyName): string {
+  switch (strategy) {
+    case "trend":
+      return "core_trend";
+    case "meanReversion":
+      return "core_mean_reversion";
+    case "breakout":
+      return "core_breakout";
+    case "ensemble":
+      return "core_ensemble";
+    case "volBreakout":
+    case "volTrend":
+    case "volNoTradeFilter":
+      return "volatility_gated";
+  }
 }
 
 function computeStrategyStrength(
@@ -362,20 +386,33 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         }
 
         const strategyCandidates = evaluateStrategyCandidates(candles, params);
-        const selection = pickActiveStrategy(
-          strategyCandidates,
-          strategySelection,
-          strategySwitchThreshold,
-          strategySwitchMargin
-        );
-        const strategyDecision = selection.selected.decision;
-
         const news = await ctx.getNewsV2({
           lookback: newsLookback,
           limit: newsLimit,
         });
         const now = ctx.getPlayheadTime();
         const newsImpact = analyzeNewsImpact(news, { now });
+        const eventIntensity = Math.min(1, newsImpact.riskScore);
+        const regimeSnapshot = buildRegimeSnapshot({
+          symbol,
+          bars: candles,
+          generatedAt: now.toISOString(),
+          eventIntensity,
+        });
+        const eligibleStrategyCandidates = strategyCandidates.filter((item) =>
+          regimeSnapshot.allowedStrategyFamilies.includes(
+            strategyFamilyFor(item.strategy),
+          ),
+        );
+        const selection = pickActiveStrategy(
+          eligibleStrategyCandidates.length > 0
+            ? eligibleStrategyCandidates
+            : strategyCandidates,
+          strategySelection,
+          strategySwitchThreshold,
+          strategySwitchMargin
+        );
+        const strategyDecision = selection.selected.decision;
 
         let mlSignal:
           | {
@@ -457,11 +494,12 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
                 )
               );
 
+        const baseMinCompositeScore = policy?.minCompositeScore ?? 0.2;
         const decision = evaluateExpertDecision({
           symbol,
           strategy: {
             signal: strategyDecision.signal,
-            reason: `${strategyDecision.reason} [${selection.reason}]`,
+            reason: `${strategyDecision.reason} [${selection.reason}] [regime=${regimeSnapshot.regimeId}]`,
             ensembleScore,
           },
           ml: mlSignal,
@@ -470,10 +508,22 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
           policy: {
             ...(policy ?? {}),
             requireReleaseGatePass,
+            minCompositeScore: clamp(
+              baseMinCompositeScore +
+                regimeSnapshot.thresholdProfile.minCompositeScoreBump,
+              0.05,
+              1,
+            ),
           },
         });
+        const scaledExposurePct = Number(
+          (
+            decision.suggestedExposurePct *
+            regimeSnapshot.thresholdProfile.maxExposureScale
+          ).toFixed(2),
+        );
 
-        return {
+        const artifact = {
           symbol,
           generatedAt: now.toISOString(),
           lookbackBars: candles.length,
@@ -491,18 +541,39 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
             reason: strategyDecision.reason,
             ensembleScore,
             indicators: strategyDecision.indicators,
-            candidates: strategyCandidates.map(item => ({
+            candidates: (eligibleStrategyCandidates.length > 0
+              ? eligibleStrategyCandidates
+              : strategyCandidates
+            ).map(item => ({
               strategy: item.strategy,
               signal: item.decision.signal,
               strength: item.strength,
               reason: item.decision.reason,
             })),
           },
+          regimeSnapshot,
           ml: mlSignal ?? {
             available: false,
             direction: "hold" as const,
             error: "ml_disabled",
           },
+          modelSignal:
+            mlSignal && mlSignal.available
+              ? buildModelSignalArtifact({
+                  generatedAt: now.toISOString(),
+                  modelId:
+                    mlSignal.hybridGlobalWinner ??
+                    `ensemble:${mlSignal.ensembleMode ?? "unknown"}`,
+                  symbol,
+                  direction: mlSignal.direction,
+                  confidence: mlSignal.confidence ?? 0,
+                  expectedReturnPct: mlSignal.expectedReturnPct ?? 0,
+                  applicableRegimes: [regimeSnapshot.regimeId],
+                  invalidationReasons: mlSignal.actionable === false
+                    ? ["ml_marked_non_actionable"]
+                    : [],
+                })
+              : null,
           news: {
             ...newsImpact,
             latestHeadlines: news.slice(-5).map(item => ({
@@ -520,7 +591,21 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
                 expiresAt: releaseGateStatus.expiresAt,
               }
             : null,
-          decision,
+          decision: {
+            ...decision,
+            suggestedExposurePct: scaledExposurePct,
+            reasons: [
+              ...decision.reasons,
+              `Regime ${regimeSnapshot.regimeId} exposureScale=${regimeSnapshot.thresholdProfile.maxExposureScale.toFixed(2)} minCompositeScoreBump=${regimeSnapshot.thresholdProfile.minCompositeScoreBump.toFixed(2)}.`,
+            ],
+          },
+        };
+
+        return {
+          ...artifact,
+          researchDecision: buildResearchDecisionV1FromExpertQuantArtifact(
+            artifact,
+          ),
         };
       },
     }),

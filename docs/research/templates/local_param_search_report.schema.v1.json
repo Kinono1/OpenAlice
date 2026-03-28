@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/local_param_search_report.schema.v1.json",
+  "title": "OpenAlice Local Parameter Search Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "repoRoot",
+    "mode",
+    "target",
+    "constraint",
+    "wfoProfile",
+    "plan",
+    "focusRange",
+    "aggressive",
+    "seed",
+    "fdrMethod",
+    "fdrStoreyLambda",
+    "trialsRequested",
+    "trialCount",
+    "baselineFdrQ",
+    "thresholdBreakTarget",
+    "fdrMax",
+    "pboMax",
+    "fdrWeight",
+    "pboWeight",
+    "pboThresholdTarget",
+    "bestFdrQ",
+    "bestMeanPbo",
+    "improvementAbs",
+    "improvementPct",
+    "thresholdBreak",
+    "pboThresholdBreak",
+    "feasibleCount",
+    "bestTrialConstraintSatisfied",
+    "bestTrial",
+    "top10",
+    "trials"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "local_param_search_report.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repoRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["local", "wide"]
+    },
+    "target": {
+      "type": "string",
+      "enum": ["fdr", "pbo", "wfo", "composite"]
+    },
+    "constraint": {
+      "type": "string",
+      "enum": ["none", "fdr", "pbo", "both"]
+    },
+    "wfoProfile": {
+      "type": "string",
+      "enum": ["stable", "shift", "stress"]
+    },
+    "plan": {
+      "type": "string",
+      "enum": ["A", "B", "C"]
+    },
+    "focusRange": {
+      "type": ["string", "null"]
+    },
+    "aggressive": {
+      "type": "boolean"
+    },
+    "complexityProfile": {
+      "type": "string",
+      "enum": ["default", "low"]
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "fdrMethod": {
+      "type": "string",
+      "enum": [
+        "bh",
+        "by",
+        "storey_bh",
+        "regime_segmented_bh",
+        "cv_storey_bh",
+        "stability_bh"
+      ]
+    },
+    "fdrStoreyLambda": {
+      "type": ["number", "null"]
+    },
+    "regimeMethod": {
+      "type": "string"
+    },
+    "regimeMaxSegments": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "regimeMinSegmentBars": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "regimeMinWindows": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "regimeAggregation": {
+      "type": "string",
+      "enum": ["max", "weighted_mean"]
+    },
+    "regimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "maxSegments", "minSegmentBars", "minWindows", "aggregation"],
+      "properties": {
+        "method": { "type": "string" },
+        "maxSegments": { "type": "integer", "minimum": 1 },
+        "minSegmentBars": { "type": "integer", "minimum": 1 },
+        "minWindows": { "type": "integer", "minimum": 1 },
+        "aggregation": { "type": "string", "enum": ["max", "weighted_mean"] }
+      }
+    },
+    "cvAggQuantile": {
+      "type": "number"
+    },
+    "stabilityBootstraps": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "stabilitySubsampleFrac": {
+      "type": "number"
+    },
+    "stabilityMinFrequency": {
+      "type": "number"
+    },
+    "stabilitySelectP": {
+      "type": "number"
+    },
+    "trialsRequested": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "trialCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "baselineFdrQ": {
+      "type": "number"
+    },
+    "thresholdBreakTarget": {
+      "type": "number"
+    },
+    "fdrMax": {
+      "type": "number"
+    },
+    "pboMax": {
+      "type": "number"
+    },
+    "fdrWeight": {
+      "type": "number"
+    },
+    "pboWeight": {
+      "type": "number"
+    },
+    "pboThresholdTarget": {
+      "type": "number"
+    },
+    "bestFdrQ": {
+      "type": ["number", "null"]
+    },
+    "bestMeanPbo": {
+      "type": ["number", "null"]
+    },
+    "bestWfoFailureDensity": {
+      "type": ["number", "null"]
+    },
+    "improvementAbs": {
+      "type": ["number", "null"]
+    },
+    "improvementPct": {
+      "type": ["number", "null"]
+    },
+    "thresholdBreak": {
+      "type": "boolean"
+    },
+    "pboThresholdBreak": {
+      "type": "boolean"
+    },
+    "feasibleCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bestTrialConstraintSatisfied": {
+      "type": "boolean"
+    },
+    "bestTrial": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/trialSummary" }
+      ]
+    },
+    "top10": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/trialSummary" },
+      "maxItems": 10
+    },
+    "trials": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/trialSummary" }
+    }
+  },
+  "$defs": {
+    "trendParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trendFastPeriod", "trendSlowPeriod", "allowShort"],
+      "properties": {
+        "trendFastPeriod": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "trendSlowPeriod": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "allowShort": {
+          "type": "boolean"
+        }
+      }
+    },
+    "trialSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trialId",
+        "trialLabel",
+        "anchorType",
+        "exitCode",
+        "fdrQ",
+        "meanPbo",
+        "meanDsrProbability",
+        "params"
+      ],
+      "properties": {
+        "trialId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "trialLabel": {
+          "type": "string"
+        },
+        "anchorType": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "fdrQ": {
+          "type": ["number", "null"]
+        },
+        "meanPbo": {
+          "type": ["number", "null"]
+        },
+        "meanDsrProbability": {
+          "type": ["number", "null"]
+        },
+        "wfoFailureDensity": {
+          "type": ["number", "null"]
+        },
+        "params": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/trendParams" }
+        }
+      }
+    }
+  }
+}

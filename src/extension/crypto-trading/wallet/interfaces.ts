@@ -21,6 +21,13 @@ import type {
   WalletState,
 } from './types';
 
+export interface WalletBatchExecuteMeta {
+  message: string;
+  hash: CommitHash;
+  parentHash: CommitHash | null;
+  round?: number;
+}
+
 /**
  * IWallet - Wallet interface
  *
@@ -144,6 +151,19 @@ export interface IWallet {
 export interface WalletConfig {
   /** Callback function for executing operations */
   executeOperation: (operation: Operation) => Promise<unknown>;
+
+  /**
+   * Optional batch execution callback.
+   *
+   * When present, Wallet.push() will execute the whole staged batch through this
+   * callback instead of invoking executeOperation() one-by-one. Implementations
+   * should preserve operation order and return one raw wallet-compatible result
+   * per input operation.
+   */
+  executeBatch?: (
+    operations: Operation[],
+    meta: WalletBatchExecuteMeta,
+  ) => Promise<unknown[]>;
 
   /** Callback function for getting the current wallet state */
   getWalletState: () => Promise<import('./types').WalletState>;

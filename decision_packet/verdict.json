@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "generatedAt": "2026-03-02T10:41:16Z",
+  "generatedAt": "2026-03-03T12:06:55Z",
   "packetDir": "decision_packet",
   "evidencePackPath": "decision_packet/evidence_pack.json",
   "verdict": "NO_GO",
@@ -86,7 +86,7 @@
           "measuredKey": "meanPbo",
           "operator": "<=",
           "threshold": 0.2,
-          "measured": 1,
+          "measured": 0.8857142857142857,
           "passed": false,
           "missingMeasured": false
         },
@@ -95,7 +95,7 @@
           "measuredKey": "meanDsrProbability",
           "operator": ">=",
           "threshold": 0.5,
-          "measured": 0.0493492933392912,
+          "measured": 0.17528947232399147,
           "passed": false,
           "missingMeasured": false
         },
@@ -104,7 +104,7 @@
           "measuredKey": "fdrQ",
           "operator": "<=",
           "threshold": 0.1,
-          "measured": 1,
+          "measured": 0.9999997082664652,
           "passed": false,
           "missingMeasured": false
         },
@@ -113,7 +113,7 @@
           "measuredKey": "releaseGateStatusAgeHours",
           "operator": "<=",
           "threshold": 24,
-          "measured": 0.005569448888888889,
+          "measured": 0.0005764955555555556,
           "passed": true,
           "missingMeasured": false
         }
@@ -126,7 +126,7 @@
       "measuredKey": "meanPbo",
       "operator": "<=",
       "threshold": 0.2,
-      "measured": 1,
+      "measured": 0.8857142857142857,
       "passed": false,
       "missingMeasured": false
     },
@@ -135,7 +135,7 @@
       "measuredKey": "meanDsrProbability",
       "operator": ">=",
       "threshold": 0.5,
-      "measured": 0.0493492933392912,
+      "measured": 0.17528947232399147,
       "passed": false,
       "missingMeasured": false
     },
@@ -144,7 +144,7 @@
       "measuredKey": "fdrQ",
       "operator": "<=",
       "threshold": 0.1,
-      "measured": 1,
+      "measured": 0.9999997082664652,
       "passed": false,
       "missingMeasured": false
     },
@@ -153,7 +153,7 @@
       "measuredKey": "releaseGateStatusAgeHours",
       "operator": "<=",
       "threshold": 24,
-      "measured": 0.005569448888888889,
+      "measured": 0.0005764955555555556,
       "passed": true,
       "missingMeasured": false
     }

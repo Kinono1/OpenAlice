@@ -8,13 +8,23 @@ import { TelegramPlugin } from './connectors/telegram/index.js'
 import { WebPlugin } from './connectors/web/index.js'
 import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './extension/thinking-kit/index.js'
-import type { WalletExportState } from './extension/crypto-trading/index.js'
+import type {
+  CryptoOrderResult,
+  CryptoPlaceOrderRequest,
+  ICryptoTradingEngine,
+  WalletExportState,
+} from './extension/crypto-trading/index.js'
+import type {
+  RiskCheckContext,
+  RiskCheckResult,
+} from './extension/crypto-trading/risk.js'
 import {
   Wallet,
   createCryptoTradingEngine,
   createCryptoTradingTools,
   createCryptoOperationDispatcher,
   createCryptoWalletStateBridge,
+  createGuardBatchPipeline,
   createGuardPipeline,
   resolveGuards,
 } from './extension/crypto-trading/index.js'
@@ -28,6 +38,12 @@ import {
   createSecGuardPipeline,
   resolveSecGuards,
 } from './extension/securities-trading/index.js'
+import { DecisionTicketStore } from './extension/crypto-trading/decision-ticket.js'
+import { IntentLedger } from './extension/crypto-trading/intent-ledger.js'
+import { TradeIdempotencyStore } from './extension/crypto-trading/idempotency-store.js'
+import { KillSwitch } from './extension/crypto-trading/kill-switch.js'
+import { PnLTracker } from './extension/crypto-trading/pnl-tracker.js'
+import type { SyncedCryptoOrderUpdate } from './extension/crypto-trading/adapter.js'
 import { Brain, createBrainTools } from './extension/brain/index.js'
 import type { BrainExportState } from './extension/brain/index.js'
 import { createBrowserTools } from './extension/browser/index.js'
@@ -42,7 +58,12 @@ import { createCryptoTools } from './extension/crypto/index.js'
 import { createCurrencyTools } from './extension/currency/index.js'
 import { createNewsTools } from './extension/news/index.js'
 import { createAnalysisTools } from './extension/analysis-kit/index.js'
+import type { IAnalysisContext } from './extension/analysis-tools/interfaces.js'
+import type { MarketData } from './extension/analysis-kit/data/interfaces.js'
+import { createTradingAgentsResearchTools, TradingAgentsSidecarRunner } from './extension/strategy-research-tradingagents/index.js'
+import { loadTradingAgentsVerdict } from './runtime/tradingagents_advisory_scorecard.js'
 import { SessionStore } from './core/session.js'
+import { configureGlobalNetworkProxy } from './core/network-proxy.js'
 import { ConnectorCenter } from './core/connector-center.js'
 import { ToolCenter } from './core/tool-center.js'
 import { AgentCenter } from './core/agent-center.js'
@@ -53,8 +74,12 @@ import { createEventLog } from './core/event-log.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
 import { NewsCollectorStore, NewsCollector, wrapNewsToolsForPiggyback, createNewsArchiveTools } from './extension/news-collector/index.js'
+import { LiveGateManager } from './runtime/live_gate_manager.js'
+import { createOpenBBCryptoLiveMarketContext } from './runtime/openbb_live_market_context.js'
+import type { CryptoHistoricalData } from './openbb/crypto/types/price.js'
 
 const WALLET_FILE = resolve("data/crypto-trading/commit.json");
+const PNL_TRACKER_FILE = resolve("data/crypto-trading/pnl-fills.jsonl");
 const SEC_WALLET_FILE = resolve("data/securities-trading/commit.json");
 const BRAIN_FILE = resolve("data/brain/commit.json");
 const FRONTAL_LOBE_FILE = resolve("data/brain/frontal-lobe.md");
@@ -63,6 +88,19 @@ const PERSONA_FILE = resolve("data/brain/persona.md");
 const PERSONA_DEFAULT = resolve("data/default/persona.default.md");
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+type CryptoLiveGateHooks = {
+  beforePlaceOrder: (
+    req: CryptoPlaceOrderRequest
+  ) => Promise<RiskCheckResult | undefined>;
+  buildRiskContext: () => Promise<RiskCheckContext | undefined>;
+  estimateExpectedPrice: (req: CryptoPlaceOrderRequest) => Promise<number | undefined>;
+  recordExecution: (
+    req: CryptoPlaceOrderRequest,
+    result: CryptoOrderResult,
+    expectedPrice?: number
+  ) => Promise<void>;
+};
 
 /** Read a file, copying from default if it doesn't exist yet. */
 async function readWithDefault(
@@ -84,8 +122,111 @@ async function readWithDefault(
   }
 }
 
+function timeframeToMs(timeframe: string): number {
+  const match = timeframe.match(/^(\d+)([mhdw])$/i)
+  if (!match) {
+    return 60 * 60 * 1000
+  }
+
+  const value = Number(match[1])
+  const unit = match[2].toLowerCase()
+  switch (unit) {
+    case 'm':
+      return value * 60 * 1000
+    case 'h':
+      return value * 60 * 60 * 1000
+    case 'd':
+      return value * 24 * 60 * 60 * 1000
+    case 'w':
+      return value * 7 * 24 * 60 * 60 * 1000
+    default:
+      return 60 * 60 * 1000
+  }
+}
+
+function toOpenBBCryptoSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase().replace('/', '-')
+}
+
+function mapHistoricalRowToMarketData(
+  symbol: string,
+  row: CryptoHistoricalData,
+): MarketData | null {
+  const ts = Date.parse(row.date)
+  if (!Number.isFinite(ts)) {
+    return null
+  }
+  return {
+    symbol,
+    time: Math.floor(ts / 1000),
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    close: row.close,
+    volume: row.volume ?? 0,
+  }
+}
+
+function createResearchAnalysisContext(params: {
+  cryptoClient: OpenBBCryptoClient
+  newsProvider: Pick<NewsCollectorStore, 'getNewsV2'>
+  timeframe: string
+}): IAnalysisContext {
+  const barMs = timeframeToMs(params.timeframe)
+  const getMarketDataRange = async (startTime: Date, endTime: Date, symbol: string) => {
+    const rows = (await params.cryptoClient.getHistorical({
+      symbol: toOpenBBCryptoSymbol(symbol),
+      start_date: startTime.toISOString().slice(0, 10),
+      end_date: endTime.toISOString().slice(0, 10),
+      interval: params.timeframe,
+    })) as CryptoHistoricalData[]
+
+    return rows
+      .map((row) => mapHistoricalRowToMarketData(symbol, row))
+      .filter((row): row is MarketData => row !== null)
+      .filter((row) => {
+        const rowMs = row.time * 1000
+        return rowMs >= startTime.getTime() - barMs && rowMs <= endTime.getTime()
+      })
+      .sort((a, b) => a.time - b.time)
+  }
+
+  return {
+    marketDataProvider: {
+      async getMarketData(time: Date, symbol: string) {
+        const rows = await getMarketDataRange(time, time, symbol)
+        const latest = rows[rows.length - 1]
+        if (!latest) {
+          throw new Error(`No market data available for ${symbol}.`)
+        }
+        return latest
+      },
+      getMarketDataRange,
+    },
+    getPlayheadTime() {
+      return new Date()
+    },
+    calculatePreviousTime(lookbackBars: number) {
+      return new Date(Date.now() - lookbackBars * barMs)
+    },
+    async getNewsV2(options) {
+      return params.newsProvider.getNewsV2({
+        endTime: options.endTime ?? new Date(),
+        startTime: options.startTime,
+        lookback: options.lookback,
+        limit: options.limit,
+      })
+    },
+  }
+}
+
 async function main() {
   const config = await loadConfig()
+
+  const outboundProxy = configureGlobalNetworkProxy()
+  if (outboundProxy) {
+    console.log(`network: outbound proxy enabled (${outboundProxy})`)
+  }
 
   // ==================== Infrastructure ====================
 
@@ -140,8 +281,9 @@ async function main() {
     defaultPolicy: config.killSwitch.defaultPolicy,
   });
 
-  const pnlTracker = new PnLTracker({
+  const pnlTracker = await PnLTracker.create({
     reconciliationThresholdPct: config.reconciliation.thresholdPct,
+    persistencePath: PNL_TRACKER_FILE,
   });
 
   // Derive exchange ID from crypto config
@@ -193,6 +335,8 @@ async function main() {
 
   // Kept for shutdown cleanup reference (populated when CCXT resolves)
   let cryptoResultRef: Awaited<ReturnType<typeof createCryptoTradingEngine>> = null
+  let liveGateManager: CryptoLiveGateHooks | null = null
+  const getLiveGateManager = (): CryptoLiveGateHooks | null => liveGateManager
 
   // ==================== Brain ====================
 
@@ -234,16 +378,6 @@ async function main() {
   // ==================== Event Log ====================
 
   const eventLog = await createEventLog();
-
-  if (cryptoEngine) {
-    liveGateManager = await LiveGateManager.create({
-      engine: cryptoEngine,
-      klineStore,
-      riskConfig: config.risk,
-      eventLog,
-      baseDir: "data",
-    });
-  }
 
   // ==================== Cron ====================
 
@@ -299,6 +433,37 @@ async function main() {
     toolCenter.register(createNewsArchiveTools(newsStore), 'news-archive')
   }
   toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient), 'analysis')
+  if (config.researchDesk.tradingAgents.enabled) {
+    try {
+      const analysisContext = createResearchAnalysisContext({
+        cryptoClient,
+        newsProvider: newsStore,
+        timeframe: config.engine.timeframe,
+      })
+      const runner = new TradingAgentsSidecarRunner({
+        workingDirectory: resolve(config.researchDesk.tradingAgents.workingDirectory),
+        entrypoint: config.researchDesk.tradingAgents.entrypoint,
+        artifactDir: resolve(config.researchDesk.tradingAgents.artifactDir),
+        timeoutMs: config.researchDesk.tradingAgents.timeoutMs,
+        noOutputTimeoutMs: config.researchDesk.tradingAgents.noOutputTimeoutMs,
+        mode: config.researchDesk.tradingAgents.mode,
+        pythonBin: config.researchDesk.tradingAgents.pythonBin,
+        envAllowlist: config.researchDesk.tradingAgents.envAllowlist,
+        releaseGateStatusPath: resolve(config.governance.releaseGate.statusPath),
+      })
+      toolCenter.register(
+        createTradingAgentsResearchTools(analysisContext, runner, {
+          loadVerdict: async () =>
+            loadTradingAgentsVerdict(
+              resolve(config.researchDesk.tradingAgents.verdictPath),
+            ),
+        }),
+        'research-sidecar',
+      )
+    } catch (err) {
+      console.warn('tradingagents sidecar init failed (non-fatal, continuing without it):', err)
+    }
+  }
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered (crypto trading pending ccxt)`)
 
@@ -325,7 +490,13 @@ async function main() {
   await cronEngine.start()
   const cronSession = new SessionStore('cron/default')
   await cronSession.restore()
-  const cronListener = createCronListener({ connectorCenter, eventLog, engine, session: cronSession })
+  const cronListener = createCronListener({
+    connectorCenter,
+    eventLog,
+    engine,
+    session: cronSession,
+    cronEngine,
+  })
   cronListener.start()
   console.log('cron: engine + listener started')
 
@@ -353,6 +524,159 @@ async function main() {
     console.log(`news-collector: started (${config.newsCollector.feeds.length} feeds, every ${config.newsCollector.intervalMinutes}m)`)
   }
 
+  // ==================== Crypto Dispatcher Wiring ====================
+
+  const appendTradingEvent = async (type: string, payload: unknown) => {
+    await eventLog.append(type, payload).catch(() => {})
+  }
+
+  const recordPnlFill = async (fill: {
+    symbol: string
+    side: 'buy' | 'sell'
+    size: number
+    price: number
+    timestamp: number
+    orderId?: string
+  }) => {
+    pnlTracker.recordFill(fill)
+    pnlTracker.updateMarkPrice(fill.symbol, fill.price)
+
+    const reconciliation = pnlTracker.reconcile(fill.symbol)
+    if (reconciliation.alert) {
+      await appendTradingEvent('pnl.reconciliation.alert', {
+        symbol: reconciliation.symbol,
+        divergence: reconciliation.divergence,
+        divergencePct: reconciliation.divergencePct,
+        avgCostRealizedPnL: reconciliation.avgCostRealizedPnL,
+        fifoRealizedPnL: reconciliation.fifoRealizedPnL,
+      })
+    }
+  }
+
+  const recordSyncedOrderFills = async (updates: SyncedCryptoOrderUpdate[]) => {
+    for (const update of updates) {
+      if (
+        (update.currentStatus !== 'filled' &&
+          update.currentStatus !== 'partially_filled') ||
+        typeof update.filledPrice !== 'number' ||
+        typeof update.filledSize !== 'number' ||
+        update.filledSize <= 0 ||
+        !update.side
+      ) {
+        continue
+      }
+      await recordPnlFill({
+        symbol: update.symbol,
+        side: update.side,
+        size: update.filledSize,
+        price: update.filledPrice,
+        timestamp: update.exchangeUpdateTs ?? Date.now(),
+        orderId: update.orderId,
+      })
+    }
+  }
+
+  const createLiveGateHooks = async (
+    tradingEngine: ICryptoTradingEngine,
+    effectiveConfig: typeof config
+  ): Promise<CryptoLiveGateHooks> => {
+    const marketContext = createOpenBBCryptoLiveMarketContext({
+      client: new OpenBBCryptoClient(
+        effectiveConfig.openbb.apiUrl,
+        effectiveConfig.openbb.providers.crypto,
+        effectiveConfig.openbb.providerKeys,
+      ),
+      // Live-gate market context should follow the configured trading universe,
+      // not the separate canary/micro-live allowlist.
+      symbols: [...effectiveConfig.engine.pairs],
+      interval: effectiveConfig.engine.timeframe,
+    })
+
+    return LiveGateManager.create({
+      engine: tradingEngine,
+      marketContext,
+      riskConfig: effectiveConfig.risk,
+      eventLog,
+      baseDir: 'data',
+      config: {
+        requireReleaseGatePass: effectiveConfig.governance.releaseGate.enabled,
+        gateMode:
+          effectiveConfig.crypto.provider.type === "ccxt" &&
+          effectiveConfig.crypto.provider.demoTrading
+            ? "paper"
+            : "live",
+        releaseGateStatusPath: effectiveConfig.governance.releaseGate.statusPath,
+        liveCanary: {
+          enabled: effectiveConfig.canary.enabled,
+          statePath: effectiveConfig.canary.statePath,
+        },
+        rolloutReadiness: {
+          enabled: effectiveConfig.governance.rolloutReadiness.enabled,
+          statusPath: effectiveConfig.governance.rolloutReadiness.statusPath,
+        },
+      },
+    })
+  }
+
+  const wireCryptoDispatcher = (
+    tradingEngine: ICryptoTradingEngine,
+    effectiveConfig: typeof config
+  ) => {
+    const effectiveExchangeId =
+      effectiveConfig.crypto.provider.type === 'ccxt'
+        ? effectiveConfig.crypto.provider.exchange
+        : undefined
+
+    return createCryptoOperationDispatcher(tradingEngine, {
+      riskConfig: effectiveConfig.risk,
+      ticketStore,
+      intentLedger,
+      idempotencyStore,
+      killSwitch,
+      exchangeId: effectiveExchangeId,
+      slippageConfig: effectiveConfig.slippage,
+      getRiskContext: async () => getLiveGateManager()?.buildRiskContext(),
+      estimateExpectedPrice: async ({ request }) =>
+        getLiveGateManager()?.estimateExpectedPrice(request),
+      beforePlaceOrderGate: async ({ request }) =>
+        getLiveGateManager()?.beforePlaceOrder(request),
+      afterPlaceOrder: async ({ request, result, expectedPrice }) => {
+        const manager = getLiveGateManager()
+        if (manager) {
+          await manager.recordExecution(request, result, expectedPrice)
+        }
+        if (
+          !result.success ||
+          typeof result.filledPrice !== 'number' ||
+          typeof result.filledSize !== 'number' ||
+          result.filledSize <= 0
+        ) {
+          return
+        }
+
+        await recordPnlFill({
+          symbol: request.symbol,
+          side: request.side,
+          size: result.filledSize,
+          price: result.filledPrice,
+          timestamp: result.exchangeUpdateTs ?? result.completedAtMs ?? Date.now(),
+          orderId: result.orderId,
+        })
+      },
+      onRiskRejected: async ({ operation, request, reason, details }) => {
+        await appendTradingEvent('risk.rejected', {
+          action: operation.action,
+          symbol: request.symbol,
+          side: request.side,
+          type: request.type,
+          reduceOnly: !!request.reduceOnly,
+          reason,
+          details: details ?? null,
+        })
+      },
+    })
+  }
+
   // ==================== Engine Reconnect ====================
 
   let cryptoReconnecting = false
@@ -368,14 +692,21 @@ async function main() {
       cryptoResultRef = newResult
 
       if (!newResult) {
+        liveGateManager = null
         return { success: true, message: 'Crypto trading disabled (provider: none)' }
       }
 
+      liveGateManager = await createLiveGateHooks(newResult.engine, freshConfig)
       const bridge = createCryptoWalletStateBridge(newResult.engine)
-      const rawDispatcher = createCryptoOperationDispatcher(newResult.engine)
+      const rawDispatcher = wireCryptoDispatcher(newResult.engine, freshConfig)
       const guards = resolveGuards(freshConfig.crypto.guards)
       const walletConfig = {
         executeOperation: createGuardPipeline(rawDispatcher, newResult.engine, guards),
+        executeBatch: createGuardBatchPipeline(
+          rawDispatcher,
+          newResult.engine,
+          guards,
+        ),
         getWalletState: bridge,
         onCommit: onCryptoCommit,
       }
@@ -384,7 +715,7 @@ async function main() {
       const newWallet = savedWallet ? Wallet.restore(savedWallet, walletConfig) : new Wallet(walletConfig)
       currentCryptoWallet = newWallet
 
-      toolCenter.register(createCryptoTradingTools(newResult.engine, newWallet, bridge), 'crypto-trading')
+      toolCenter.register(createCryptoTradingTools(newResult.engine, newWallet, bridge, recordSyncedOrderFills), 'crypto-trading')
       console.log(`reconnect: crypto trading engine online (${toolCenter.list().length} tools)`)
       return { success: true, message: 'Crypto trading engine reconnected' }
     } catch (err) {
@@ -440,10 +771,13 @@ async function main() {
 
   // Core plugins — always-on, not toggleable at runtime
   const corePlugins: Plugin[] = []
+  const disableMcp = process.env.OPENALICE_DISABLE_MCP === '1'
 
   // MCP Server is always active when a port is set — Claude Code provider depends on it for tools
-  if (config.connectors.mcp.port) {
+  if (config.connectors.mcp.port && !disableMcp) {
     corePlugins.push(new McpPlugin(toolCenter, config.connectors.mcp.port))
+  } else if (disableMcp) {
+    console.warn('mcp plugin disabled via OPENALICE_DISABLE_MCP=1')
   }
 
   // Web UI is always active (no enabled flag)
@@ -540,14 +874,25 @@ async function main() {
   // When the CCXT engine is ready, register crypto trading tools so the next
   // agent call picks them up automatically (VercelAIProvider re-checks tool count).
 
-  cryptoInitPromise.then((cryptoResult) => {
+  cryptoInitPromise.then(async (cryptoResult) => {
     cryptoResultRef = cryptoResult
     if (!cryptoResult) return
+    try {
+      liveGateManager = await createLiveGateHooks(cryptoResult.engine, config)
+    } catch (err) {
+      console.warn('live gate init failed (non-fatal, continuing without it):', err)
+      liveGateManager = null
+    }
     const bridge = createCryptoWalletStateBridge(cryptoResult.engine)
-    const rawDispatcher = createCryptoOperationDispatcher(cryptoResult.engine)
+    const rawDispatcher = wireCryptoDispatcher(cryptoResult.engine, config)
     const guards = resolveGuards(config.crypto.guards)
     const realWalletConfig = {
       executeOperation: createGuardPipeline(rawDispatcher, cryptoResult.engine, guards),
+      executeBatch: createGuardBatchPipeline(
+        rawDispatcher,
+        cryptoResult.engine,
+        guards,
+      ),
       getWalletState: bridge,
       onCommit: onCryptoCommit,
     }
@@ -555,7 +900,7 @@ async function main() {
       ? Wallet.restore(savedState, realWalletConfig)
       : new Wallet(realWalletConfig)
     currentCryptoWallet = realWallet
-    toolCenter.register(createCryptoTradingTools(cryptoResult.engine, realWallet, bridge), 'crypto-trading')
+    toolCenter.register(createCryptoTradingTools(cryptoResult.engine, realWallet, bridge, recordSyncedOrderFills), 'crypto-trading')
     console.log(`ccxt: crypto trading tools online (${toolCenter.list().length} tools total)`)
   })
 

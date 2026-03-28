@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/citation_network.schema.v1.json",
+  "title": "OpenAlice Citation Network v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "sourceDigest",
+    "nodes",
+    "edges",
+    "stats"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "citation_network.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceDigest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["paperId", "title", "isExternal"],
+        "properties": {
+          "paperId": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "source": { "type": ["string", "null"] },
+          "citationCount": { "type": ["integer", "null"], "minimum": 0 },
+          "isExternal": { "type": "boolean" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target", "type"],
+        "properties": {
+          "source": { "type": "string", "minLength": 1 },
+          "target": { "type": "string", "minLength": 1 },
+          "type": { "type": "string", "const": "cites" }
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeCount",
+        "edgeCount",
+        "density",
+        "avgOutDegree",
+        "topInDegree"
+      ],
+      "properties": {
+        "nodeCount": { "type": "integer", "minimum": 0 },
+        "edgeCount": { "type": "integer", "minimum": 0 },
+        "density": { "type": "number", "minimum": 0, "maximum": 1 },
+        "avgOutDegree": { "type": "number", "minimum": 0 },
+        "topInDegree": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["paperId", "inDegree"],
+            "properties": {
+              "paperId": { "type": "string", "minLength": 1 },
+              "inDegree": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

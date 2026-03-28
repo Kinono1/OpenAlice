@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/stagea_gate_result.schema.v1.json",
+  "title": "OpenAlice Stage-A Gate Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "source",
+    "thresholds",
+    "summary",
+    "assets",
+    "decision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "stagea_gate_result.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["matrixReport"],
+      "properties": {
+        "matrixReport": { "type": "string", "minLength": 1 },
+        "matrixRunId": { "type": ["string", "null"] }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["btcBaselineFdrQ", "absFdrQMax", "meanPboMax", "meanDsrProbabilityMin"],
+      "properties": {
+        "btcBaselineFdrQ": { "type": "number" },
+        "absFdrQMax": { "type": "number" },
+        "meanPboMax": { "type": "number" },
+        "meanDsrProbabilityMin": { "type": "number" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "completedAssets",
+        "minCompletedAssets",
+        "conditionACount",
+        "conditionAMinAssets",
+        "conditionBCount",
+        "conditionBMinAssets",
+        "heterogeneityFlag"
+      ],
+      "properties": {
+        "completedAssets": { "type": "integer", "minimum": 0 },
+        "minCompletedAssets": { "type": "integer", "minimum": 0 },
+        "conditionACount": { "type": "integer", "minimum": 0 },
+        "conditionAMinAssets": { "type": "integer", "minimum": 0 },
+        "conditionBCount": { "type": "integer", "minimum": 0 },
+        "conditionBMinAssets": { "type": "integer", "minimum": 0 },
+        "fdrQMedian": { "type": ["number", "null"] },
+        "fdrQDispersionRatio": { "type": ["number", "null"] },
+        "heterogeneityFlag": { "type": "boolean" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["asset", "status", "eligible", "conditionA", "conditionB"],
+        "properties": {
+          "asset": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 },
+          "fdrQ": { "type": ["number", "null"] },
+          "meanPbo": { "type": ["number", "null"] },
+          "meanDsrProbability": { "type": ["number", "null"] },
+          "eligible": { "type": "boolean" },
+          "conditionA": { "type": "boolean" },
+          "conditionB": { "type": "boolean" }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "passed",
+        "hasMinCompletedAssets",
+        "conditionAPassed",
+        "conditionBPassed",
+        "nextStage"
+      ],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "hasMinCompletedAssets": { "type": "boolean" },
+        "conditionAPassed": { "type": "boolean" },
+        "conditionBPassed": { "type": "boolean" },
+        "nextStage": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

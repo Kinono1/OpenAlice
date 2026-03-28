@@ -19,14 +19,227 @@ EXIT_POLICY_FAIL = 2
 EXIT_TOOL_ERROR = 3
 
 SCHEMA_MAP = {
+    "research_digest.v2": "research_digest.schema.v2.json",
+    "hypothesis_backlog.v1": "hypothesis_backlog.schema.v1.json",
+    "citation_network.v1": "citation_network.schema.v1.json",
+    "pdf_extract_report.v1": "pdf_extract_report.schema.v1.json",
+    "local_param_search_report.v1": "local_param_search_report.schema.v1.json",
+    "fdr_frontier_shortlist.v1": "fdr_frontier_shortlist.schema.v1.json",
+    "fdr_bottleneck_report.v1": "fdr_bottleneck_report.schema.v1.json",
+    "multi_asset_matrix.v1": "multi_asset_matrix.schema.v1.json",
+    "threshold_sensitivity.v1": "threshold_sensitivity.schema.v1.json",
+    "precontinue_decision.v1": "precontinue_decision.schema.v1.json",
+    "stagea_gate_result.v1": "stagea_gate_result.schema.v1.json",
+    "stageb_governance_packet.v1": "stageb_governance_packet.schema.v1.json",
+    "quant_policy_pack.v1": "quant_policy_pack.schema.v1.json",
+    "advisor_committee_packet.v1": "advisor_committee_packet.schema.v1.json",
+    "quant_hiring_scorecard.v1": "quant_hiring_scorecard.schema.v1.json",
+    "paper_board.v1": "paper_board.schema.v1.json",
+    "plan_switchboard.v1": "plan_switchboard.schema.v1.json",
     "paper_card.v2": "paper_card.schema.v2.json",
     "evidence_graph.v1": "evidence_graph.schema.v1.json",
     "gate_checkpoint.v1": "gate_checkpoint.schema.v1.json",
     "gate_checkpoint_index.v1": "gate_checkpoint_index.schema.v1.json",
     "experiment_verdict.v2": "experiment_verdict.schema.v2.json",
+    "provisional_baseline.v1": "provisional_baseline.schema.v1.json",
 }
 
 FALLBACK_REQUIRED_FIELDS = {
+    "research_digest.v2": [
+        "schemaVersion",
+        "generated_at",
+        "run_id",
+        "query_count",
+        "query_profile",
+        "queries",
+        "lookback_days",
+        "fetched_papers",
+        "filtered_papers",
+        "new_papers",
+        "cards_source_mode",
+        "cards_fallback_used",
+        "card_candidate_count",
+        "errors",
+        "top_new",
+    ],
+    "hypothesis_backlog.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "hypotheses",
+    ],
+    "citation_network.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "sourceDigest",
+        "nodes",
+        "edges",
+        "stats",
+    ],
+    "pdf_extract_report.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "runId",
+        "digestPath",
+        "outDir",
+        "config",
+        "summary",
+        "papers",
+        "errors",
+    ],
+    "local_param_search_report.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "repoRoot",
+        "mode",
+        "target",
+        "constraint",
+        "wfoProfile",
+        "plan",
+        "focusRange",
+        "aggressive",
+        "seed",
+        "fdrMethod",
+        "fdrStoreyLambda",
+        "trialsRequested",
+        "trialCount",
+        "baselineFdrQ",
+        "thresholdBreakTarget",
+        "fdrMax",
+        "pboMax",
+        "fdrWeight",
+        "pboWeight",
+        "pboThresholdTarget",
+        "bestFdrQ",
+        "bestMeanPbo",
+        "improvementAbs",
+        "improvementPct",
+        "thresholdBreak",
+        "pboThresholdBreak",
+        "feasibleCount",
+        "bestTrialConstraintSatisfied",
+        "bestTrial",
+        "top10",
+        "trials",
+    ],
+    "best_trend_triplet.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "sourceReport",
+        "trialId",
+        "trialLabel",
+        "anchorType",
+        "candidateCount",
+        "metrics",
+        "params",
+        "candidates",
+        "searchSummary",
+    ],
+    "fdr_frontier_shortlist.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "generatedDate",
+        "inputs",
+        "shortlist",
+    ],
+    "fdr_bottleneck_report.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "source",
+        "summary",
+        "latest",
+        "runs",
+    ],
+    "multi_asset_matrix.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "runId",
+        "executeMode",
+        "source",
+        "summary",
+        "assets",
+    ],
+    "threshold_sensitivity.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "source",
+        "scenarios",
+    ],
+    "precontinue_decision.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "inputs",
+        "questionAnswers",
+        "rules",
+        "decision",
+    ],
+    "stagea_gate_result.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "source",
+        "thresholds",
+        "summary",
+        "assets",
+        "decision",
+    ],
+    "stageb_governance_packet.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "inputs",
+        "evidenceSummary",
+        "options",
+        "decision",
+        "signOffChecklist",
+    ],
+    "quant_policy_pack.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "policyMode",
+        "inputs",
+        "principles",
+        "productionPolicy",
+        "governanceCadence",
+        "gatePolicy",
+        "escalationRules",
+    ],
+    "advisor_committee_packet.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "meetingObjective",
+        "inputs",
+        "context",
+        "agendaMethods",
+        "questionsForAdvisors",
+        "actionOwners",
+    ],
+    "quant_hiring_scorecard.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "roleId",
+        "context",
+        "dimensions",
+        "scoringScale",
+        "hardRejectRules",
+        "decisionRule",
+        "interviewStages",
+    ],
+    "paper_board.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "inputs",
+        "summary",
+        "items",
+    ],
+    "plan_switchboard.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "mode",
+        "windowDays",
+        "weights",
+        "plans",
+        "streaks",
+        "decision",
+        "source",
+    ],
     "paper_card.v2": [
         "schemaVersion",
         "paperId",
@@ -76,6 +289,15 @@ FALLBACK_REQUIRED_FIELDS = {
         "aggregateMetrics",
         "candidates",
         "outputPaths",
+    ],
+    "provisional_baseline.v1": [
+        "schemaVersion",
+        "generatedAt",
+        "status",
+        "summary",
+        "thresholds",
+        "source",
+        "notes",
     ],
 }
 
@@ -156,14 +378,11 @@ def read_json_object(path: Path) -> dict[str, Any]:
 
 def validate_with_schema(
     payload: dict[str, Any],
-    schema_payload: dict[str, Any],
+    schema_payload: dict[str, Any] | None,
+    schema_version: str,
 ) -> list[str]:
-    if Draft202012Validator is None:
-        schema_version = payload.get("schemaVersion")
-        required_fields = FALLBACK_REQUIRED_FIELDS.get(
-            schema_version if isinstance(schema_version, str) else "",
-            [],
-        )
+    if Draft202012Validator is None or schema_payload is None:
+        required_fields = FALLBACK_REQUIRED_FIELDS.get(schema_version, [])
         failures: list[str] = []
         for field in required_fields:
             if field not in payload:
@@ -216,7 +435,7 @@ def main() -> int:
                     continue
 
                 schema_payload = schema_cache.get(schema_version)
-                if schema_payload is None:
+                if schema_payload is None and schema_version not in FALLBACK_REQUIRED_FIELDS:
                     file_reports.append(
                         {
                             "path": rel_path,
@@ -227,7 +446,11 @@ def main() -> int:
                     )
                     continue
 
-                errors = validate_with_schema(payload, schema_payload)
+                errors = validate_with_schema(
+                    payload,
+                    schema_payload,
+                    schema_version,
+                )
                 file_reports.append(
                     {
                         "path": rel_path,

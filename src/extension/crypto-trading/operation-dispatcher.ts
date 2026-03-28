@@ -769,39 +769,124 @@ export function createCryptoOperationDispatcher(
       case "closePosition": {
         const symbol = op.params.symbol as string;
         const size = op.params.size as number | undefined;
+        const idempotencyKey = asTrimmedString(op.params.idempotencyKey);
+        let idempotencyReserved = false;
 
-        const positions = await engine.getPositions();
-        const position = positions.find(p => p.symbol === symbol);
-        if (!position) {
-          return { success: false, error: `No open position for ${symbol}` };
+        async function finalizeIdempotency(
+          status: "succeeded" | "failed",
+          result?: CryptoOrderResult,
+          error?: string,
+        ): Promise<void> {
+          if (!idempotencyReserved || !idempotencyKey || !options.idempotencyStore) {
+            return;
+          }
+          await options.idempotencyStore
+            .finalize({
+              key: idempotencyKey,
+              status,
+              orderId: result?.orderId,
+              error: error ?? result?.error,
+            })
+            .catch(() => {});
         }
 
-        const closeSide = position.side === "long" ? "sell" : "buy";
-        const closeSize = size ?? position.size;
+        if (idempotencyKey && options.exchangeId) {
+          const idempPolicy = getIdempotencyPolicy(options.exchangeId, true);
+          if (!idempPolicy.allowed) {
+            return {
+              success: false,
+              error: `idempotency: ${idempPolicy.warning ?? "rejected"}`,
+            };
+          }
+          if (idempPolicy.warning) {
+            await options.eventLog
+              ?.append("idempotency.warning", {
+                action: op.action,
+                exchangeId: options.exchangeId,
+                warning: idempPolicy.warning,
+              })
+              .catch(() => {});
+          }
+        }
 
-        const result = await engine.placeOrder({
-          symbol,
-          side: closeSide,
-          type: "market",
-          size: closeSize,
-          reduceOnly: true,
-        });
+        if (idempotencyKey && options.idempotencyStore) {
+          let reservation;
+          try {
+            reservation = await options.idempotencyStore.reserve({
+              key: idempotencyKey,
+              symbol,
+            });
+          } catch (err) {
+            return {
+              success: false,
+              error:
+                err instanceof Error
+                  ? `idempotency: reserve failed (${err.message})`
+                  : `idempotency: reserve failed (${String(err)})`,
+            };
+          }
 
+          if (reservation && !reservation.acquired) {
+            const prev = reservation.record;
+            const duplicateError = `idempotency: duplicate key ${idempotencyKey} (status=${prev.status}${prev.orderId ? `, orderId=${prev.orderId}` : ""})`;
+            await options.eventLog
+              ?.append("idempotency.duplicate", {
+                action: op.action,
+                key: idempotencyKey,
+                previous: sanitizeIdempotencyRecord(prev),
+              })
+              .catch(() => {});
+            return { success: false, error: duplicateError };
+          }
+
+          idempotencyReserved = true;
+        }
+
+        let result: CryptoOrderResult;
+        try {
+          result = await withPlaceOrderLock(async () => {
+            const positions = await engine.getPositions();
+            const position = positions.find(p => p.symbol === symbol);
+            if (!position) {
+              throw new Error(`No open position for ${symbol}`);
+            }
+
+            const closeSide = position.side === "long" ? "sell" : "buy";
+            const closeSize = size ?? position.size;
+
+            return engine.placeOrder({
+              symbol,
+              side: closeSide,
+              type: "market",
+              size: closeSize,
+              reduceOnly: true,
+              idempotencyKey,
+            });
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await finalizeIdempotency("failed", undefined, message);
+          return { success: false, error: message };
+        }
+
+        if (!result.success) {
+          await finalizeIdempotency("failed", result);
+          return { success: false, error: result.error };
+        }
+
+        await finalizeIdempotency("succeeded", result);
         return {
-          success: result.success,
-          error: result.error,
-          order: result.success
-            ? {
-                id: result.orderId,
-                status: toWalletOrderStatus(result),
-                requestedSize: result.requestedSize,
-                remainingSize: result.remainingSize,
-                filledPrice: result.filledPrice,
-                filledQuantity: result.filledSize,
-                firstFillAtMs: result.firstFillAtMs,
-                completedAtMs: result.completedAtMs,
-              }
-            : undefined,
+          success: true,
+          order: {
+            id: result.orderId,
+            status: toWalletOrderStatus(result),
+            requestedSize: result.requestedSize,
+            remainingSize: result.remainingSize,
+            filledPrice: result.filledPrice,
+            filledQuantity: result.filledSize,
+            firstFillAtMs: result.firstFillAtMs,
+            completedAtMs: result.completedAtMs,
+          },
         };
       }
 
@@ -998,6 +1083,7 @@ export interface CommitExecutorDeps {
   engine: ICryptoTradingEngine;
   ticketStore?: DecisionTicketStore;
   intentLedger?: IntentLedger;
+  idempotencyStore?: TradeIdempotencyStore;
   killSwitch?: KillSwitch;
   exchangeId?: string;
   slippageConfig?: SlippageConfig;

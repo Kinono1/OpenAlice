@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-02T22:20:00Z",
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "PB016_1",
+      "strategyName": "ensemble_t0.4_112_lo",
+      "strategy": "ensemble",
+      "params": {
+        "allowShort": false,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 60,
+        "rsiPeriod": 14,
+        "rsiOversold": 30,
+        "rsiOverbought": 70,
+        "bbPeriod": 20,
+        "bbStdDev": 2.0,
+        "breakoutPeriod": 40,
+        "breakoutExitPeriod": 12,
+        "ensembleThreshold": 0.4,
+        "ensembleWeights": {
+          "trend": 1,
+          "meanReversion": 1,
+          "breakout": 2
+        }
+      }
+    },
+    {
+      "strategyId": "PB016_2",
+      "strategyName": "trend_14_89_ls",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 14,
+        "trendSlowPeriod": 89,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "PB016_3",
+      "strategyName": "trend_34_72_ls",
+      "strategy": "trend",
+      "params": {
+        "trendFastPeriod": 34,
+        "trendSlowPeriod": 72,
+        "allowShort": true
+      }
+    }
+  ]
+}

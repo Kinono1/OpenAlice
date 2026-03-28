@@ -25,6 +25,29 @@ function makeUptrendCandles(count: number): MarketData[] {
   return out;
 }
 
+function makeDowntrendCandles(count: number): MarketData[] {
+  const out: MarketData[] = [];
+  let price = 200;
+  for (let i = 0; i < count; i++) {
+    const drift = 0.35 + (i % 9 === 0 ? 0.15 : 0);
+    const open = price;
+    const close = Math.max(1, price - drift);
+    const high = Math.max(open, close) + 0.1;
+    const low = Math.min(open, close) - 0.1;
+    out.push({
+      symbol: "BTC/USD",
+      time: 1_700_500_000 + i * 3600,
+      open,
+      high,
+      low,
+      close,
+      volume: 900 + i,
+    });
+    price = close;
+  }
+  return out;
+}
+
 function makeShortSqueezeCandles(): MarketData[] {
   const out: MarketData[] = [];
   let price = 100;
@@ -106,6 +129,110 @@ describe("runStrategyBacktest", () => {
     expect(result.metrics.totalReturnPct).toBeGreaterThan(0);
     expect(result.lastDecision.strategy).toBe("ensemble");
     expect(result.lastDecision.indicators.ensembleScore).toBeTypeOf("number");
+  });
+
+  it("supports a volatility-gated breakout seed family", () => {
+    const candles = makeUptrendCandles(500);
+    const result = runStrategyBacktest({
+      strategy: "volBreakout",
+      candles,
+      params: {
+        allowShort: false,
+        breakoutPeriod: 20,
+        breakoutExitPeriod: 10,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 1.05,
+      },
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+        fundingRatePer8h: 0,
+      },
+    });
+
+    expect(result.lastDecision.strategy).toBe("volBreakout");
+    expect(result.lastDecision.indicators.volRatio).toBeTypeOf("number");
+    expect(result.equityCurve.length).toBe(candles.length);
+  });
+
+  it("keeps the pure vol no-trade filter flat", () => {
+    const candles = makeUptrendCandles(500);
+    const result = runStrategyBacktest({
+      strategy: "volNoTradeFilter",
+      candles,
+      params: {
+        allowShort: false,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 1.05,
+      },
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+        fundingRatePer8h: 0,
+      },
+    });
+
+    expect(result.lastDecision.strategy).toBe("volNoTradeFilter");
+    expect(result.metrics.tradeCount).toBe(0);
+    expect(result.metrics.finalEquity).toBe(10_000);
+    expect(result.lastDecision.indicators.volFilterActive).toBeTypeOf("number");
+  });
+
+  it("supports a volatility-gated trend mapping", () => {
+    const candles = makeUptrendCandles(500);
+    const result = runStrategyBacktest({
+      strategy: "volTrend",
+      candles,
+      params: {
+        allowShort: false,
+        trendFastPeriod: 10,
+        trendSlowPeriod: 30,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 0.9,
+      },
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+        fundingRatePer8h: 0,
+      },
+    });
+
+    expect(result.lastDecision.strategy).toBe("volTrend");
+    expect(result.metrics.totalReturnPct).toBeGreaterThan(0);
+    expect(result.lastDecision.indicators.volGateOpen).toBeTypeOf("number");
+  });
+
+  it("keeps vol-trend flat when the gate is closed", () => {
+    const candles = makeDowntrendCandles(500);
+    const result = runStrategyBacktest({
+      strategy: "volTrend",
+      candles,
+      params: {
+        allowShort: false,
+        trendFastPeriod: 10,
+        trendSlowPeriod: 30,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 10,
+      },
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+        fundingRatePer8h: 0,
+      },
+      initialCapital: 10_000,
+    });
+
+    expect(result.lastDecision.strategy).toBe("volTrend");
+    expect(result.lastDecision.signal).toBe(0);
+    expect(result.lastDecision.reason).toContain("Vol gate closed");
   });
 
   it("caps liquidation path at zero equity instead of exploding metrics", () => {

@@ -4,9 +4,16 @@ import { resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 import { anthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
-import type { Config } from '../../core/config.js'
 
-type ModelConfig = Config['model']
+interface ModelConfig {
+  provider: string
+  model: string
+  apiKeyEnv?: string
+  apiKey?: string
+  baseURL?: string
+  codexConfigPath?: string
+  codexProvider?: string
+}
 
 interface CodexProviderConfig {
   provider: string

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/paper_board.schema.v1.json",
+  "title": "OpenAlice Problem-Driven Paper Board v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "inputs", "summary", "items"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "paper_board.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["digest", "shortlist", "backlog", "topK"],
+      "properties": {
+        "digest": { "type": "string", "minLength": 1 },
+        "shortlist": { "type": "string", "minLength": 1 },
+        "backlog": { "type": "string", "minLength": 1 },
+        "topK": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["itemCount", "bucketCounts"],
+      "properties": {
+        "itemCount": { "type": "integer", "minimum": 0 },
+        "bucketCounts": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "paperId",
+          "title",
+          "source",
+          "methodFamily",
+          "priority",
+          "actionHint",
+          "problemBucket"
+        ],
+        "properties": {
+          "paperId": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "source": { "type": "string", "minLength": 1 },
+          "methodFamily": { "type": "string", "minLength": 1 },
+          "priority": { "type": "number" },
+          "actionHint": { "type": "string", "minLength": 1 },
+          "problemBucket": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/precontinue_decision.schema.v1.json",
+  "title": "OpenAlice Pre-Continue Decision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "inputs",
+    "questionAnswers",
+    "rules",
+    "decision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "precontinue_decision.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fdrReport", "matrixReport", "sensitivityReport"],
+      "properties": {
+        "fdrReport": { "type": "string", "minLength": 1 },
+        "matrixReport": { "type": "string", "minLength": 1 },
+        "sensitivityReport": { "type": "string", "minLength": 1 }
+      }
+    },
+    "questionAnswers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["q1", "q2", "q3"],
+      "properties": {
+        "q1": { "$ref": "#/$defs/questionAnswer" },
+        "q2": { "$ref": "#/$defs/questionAnswer" },
+        "q3": { "$ref": "#/$defs/questionAnswer" }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "triggered", "evidence", "action"],
+        "properties": {
+          "ruleId": { "type": "string", "minLength": 1 },
+          "triggered": { "type": "boolean" },
+          "evidence": { "type": "string" },
+          "action": { "type": "string" }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primaryRecommendation", "triggeredRules", "nextActions"],
+      "properties": {
+        "primaryRecommendation": { "type": "string", "minLength": 1 },
+        "triggeredRules": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "nextActions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "questionAnswer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "answer", "evidence"],
+      "properties": {
+        "question": { "type": "string", "minLength": 1 },
+        "answer": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

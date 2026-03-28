@@ -66,4 +66,57 @@ describe("risk_breaker_state", () => {
     expect(tail.varPct).toBeCloseTo(-1.8, 10);
     expect(tail.cvarPct).toBeCloseTo(-2.4, 10);
   });
+
+  it("opens and clears the gate failure breaker with exponential backoff", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "risk-breaker-gate-failure-"));
+    const store = await RiskBreakerStore.load(
+      join(tempDir, "risk_breaker_state.json")
+    );
+
+    const first = await store.recordGateEvaluationFailure({
+      scope: "regime_shift",
+      error: "provider unavailable",
+      threshold: 3,
+      baseBackoffMs: 30_000,
+      maxBackoffMs: 15 * 60_000,
+      nowMs: 1_000,
+    });
+    const second = await store.recordGateEvaluationFailure({
+      scope: "regime_shift",
+      error: "provider unavailable",
+      threshold: 3,
+      baseBackoffMs: 30_000,
+      maxBackoffMs: 15 * 60_000,
+      nowMs: 2_000,
+    });
+    const third = await store.recordGateEvaluationFailure({
+      scope: "regime_shift",
+      error: "provider unavailable",
+      threshold: 3,
+      baseBackoffMs: 30_000,
+      maxBackoffMs: 15 * 60_000,
+      nowMs: 3_000,
+    });
+    const fourth = await store.recordGateEvaluationFailure({
+      scope: "regime_shift",
+      error: "provider unavailable",
+      threshold: 3,
+      baseBackoffMs: 30_000,
+      maxBackoffMs: 15 * 60_000,
+      nowMs: 4_000,
+    });
+
+    expect(first.opened).toBe(false);
+    expect(second.opened).toBe(false);
+    expect(third.opened).toBe(true);
+    expect(third.backoffMs).toBe(30_000);
+    expect(fourth.backoffMs).toBe(60_000);
+    expect(store.isGateFailureBreakerActive(4_001)).toBe(true);
+    expect(store.getGateFailureBreakerReason(4_001)).toContain("regime_shift");
+
+    await store.recordGateEvaluationSuccess();
+
+    expect(store.isGateFailureBreakerActive(100_000)).toBe(false);
+    expect(store.getGateFailureBreakerReason(100_000)).toBeNull();
+  });
 });

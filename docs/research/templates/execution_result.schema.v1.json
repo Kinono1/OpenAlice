@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/execution_result.schema.v1.json",
+  "title": "OpenAlice Execution Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "symbol",
+    "action",
+    "success",
+    "provenance",
+    "request",
+    "outcome"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "execution_result.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": ["placeOrder", "closePosition"]
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "environment"],
+      "properties": {
+        "producer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["paper", "live", "demo"]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["side", "reduceOnly", "type"],
+      "properties": {
+        "side": {
+          "type": "string",
+          "enum": ["buy", "sell"]
+        },
+        "reduceOnly": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["market", "limit"]
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderId",
+        "orderStatus",
+        "requestedQty",
+        "filledQty",
+        "expectedPrice",
+        "actualPrice",
+        "slippageBps",
+        "submittedAtMs",
+        "firstFillAtMs",
+        "completedAtMs"
+      ],
+      "properties": {
+        "orderId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "orderStatus": {
+          "type": "string",
+          "enum": ["pending", "partially_filled", "filled", "cancelled", "rejected"]
+        },
+        "requestedQty": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "filledQty": {
+          "type": "number",
+          "minimum": 0
+        },
+        "expectedPrice": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "actualPrice": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "slippageBps": {
+          "type": ["number", "null"]
+        },
+        "submittedAtMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "firstFillAtMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "completedAtMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

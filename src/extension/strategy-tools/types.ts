@@ -1,6 +1,13 @@
 import type { MarketData } from "../analysis-kit/data/interfaces.js";
 
-export type StrategyName = "trend" | "meanReversion" | "breakout" | "ensemble";
+export type StrategyName =
+  | "trend"
+  | "meanReversion"
+  | "breakout"
+  | "ensemble"
+  | "volBreakout"
+  | "volNoTradeFilter"
+  | "volTrend";
 export type PositionSignal = -1 | 0 | 1;
 
 export interface StrategyEnsembleWeights {
@@ -23,6 +30,10 @@ export interface StrategyParams {
 
   breakoutPeriod?: number;
   breakoutExitPeriod?: number;
+  volWindowBars?: number;
+  volBaselineBars?: number;
+  volTriggerRatio?: number;
+  volCooldownBars?: number;
 
   ensembleThreshold?: number;
   ensembleWeights?: StrategyEnsembleWeights;
@@ -53,6 +64,10 @@ export interface ResolvedStrategyParams {
   bbStdDev: number;
   breakoutPeriod: number;
   breakoutExitPeriod: number;
+  volWindowBars: number;
+  volBaselineBars: number;
+  volTriggerRatio: number;
+  volCooldownBars: number;
   ensembleThreshold: number;
   ensembleWeights: {
     trend: number;
@@ -72,6 +87,10 @@ export const DEFAULT_STRATEGY_PARAMS: ResolvedStrategyParams = {
   bbStdDev: 2,
   breakoutPeriod: 20,
   breakoutExitPeriod: 10,
+  volWindowBars: 60,
+  volBaselineBars: 240,
+  volTriggerRatio: 1.5,
+  volCooldownBars: 0,
   ensembleThreshold: 0.34,
   ensembleWeights: {
     trend: 1,

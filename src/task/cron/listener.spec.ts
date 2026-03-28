@@ -147,6 +147,53 @@ describe('cron listener', () => {
       expect(delivered[0]).toBe('AI reply')
     })
 
+    it('should send one progress notification for a long-running job', async () => {
+      vi.useFakeTimers()
+      const delivered: string[] = []
+      let resolveEngine: ((value: { text: string; media: [] }) => void) | null = null
+      mockEngine.askWithSession = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveEngine = resolve
+          }),
+      )
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => {
+          delivered.push(payload.text)
+          return { delivered: true }
+        },
+      })
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        engine: mockEngine as any,
+        session,
+        progressHeartbeatMs: 30_000,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'abc12345',
+        jobName: 'slow-job',
+        payload: 'Long work',
+      } satisfies CronFirePayload)
+
+      await vi.runOnlyPendingTimersAsync()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.waitFor(() => {
+        expect(delivered).toContain('Cron job "slow-job" is still running (30s elapsed).')
+      })
+
+      resolveEngine?.({ text: 'AI reply', media: [] })
+      await vi.waitFor(() => {
+        expect(delivered).toContain('AI reply')
+      })
+      vi.useRealTimers()
+    })
+
     it('should handle delivery failure gracefully', async () => {
       connectorCenter.register({
         channel: 'test',
@@ -213,6 +260,48 @@ describe('cron listener', () => {
         error: 'engine error',
       })
       expect((errors[0].payload as any).durationMs).toBeGreaterThanOrEqual(0)
+    })
+
+    it('pauses a job after repeated listener failures', async () => {
+      mockEngine.setShouldFail(true)
+      const cronEngine = {
+        update: vi.fn(async () => undefined),
+      }
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        engine: mockEngine as any,
+        session,
+        cronEngine,
+        failureThreshold: 2,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'abc12345',
+        jobName: 'test-job',
+        payload: 'Will fail',
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => {
+        expect(eventLog.recent({ type: 'cron.error' })).toHaveLength(1)
+      })
+
+      await eventLog.append('cron.fire', {
+        jobId: 'abc12345',
+        jobName: 'test-job',
+        payload: 'Will fail again',
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(eventLog.recent({ type: 'cron.paused' })).toHaveLength(1)
+      })
+
+      const errors = eventLog.recent({ type: 'cron.error' })
+      expect((errors[1].payload as any).consecutiveFailures).toBe(2)
+      expect((errors[1].payload as any).nextAction).toBe('pause')
+      expect(cronEngine.update).toHaveBeenCalledWith('abc12345', {
+        enabled: false,
+      })
     })
   })
 

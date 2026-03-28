@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { ToolCenter } from '../../../core/tool-center.js'
 import { readToolsConfig, writeConfigSection } from '../../../core/config.js'
+import { readJsonWithLimit } from '../request-body.js'
 
 /** Tools routes: GET / (inventory + disabled), PUT / (update disabled list) */
 export function createToolsRoutes(toolCenter: ToolCenter) {
@@ -18,7 +19,7 @@ export function createToolsRoutes(toolCenter: ToolCenter) {
 
   app.put('/', async (c) => {
     try {
-      const body = await c.req.json()
+      const body = await readJsonWithLimit(c)
       const validated = await writeConfigSection('tools', body)
       return c.json(validated)
     } catch (err) {

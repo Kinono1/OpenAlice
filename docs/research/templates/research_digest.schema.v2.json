@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/research_digest.schema.v2.json",
+  "title": "OpenAlice Research Digest v2",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "generated_at",
+    "run_id",
+    "query_count",
+    "query_profile",
+    "queries",
+    "lookback_days",
+    "fetched_papers",
+    "filtered_papers",
+    "new_papers",
+    "cards_source_mode",
+    "cards_fallback_used",
+    "card_candidate_count",
+    "errors",
+    "top_new"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "research_digest.v2"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "query_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "query_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "queries": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "lookback_days": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "fetched_papers": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "filtered_papers": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "new_papers": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cards_source_mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cards_fallback_used": {
+      "type": "boolean"
+    },
+    "card_candidate_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/errorItem"
+      }
+    },
+    "top_new": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/topPaper"
+      }
+    },
+    "top_recent": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/topPaper"
+      }
+    }
+  },
+  "$defs": {
+    "errorItem": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "additionalProperties": true
+        }
+      ]
+    },
+    "topPaper": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "paper_id",
+        "title"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "published_at": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "number"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary_short": {
+          "type": "string"
+        },
+        "references": {
+          "type": "array"
+        }
+      }
+    }
+  }
+}

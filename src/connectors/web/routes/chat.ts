@@ -6,6 +6,7 @@ import { extname, join } from 'node:path'
 import type { EngineContext } from '../../../core/types.js'
 import { SessionStore, toChatHistory } from '../../../core/session.js'
 import { persistMedia, resolveMediaPath } from '../../../core/media-store.js'
+import { readJsonWithLimit } from '../request-body.js'
 
 export interface SSEClient {
   id: string
@@ -23,7 +24,7 @@ export function createChatRoutes({ ctx, session, sseClients }: ChatDeps) {
   const app = new Hono()
 
   app.post('/', async (c) => {
-    const body = await c.req.json<{ message?: string }>()
+    const body = await readJsonWithLimit<{ message?: string }>(c)
     const message = body.message?.trim()
     if (!message) return c.json({ error: 'message is required' }, 400)
 
@@ -61,7 +62,11 @@ export function createChatRoutes({ ctx, session, sseClients }: ChatDeps) {
       const clientId = randomUUID()
       sseClients.set(clientId, {
         id: clientId,
-        send: (data) => { stream.writeSSE({ data }).catch(() => {}) },
+        send: (data) => {
+          stream.writeSSE({ data }).catch(() => {
+            sseClients.delete(clientId)
+          })
+        },
       })
 
       const pingInterval = setInterval(() => {

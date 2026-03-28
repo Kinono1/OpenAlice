@@ -35,3 +35,77 @@ export function createGuardPipeline(
     return dispatcher(op);
   };
 }
+
+export function createGuardBatchPipeline(
+  dispatcher: (op: Operation) => Promise<unknown>,
+  engine: ICryptoTradingEngine,
+  guards: OperationGuard[],
+): (operations: Operation[]) => Promise<unknown[]> {
+  return async (operations: Operation[]): Promise<unknown[]> => {
+    const results: unknown[] = [];
+    let stopped = false;
+
+    for (const op of operations) {
+      if (stopped) {
+        results.push({
+          success: false,
+          error: 'Skipped due to previous batch failure',
+        });
+        continue;
+      }
+
+      if (guards.length > 0) {
+        const [positions, account] = await Promise.all([
+          engine.getPositions(),
+          engine.getAccount(),
+        ]);
+
+        const ctx: GuardContext = { operation: op, positions, account };
+        let rejection: string | null = null;
+        let rejectedBy: string | null = null;
+        for (const guard of guards) {
+          const guardResult = await guard.check(ctx);
+          if (guardResult != null) {
+            rejection = guardResult;
+            rejectedBy = guard.name;
+            break;
+          }
+        }
+
+        if (rejection && rejectedBy) {
+          results.push({
+            success: false,
+            error: `[guard:${rejectedBy}] ${rejection}`,
+          });
+          stopped = true;
+          continue;
+        }
+      }
+
+      try {
+        const raw = await dispatcher(op);
+        results.push(raw);
+        if (!isRawSuccess(raw)) {
+          stopped = true;
+        }
+      } catch (error) {
+        results.push({
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        stopped = true;
+      }
+    }
+
+    return results;
+  };
+}
+
+function isRawSuccess(raw: unknown): boolean {
+  return Boolean(
+    raw &&
+      typeof raw === 'object' &&
+      'success' in raw &&
+      (raw as { success?: unknown }).success === true,
+  );
+}

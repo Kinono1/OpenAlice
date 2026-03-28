@@ -6,7 +6,9 @@ import { runStrategyWalkForward } from "../../backtest/wfo.js";
 import { evaluateSignificanceGate } from "../../backtest/statistical_significance.js";
 import { allocateInverseVolatilityPortfolio } from "../../portfolio/allocator.js";
 import { runStrategyBacktest } from "./backtest.js";
+import { buildSeedAlphaCandidates } from "./candidates.js";
 import { evaluateStrategy, getStrategyMinimumBars } from "./strategies.js";
+import { buildTournamentLeaderboard } from "./tournament.js";
 import type { StrategyName, StrategyParams } from "./types.js";
 
 const StrategyNameSchema = z.enum([
@@ -14,6 +16,9 @@ const StrategyNameSchema = z.enum([
   "meanReversion",
   "breakout",
   "ensemble",
+  "volBreakout",
+  "volNoTradeFilter",
+  "volTrend",
 ]);
 
 const StrategyParamsObjectSchema = z.object({
@@ -27,6 +32,10 @@ const StrategyParamsObjectSchema = z.object({
   bbStdDev: z.number().positive().optional(),
   breakoutPeriod: z.number().int().positive().optional(),
   breakoutExitPeriod: z.number().int().positive().optional(),
+  volWindowBars: z.number().int().positive().optional(),
+  volBaselineBars: z.number().int().positive().optional(),
+  volTriggerRatio: z.number().positive().optional(),
+  volCooldownBars: z.number().int().min(0).optional(),
   ensembleThreshold: z.number().min(0).max(1).optional(),
   ensembleWeights: z
     .object({
@@ -80,6 +89,14 @@ const PortfolioCompareSchema = z
     maxPairCombinedWeight: z.number().min(0).max(1).optional(),
   })
   .optional();
+
+const CandidateFamilySchema = z.enum([
+  "core_trend",
+  "core_mean_reversion",
+  "core_breakout",
+  "core_ensemble",
+  "volatility_gated",
+]);
 
 async function loadCandles(
   ctx: IAnalysisContext,
@@ -262,7 +279,7 @@ export function createStrategyTools(ctx: IAnalysisContext) {
     strategyGetSignal: tool({
       description: `
 Get the latest signal from a built-in strategy (trend / meanReversion / breakout).
-Also supports ensemble mode that combines these strategies with weighted voting.
+Also supports ensemble mode plus volatility-gated research variants.
 
 Use this to make rule-based decisions before asking the LLM to place orders.
       `.trim(),
@@ -449,7 +466,7 @@ Optional portfolio view compares equal-weight vs inverse-vol strategy baskets.
         strategies: z
           .array(StrategyNameSchema)
           .min(1)
-          .max(4)
+          .max(6)
           .optional()
           .describe("Subset to compare. Defaults to all."),
         lookbackBars: z.number().int().min(200).max(20_000).default(3000),
@@ -541,6 +558,77 @@ Optional portfolio view compares equal-weight vs inverse-vol strategy baskets.
         }
 
         return response;
+      },
+    }),
+
+    strategyTournament: tool({
+      description: `
+Build a deterministic alpha-candidate leaderboard from the built-in strategy seed pool.
+
+This is the first-pass profitability primitive for ranking candidate strategies
+under the same symbol, lookback window, and cost model before promotion.
+      `.trim(),
+      inputSchema: z.object({
+        symbol: z.string().describe('Trading pair, e.g. "BTC/USD"'),
+        lookbackBars: z.number().int().min(200).max(20_000).default(3000),
+        initialCapital: z.number().positive().default(10_000),
+        costModel: CostModelSchema,
+        allowShort: z.boolean().optional(),
+        includeFamilies: z.array(CandidateFamilySchema).min(1).max(5).optional(),
+        minTradeCount: z.number().int().min(1).max(100).default(3),
+        maxDrawdownPct: z.number().min(1).max(100).default(35),
+        promotionScoreMin: z.number().min(-1).max(1).default(0.35),
+        watchScoreMin: z.number().min(-1).max(1).default(0.1),
+      }),
+      execute: async ({
+        symbol,
+        lookbackBars,
+        initialCapital,
+        costModel,
+        allowShort,
+        includeFamilies,
+        minTradeCount,
+        maxDrawdownPct,
+        promotionScoreMin,
+        watchScoreMin,
+      }) => {
+        const candles = await loadCandles(ctx, symbol, lookbackBars);
+        const generatedAt = ctx.getPlayheadTime().toISOString();
+        const candidates = buildSeedAlphaCandidates({
+          allowShort,
+          includeFamilies,
+        });
+        const entrants = candidates.map((candidate) => {
+          ensureStrategyData(candidate.strategy, candles, candidate.params);
+          const report = runStrategyBacktest({
+            strategy: candidate.strategy,
+            candles,
+            initialCapital,
+            params: candidate.params,
+            costModel,
+          });
+          return {
+            candidate,
+            summary: summarizeBacktest(report),
+            source: symbol,
+          };
+        });
+
+        const leaderboard = buildTournamentLeaderboard(entrants, {
+          generatedAt,
+          minTradeCount,
+          maxDrawdownPct,
+          promotionScoreMin,
+          watchScoreMin,
+        });
+
+        return {
+          symbol,
+          lookbackBars: candles.length,
+          from: candles[0].time,
+          to: candles[candles.length - 1].time,
+          leaderboard,
+        };
       },
     }),
   };

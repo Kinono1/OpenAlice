@@ -128,4 +128,99 @@ describe("strategy-tools adapter integration", () => {
     expect(result.portfolioComparison).toHaveProperty("equalWeighted");
     expect(result.portfolioComparison).toHaveProperty("inverseVolWeighted");
   });
+
+  it("returns indicators for volBreakout signal queries", async () => {
+    const tools = createStrategyTools(ctx);
+
+    const result = await (tools.strategyGetSignal as any).execute({
+      symbol: "BTC/USD",
+      strategy: "volBreakout",
+      lookbackBars: 400,
+      params: {
+        allowShort: false,
+        breakoutPeriod: 20,
+        breakoutExitPeriod: 10,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 1.05,
+      },
+    });
+
+    expect(result.strategy).toBe("volBreakout");
+    expect(result.indicators.volRatio).toBeTypeOf("number");
+    expect(result.indicators.volGateOpen).toBeTypeOf("number");
+  });
+
+  it("returns indicators for vol no-trade filter signal queries", async () => {
+    const tools = createStrategyTools(ctx);
+
+    const result = await (tools.strategyGetSignal as any).execute({
+      symbol: "BTC/USD",
+      strategy: "volNoTradeFilter",
+      lookbackBars: 400,
+      params: {
+        allowShort: false,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 1.05,
+      },
+    });
+
+    expect(result.strategy).toBe("volNoTradeFilter");
+    expect(result.signal).toBe(0);
+    expect(result.indicators.volFilterActive).toBeTypeOf("number");
+  });
+
+  it("compares explicit round 4 strategies without changing defaults", async () => {
+    const tools = createStrategyTools(ctx);
+
+    const result = await (tools.strategyCompare as any).execute({
+      symbol: "BTC/USD",
+      strategies: ["volTrend", "volBreakout"],
+      lookbackBars: 450,
+      initialCapital: 10_000,
+      params: {
+        allowShort: false,
+        trendFastPeriod: 10,
+        trendSlowPeriod: 35,
+        breakoutPeriod: 20,
+        breakoutExitPeriod: 10,
+        volWindowBars: 30,
+        volBaselineBars: 120,
+        volTriggerRatio: 1.05,
+      },
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+      },
+    });
+
+    expect(result.ranking).toHaveLength(2);
+    expect(result.ranking[0].strategy).toMatch(/volTrend|volBreakout/);
+  });
+
+  it("builds a tournament leaderboard from seed candidates", async () => {
+    const tools = createStrategyTools(ctx);
+
+    const result = await (tools.strategyTournament as any).execute({
+      symbol: "BTC/USD",
+      lookbackBars: 450,
+      initialCapital: 10_000,
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+      },
+      allowShort: false,
+      minTradeCount: 1,
+      maxDrawdownPct: 80,
+      promotionScoreMin: -1,
+      watchScoreMin: -1,
+    });
+
+    expect(result).toHaveProperty("leaderboard");
+    expect(result.leaderboard.entryCount).toBeGreaterThan(0);
+    expect(result.leaderboard.entries[0]).toHaveProperty("candidateId");
+  });
 });

@@ -11,6 +11,8 @@ const engineSchema = z.object({
   pairs: z.array(z.string()).min(1).default(["BTC/USD", "ETH/USD", "SOL/USD"]),
   interval: z.number().int().positive().default(5000),
   port: z.number().int().positive().default(3000),
+  timeframe: z.string().default("1h"),
+  dataRefreshInterval: z.number().int().positive().default(600_000),
 })
 
 export const aiProviderSchema = z.object({
@@ -63,6 +65,7 @@ const agentSchema = z.object({
 });
 
 const cryptoSchema = z.object({
+  allowedSymbols: z.array(z.string()).default(["BTC/USD", "ETH/USD", "SOL/USD"]),
   provider: z.discriminatedUnion('type', [
     z.object({
       type: z.literal('ccxt'),
@@ -371,12 +374,286 @@ const reviewGateSchema = z
     reportPath: "logs/review/latest.json",
   });
 
+const canarySchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    statePath: z.string().default("data/runtime/canary_state.json"),
+    paper: z
+      .object({
+        observationMinMinutes: z.number().int().positive().default(1440),
+        maxHeartbeatErrors: z.number().int().min(0).default(0),
+        maxGateCircuitOpen: z.number().int().min(0).default(0),
+        maxCronPaused: z.number().int().min(0).default(0),
+        maxPnlReconciliationAlerts: z.number().int().min(0).default(0),
+        maxPaperExecutorFailures: z.number().int().min(0).default(0),
+        maxIdempotencyDuplicates: z.number().int().min(0).default(0),
+        maxPendingOrderAgeMinutes: z.number().int().positive().default(15),
+      })
+      .default({
+        observationMinMinutes: 1440,
+        maxHeartbeatErrors: 0,
+        maxGateCircuitOpen: 0,
+        maxCronPaused: 0,
+        maxPnlReconciliationAlerts: 0,
+        maxPaperExecutorFailures: 0,
+        maxIdempotencyDuplicates: 0,
+        maxPendingOrderAgeMinutes: 15,
+      }),
+    microLive: z
+      .object({
+        maxSymbols: z.number().int().positive().default(1),
+        maxConcurrentOpens: z.number().int().positive().default(1),
+        maxNotionalUsd: z.number().positive().default(25),
+        maxEquityPct: z.number().positive().max(100).default(0.25),
+        observationMinMinutes: z.number().int().positive().default(240),
+        maxHeartbeatErrors: z.number().int().min(0).default(0),
+        maxGateCircuitOpen: z.number().int().min(0).default(0),
+        maxCronPaused: z.number().int().min(0).default(0),
+        maxPnlReconciliationAlerts: z.number().int().min(0).default(0),
+        maxIdempotencyDuplicates: z.number().int().min(0).default(0),
+        maxStalePendingOrderAgeMinutes: z.number().int().positive().default(15),
+        approvalTtlHours: z.number().int().positive().default(48),
+      })
+      .default({
+        maxSymbols: 1,
+        maxConcurrentOpens: 1,
+        maxNotionalUsd: 25,
+        maxEquityPct: 0.25,
+        observationMinMinutes: 240,
+        maxHeartbeatErrors: 0,
+        maxGateCircuitOpen: 0,
+        maxCronPaused: 0,
+        maxPnlReconciliationAlerts: 0,
+        maxIdempotencyDuplicates: 0,
+        maxStalePendingOrderAgeMinutes: 15,
+        approvalTtlHours: 48,
+      }),
+  })
+  .default({
+    enabled: true,
+    statePath: "data/runtime/canary_state.json",
+    paper: {
+      observationMinMinutes: 1440,
+      maxHeartbeatErrors: 0,
+      maxGateCircuitOpen: 0,
+      maxCronPaused: 0,
+      maxPnlReconciliationAlerts: 0,
+      maxPaperExecutorFailures: 0,
+      maxIdempotencyDuplicates: 0,
+      maxPendingOrderAgeMinutes: 15,
+    },
+    microLive: {
+      maxSymbols: 1,
+      maxConcurrentOpens: 1,
+      maxNotionalUsd: 25,
+      maxEquityPct: 0.25,
+      observationMinMinutes: 240,
+      maxHeartbeatErrors: 0,
+      maxGateCircuitOpen: 0,
+      maxCronPaused: 0,
+      maxPnlReconciliationAlerts: 0,
+      maxIdempotencyDuplicates: 0,
+      maxStalePendingOrderAgeMinutes: 15,
+      approvalTtlHours: 48,
+    },
+  });
+
+const researchDeskSchema = z
+  .object({
+    tradingAgents: z
+      .object({
+        enabled: z.boolean().default(false),
+        workingDirectory: z
+          .string()
+          .default("../TradingAgents"),
+        entrypoint: z
+          .string()
+          .default("scripts/run_openalice_research_sidecar.py"),
+        pythonBin: z.string().optional(),
+        timeoutMs: z.number().int().positive().default(180_000),
+        noOutputTimeoutMs: z.number().int().positive().default(60_000),
+        mode: z.enum(["smoke", "full"]).default("full"),
+        selectedAnalysts: z
+          .array(
+            z.enum(["market", "social", "news", "fundamentals"]),
+          )
+          .min(1)
+          .default(["market", "social", "news", "fundamentals"]),
+        researchDepth: z.number().int().min(0).max(5).default(1),
+        newsLookback: z.string().default("72h"),
+        envAllowlist: z
+          .array(z.string().min(1))
+          .default([
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENAI_MODEL",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "GOOGLE_API_KEY",
+            "TRADINGAGENTS_LLM_PROVIDER",
+            "TRADINGAGENTS_BACKEND_URL",
+            "TRADINGAGENTS_DEEP_MODEL",
+            "TRADINGAGENTS_QUICK_MODEL",
+            "TRADINGAGENTS_OPENAI_REASONING_EFFORT",
+            "TRADINGAGENTS_QUICK_OPENAI_REASONING_EFFORT",
+            "TRADINGAGENTS_DEEP_OPENAI_REASONING_EFFORT",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
+          ]),
+        verdictPath: z
+          .string()
+          .default("data/research/scorecards/tradingagents_verdict.latest.json"),
+        artifactDir: z
+          .string()
+          .default("data/research"),
+      })
+      .default({
+        enabled: false,
+        workingDirectory: "../TradingAgents",
+        entrypoint: "scripts/run_openalice_research_sidecar.py",
+        timeoutMs: 180_000,
+        noOutputTimeoutMs: 60_000,
+        mode: "full",
+        selectedAnalysts: ["market", "social", "news", "fundamentals"],
+        researchDepth: 1,
+        newsLookback: "72h",
+        envAllowlist: [
+          "OPENAI_API_KEY",
+          "OPENAI_BASE_URL",
+          "OPENAI_MODEL",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_BASE_URL",
+          "GOOGLE_API_KEY",
+          "TRADINGAGENTS_LLM_PROVIDER",
+          "TRADINGAGENTS_BACKEND_URL",
+          "TRADINGAGENTS_DEEP_MODEL",
+          "TRADINGAGENTS_QUICK_MODEL",
+          "TRADINGAGENTS_OPENAI_REASONING_EFFORT",
+          "TRADINGAGENTS_QUICK_OPENAI_REASONING_EFFORT",
+          "TRADINGAGENTS_DEEP_OPENAI_REASONING_EFFORT",
+          "HTTP_PROXY",
+          "HTTPS_PROXY",
+          "NO_PROXY",
+          "http_proxy",
+          "https_proxy",
+          "no_proxy",
+        ],
+        verdictPath: "data/research/scorecards/tradingagents_verdict.latest.json",
+        artifactDir: "data/research",
+      }),
+  })
+  .default({
+    tradingAgents: {
+      enabled: false,
+      workingDirectory: "../TradingAgents",
+      entrypoint: "scripts/run_openalice_research_sidecar.py",
+      timeoutMs: 180_000,
+      noOutputTimeoutMs: 60_000,
+      mode: "full",
+      selectedAnalysts: ["market", "social", "news", "fundamentals"],
+      researchDepth: 1,
+      newsLookback: "72h",
+      envAllowlist: [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "GOOGLE_API_KEY",
+        "TRADINGAGENTS_LLM_PROVIDER",
+        "TRADINGAGENTS_BACKEND_URL",
+        "TRADINGAGENTS_DEEP_MODEL",
+        "TRADINGAGENTS_QUICK_MODEL",
+        "TRADINGAGENTS_OPENAI_REASONING_EFFORT",
+        "TRADINGAGENTS_QUICK_OPENAI_REASONING_EFFORT",
+        "TRADINGAGENTS_DEEP_OPENAI_REASONING_EFFORT",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+      ],
+      verdictPath: "data/research/scorecards/tradingagents_verdict.latest.json",
+      artifactDir: "data/research",
+    },
+  });
+
 const shutdownSchema = z
   .object({
     /** Max drain wait time in ms. */
     drainTimeoutMs: z.number().int().positive().default(5_000),
   })
   .default({ drainTimeoutMs: 5_000 });
+
+const governanceSchema = z.object({
+  enabled: z.boolean().default(true),
+  fallbackConfigId: z.string().default("H0"),
+  releaseGate: z
+    .object({
+      enabled: z.boolean().default(true),
+      statusPath: z.string().default("data/runtime/release_gate_status.json"),
+      maxStatusAgeHours: z.number().positive().default(24),
+      blockOnExpired: z.boolean().default(true),
+    })
+    .default({
+      enabled: true,
+      statusPath: "data/runtime/release_gate_status.json",
+      maxStatusAgeHours: 24,
+      blockOnExpired: true,
+    }),
+  liveGate: z
+    .object({
+      enabled: z.boolean().default(true),
+      quoteAgeP95MsMax: z.number().int().positive().default(2_000),
+      decisionToSubmitP95MsMax: z.number().int().positive().default(800),
+      decisionToFirstFillP95MsMax: z.number().int().positive().default(2_500),
+    })
+    .default({
+      enabled: true,
+      quoteAgeP95MsMax: 2_000,
+      decisionToSubmitP95MsMax: 800,
+      decisionToFirstFillP95MsMax: 2_500,
+    }),
+  rolloutReadiness: z
+    .object({
+      enabled: z.boolean().default(true),
+      statusPath: z
+        .string()
+        .default("data/runtime/live_rollout_readiness.latest.json"),
+      maxExecutionCostBps: z.number().positive().default(25),
+      requireEdgeDecayStable: z.boolean().default(true),
+      requirePromotedCandidateVerdict: z.boolean().default(true),
+      requirePortfolioTargetsForExecutedOpens: z.boolean().default(true),
+    })
+    .default({
+      enabled: true,
+      statusPath: "data/runtime/live_rollout_readiness.latest.json",
+      maxExecutionCostBps: 25,
+      requireEdgeDecayStable: true,
+      requirePromotedCandidateVerdict: true,
+      requirePortfolioTargetsForExecutedOpens: true,
+    }),
+  statsGate: z
+    .object({
+      fdrQMax: z.number().min(0).max(1).default(0.1),
+      transferPassRatioRolling14dMin: z.number().min(0).max(1).default(0.25),
+      winnerEligibleRatioRolling14dMin: z.number().min(0).max(1).default(0.35),
+      meanPboMax: z.number().min(0).max(1).default(0.2),
+      meanDsrProbabilityMin: z.number().min(0).max(1).default(0.5),
+    })
+    .default({
+      fdrQMax: 0.1,
+      transferPassRatioRolling14dMin: 0.25,
+      winnerEligibleRatioRolling14dMin: 0.35,
+      meanPboMax: 0.2,
+      meanDsrProbabilityMin: 0.5,
+    }),
+});
 
 export const toolsSchema = z.object({
   /** Tool names that are disabled. Tools not listed are enabled by default. */
@@ -392,10 +669,21 @@ export type Config = {
   securities: z.infer<typeof securitiesSchema>
   openbb: z.infer<typeof openbbSchema>
   compaction: z.infer<typeof compactionSchema>
+  risk: z.infer<typeof riskSchema>
+  news: z.infer<typeof newsSchema>
   aiProvider: z.infer<typeof aiProviderSchema>
   heartbeat: z.infer<typeof heartbeatSchema>
+  auth: z.infer<typeof authSchema>
   connectors: z.infer<typeof connectorsSchema>
   newsCollector: z.infer<typeof newsCollectorSchema>
+  decisionTicket: z.infer<typeof decisionTicketSchema>
+  killSwitch: z.infer<typeof killSwitchSchema>
+  slippage: z.infer<typeof slippageSchema>
+  reconciliation: z.infer<typeof reconciliationSchema>
+  governance: z.infer<typeof governanceSchema>
+  canary: z.infer<typeof canarySchema>
+  researchDesk: z.infer<typeof researchDeskSchema>
+  reviewGate: z.infer<typeof reviewGateSchema>
   tools: z.infer<typeof toolsSchema>
 }
 
@@ -440,11 +728,58 @@ async function parseAndSeed<T>(
 }
 
 export async function loadConfig(): Promise<Config> {
-  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'openbb.json', 'compaction.json', 'ai-provider.json', 'heartbeat.json', 'connectors.json', 'news-collector.json', 'tools.json'] as const
-  const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
+  const filenames = {
+    engine: 'engine.json',
+    agent: 'agent.json',
+    crypto: 'crypto.json',
+    securities: 'securities.json',
+    openbb: 'openbb.json',
+    compaction: 'compaction.json',
+    risk: 'risk.json',
+    news: 'news.json',
+    aiProvider: 'ai-provider.json',
+    heartbeat: 'heartbeat.json',
+    auth: 'auth.json',
+    connectors: 'connectors.json',
+    newsCollector: 'news-collector.json',
+    decisionTicket: 'decision-ticket.json',
+    killSwitch: 'kill-switch.json',
+    slippage: 'slippage.json',
+    reconciliation: 'reconciliation.json',
+    governance: 'governance.json',
+    canary: 'canary.json',
+    researchDesk: 'research-desk.json',
+    reviewGate: 'review-gate.json',
+    tools: 'tools.json',
+  } as const
+
+  const raws = {
+    engine: await loadJsonFile(filenames.engine),
+    agent: await loadJsonFile(filenames.agent),
+    crypto: await loadJsonFile(filenames.crypto),
+    securities: await loadJsonFile(filenames.securities),
+    openbb: await loadJsonFile(filenames.openbb),
+    compaction: await loadJsonFile(filenames.compaction),
+    risk: await loadJsonFile(filenames.risk),
+    news: await loadJsonFile(filenames.news),
+    aiProvider: await loadJsonFile(filenames.aiProvider),
+    heartbeat: await loadJsonFile(filenames.heartbeat),
+    auth: await loadJsonFile(filenames.auth),
+    connectors: await loadJsonFile(filenames.connectors),
+    newsCollector: await loadJsonFile(filenames.newsCollector),
+    decisionTicket: await loadJsonFile(filenames.decisionTicket),
+    killSwitch: await loadJsonFile(filenames.killSwitch),
+    slippage: await loadJsonFile(filenames.slippage),
+    reconciliation: await loadJsonFile(filenames.reconciliation),
+    governance: await loadJsonFile(filenames.governance),
+    canary: await loadJsonFile(filenames.canary),
+    researchDesk: await loadJsonFile(filenames.researchDesk),
+    reviewGate: await loadJsonFile(filenames.reviewGate),
+    tools: await loadJsonFile(filenames.tools),
+  }
 
   // ---------- Migration: consolidate old ai-provider + model + api-keys → ai-provider ----------
-  const aiProviderRaw = raws[6] as Record<string, unknown> | undefined
+  const aiProviderRaw = raws.aiProvider as Record<string, unknown> | undefined
   if (aiProviderRaw && !('backend' in aiProviderRaw)) {
     // Old format detected — merge model.json + api-keys.json into ai-provider.json
     const oldModel = await loadJsonFile('model.json') as Record<string, unknown> | undefined
@@ -456,7 +791,7 @@ export async function loadConfig(): Promise<Config> {
       ...(oldModel?.baseUrl ? { baseUrl: oldModel.baseUrl } : {}),
       apiKeys: oldKeys ?? {},
     }
-    raws[6] = migrated
+    raws.aiProvider = migrated
     await mkdir(CONFIG_DIR, { recursive: true })
     await writeFile(resolve(CONFIG_DIR, 'ai-provider.json'), JSON.stringify(migrated, null, 2) + '\n')
     await removeJsonFile('model.json')
@@ -464,10 +799,10 @@ export async function loadConfig(): Promise<Config> {
   }
 
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
-  const connectorsRaw = raws[8] as Record<string, unknown> | undefined
+  const connectorsRaw = raws.connectors as Record<string, unknown> | undefined
   if (connectorsRaw === undefined) {
     const oldTelegram = await loadJsonFile('telegram.json')
-    const oldEngine = raws[0] as Record<string, unknown> | undefined
+    const oldEngine = raws.engine as Record<string, unknown> | undefined
     const migrated: Record<string, unknown> = {}
     if (oldTelegram && typeof oldTelegram === 'object') {
       migrated.telegram = { ...(oldTelegram as Record<string, unknown>), enabled: true }
@@ -477,25 +812,36 @@ export async function loadConfig(): Promise<Config> {
       if (oldEngine.mcpPort !== undefined) migrated.mcp = { port: oldEngine.mcpPort }
       if (oldEngine.askMcpPort !== undefined) migrated.mcpAsk = { enabled: true, port: oldEngine.askMcpPort }
       const { mcpPort: _m, askMcpPort: _a, webPort: _w, ...cleanEngine } = oldEngine
-      raws[0] = cleanEngine
+      raws.engine = cleanEngine
       await mkdir(CONFIG_DIR, { recursive: true })
       await writeFile(resolve(CONFIG_DIR, 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
     }
-    raws[8] = Object.keys(migrated).length > 0 ? migrated : undefined
+    raws.connectors = Object.keys(migrated).length > 0 ? migrated : undefined
   }
 
   return {
-    engine:        await parseAndSeed(files[0], engineSchema, raws[0]),
-    agent:         await parseAndSeed(files[1], agentSchema, raws[1]),
-    crypto:        await parseAndSeed(files[2], cryptoSchema, raws[2]),
-    securities:    await parseAndSeed(files[3], securitiesSchema, raws[3]),
-    openbb:        await parseAndSeed(files[4], openbbSchema, raws[4]),
-    compaction:    await parseAndSeed(files[5], compactionSchema, raws[5]),
-    aiProvider:    await parseAndSeed(files[6], aiProviderSchema, raws[6]),
-    heartbeat:     await parseAndSeed(files[7], heartbeatSchema, raws[7]),
-    connectors:    await parseAndSeed(files[8], connectorsSchema, raws[8]),
-    newsCollector: await parseAndSeed(files[9], newsCollectorSchema, raws[9]),
-    tools:         await parseAndSeed(files[10], toolsSchema, raws[10]),
+    engine:         await parseAndSeed(filenames.engine, engineSchema, raws.engine),
+    agent:          await parseAndSeed(filenames.agent, agentSchema, raws.agent),
+    crypto:         await parseAndSeed(filenames.crypto, cryptoSchema, raws.crypto),
+    securities:     await parseAndSeed(filenames.securities, securitiesSchema, raws.securities),
+    openbb:         await parseAndSeed(filenames.openbb, openbbSchema, raws.openbb),
+    compaction:     await parseAndSeed(filenames.compaction, compactionSchema, raws.compaction),
+    risk:           await parseAndSeed(filenames.risk, riskSchema, raws.risk),
+    news:           await parseAndSeed(filenames.news, newsSchema, raws.news),
+    aiProvider:     await parseAndSeed(filenames.aiProvider, aiProviderSchema, raws.aiProvider),
+    heartbeat:      await parseAndSeed(filenames.heartbeat, heartbeatSchema, raws.heartbeat),
+    auth:           await parseAndSeed(filenames.auth, authSchema, raws.auth),
+    connectors:     await parseAndSeed(filenames.connectors, connectorsSchema, raws.connectors),
+    newsCollector:  await parseAndSeed(filenames.newsCollector, newsCollectorSchema, raws.newsCollector),
+    decisionTicket: await parseAndSeed(filenames.decisionTicket, decisionTicketSchema, raws.decisionTicket),
+    killSwitch:     await parseAndSeed(filenames.killSwitch, killSwitchSchema, raws.killSwitch),
+    slippage:       await parseAndSeed(filenames.slippage, slippageSchema, raws.slippage),
+    reconciliation: await parseAndSeed(filenames.reconciliation, reconciliationSchema, raws.reconciliation),
+    governance:     await parseAndSeed(filenames.governance, governanceSchema, raws.governance),
+    canary:         await parseAndSeed(filenames.canary, canarySchema, raws.canary),
+    researchDesk:   await parseAndSeed(filenames.researchDesk, researchDeskSchema, raws.researchDesk),
+    reviewGate:     await parseAndSeed(filenames.reviewGate, reviewGateSchema, raws.reviewGate),
+    tools:          await parseAndSeed(filenames.tools, toolsSchema, raws.tools),
   }
 }
 
@@ -558,8 +904,17 @@ const sectionSchemas: Record<ConfigSection, z.ZodTypeAny> = {
   news: newsSchema,
   aiProvider: aiProviderSchema,
   heartbeat: heartbeatSchema,
+  auth: authSchema,
   connectors: connectorsSchema,
   newsCollector: newsCollectorSchema,
+  decisionTicket: decisionTicketSchema,
+  killSwitch: killSwitchSchema,
+  slippage: slippageSchema,
+  reconciliation: reconciliationSchema,
+  governance: governanceSchema,
+  canary: canarySchema,
+  researchDesk: researchDeskSchema,
+  reviewGate: reviewGateSchema,
   tools: toolsSchema,
 }
 
@@ -570,10 +925,21 @@ const sectionFiles: Record<ConfigSection, string> = {
   securities: 'securities.json',
   openbb: 'openbb.json',
   compaction: 'compaction.json',
+  risk: 'risk.json',
+  news: 'news.json',
   aiProvider: 'ai-provider.json',
   heartbeat: 'heartbeat.json',
+  auth: 'auth.json',
   connectors: 'connectors.json',
   newsCollector: 'news-collector.json',
+  decisionTicket: 'decision-ticket.json',
+  killSwitch: 'kill-switch.json',
+  slippage: 'slippage.json',
+  reconciliation: 'reconciliation.json',
+  governance: 'governance.json',
+  canary: 'canary.json',
+  researchDesk: 'research-desk.json',
+  reviewGate: 'review-gate.json',
   tools: 'tools.json',
 }
 

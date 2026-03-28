@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/fdr_bottleneck_report.schema.v1.json",
+  "title": "OpenAlice FDR Bottleneck Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "source",
+    "summary",
+    "latest",
+    "runs"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "fdr_bottleneck_report.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["runsGlob", "matchedRuns"],
+      "properties": {
+        "runsGlob": { "type": "string", "minLength": 1 },
+        "matchedRuns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["runCount", "latestRunId", "latestDiagnosis"],
+      "properties": {
+        "runCount": { "type": "integer", "minimum": 0 },
+        "latestRunId": { "type": ["string", "null"] },
+        "latestDiagnosis": { "type": ["string", "null"] },
+        "diagnosisCounts": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    },
+    "latest": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "runId",
+          "alpha",
+          "candidateCount",
+          "diagnosis",
+          "whyFdrQStuck",
+          "pValueStats",
+          "counts",
+          "bhFeasibility"
+        ],
+        "properties": {
+          "runId": { "type": "string", "minLength": 1 },
+          "alpha": { "type": "number" },
+          "candidateCount": { "type": "integer", "minimum": 0 },
+          "diagnosis": { "type": "string", "minLength": 1 },
+          "whyFdrQStuck": { "type": "string", "minLength": 1 },
+          "pValueStats": { "type": "object", "additionalProperties": true },
+          "counts": { "type": "object", "additionalProperties": true },
+          "bhFeasibility": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

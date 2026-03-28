@@ -1,10 +1,10 @@
 {
   "schemaVersion": "strategy_candidates.v1",
-  "generatedAt": "2026-03-02T16:20:00Z",
+  "generatedAt": "2026-03-03T12:06:52Z",
   "dataset": {
     "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
     "symbol": "BTC/USD",
-    "lookbackBars": 3000
+    "lookbackBars": 3600
   },
   "thresholds": {
     "meanPboMax": 0.2,
@@ -12,9 +12,9 @@
     "fdrQMax": 0.1
   },
   "wfo": {
-    "trainBars": 960,
-    "testBars": 240,
-    "stepBars": 240,
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
     "degradationThreshold": 0.4
   },
   "significance": {
@@ -24,51 +24,79 @@
   },
   "riskSimulation": {
     "method": "moving_block_bootstrap",
-    "simulations": 2000,
+    "simulations": 1500,
     "horizonBars": 240,
-    "blockSize": 24,
+    "blockSize": 12,
     "ruinDrawdownPct": 30,
     "maxRuinProbability": 0.02,
     "minProfitProbability": 0.55
   },
   "costModel": {
-    "feeRate": 0.0006,
-    "slippageBps": 8,
+    "feeRate": 0.0004,
+    "slippageBps": 3,
     "latencyBars": 1
   },
   "candidates": [
     {
-      "strategyId": "S1",
-      "strategyName": "trend_baseline",
+      "strategyId": "LPS_T047_C1",
+      "strategyName": "search_local_baseline_trend_21_80_lo",
       "strategy": "trend",
       "params": {
-        "trendFastPeriod": 20,
-        "trendSlowPeriod": 55,
-        "allowShort": true
+        "trendFastPeriod": 21,
+        "trendSlowPeriod": 80,
+        "allowShort": false
       }
     },
     {
-      "strategyId": "S2",
-      "strategyName": "mean_reversion_rsi_bb",
-      "strategy": "meanReversion",
+      "strategyId": "LPS_T047_C2",
+      "strategyName": "search_local_baseline_trend_30_80_lo",
+      "strategy": "trend",
       "params": {
-        "rsiPeriod": 14,
-        "rsiOversold": 28,
-        "rsiOverbought": 72,
-        "bbPeriod": 20,
-        "bbStdDev": 2.0,
-        "allowShort": true
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 80,
+        "allowShort": false
       }
     },
     {
-      "strategyId": "S3",
-      "strategyName": "breakout_classic",
-      "strategy": "breakout",
+      "strategyId": "LPS_T047_C3",
+      "strategyName": "search_local_baseline_trend_24_80_lo",
+      "strategy": "trend",
       "params": {
-        "breakoutPeriod": 20,
-        "breakoutExitPeriod": 10,
+        "trendFastPeriod": 24,
+        "trendSlowPeriod": 80,
         "allowShort": false
       }
     }
-  ]
+  ],
+  "hypothesisCompile": {
+    "schemaVersion": "hypothesis_candidate_compile.v1",
+    "runId": "20260303T120652Z",
+    "generatedAt": "2026-03-03T12:06:52Z",
+    "plan": "A",
+    "inputs": {
+      "hypotheses": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/hypotheses/backlog.v1.json",
+      "baseCandidates": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/docs/research/strategy_candidates.v1.json",
+      "bestTripletSource": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/local_search/best_trend_triplet.latest.v1.json",
+      "bestTripletSchemaVersion": "best_trend_triplet.v1",
+      "bestTripletSourceType": "object"
+    },
+    "stats": {
+      "inspectedHypotheses": 20,
+      "outputCandidates": 3,
+      "themeCounts": {
+        "bestTriplet": 3
+      },
+      "candidateModeRequested": "blend",
+      "candidateModeEffective": "blend",
+      "complexityProfile": "default",
+      "bestTripletLoaded": true,
+      "bestTripletSeedCount": 3,
+      "bestTripletLoadError": ""
+    },
+    "themesUsed": [
+      "bestTriplet",
+      "bestTriplet",
+      "bestTriplet"
+    ]
+  }
 }

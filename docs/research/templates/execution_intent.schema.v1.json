@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/execution_intent.schema.v1.json",
+  "title": "OpenAlice Execution Intent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "symbol",
+    "action",
+    "decisionContext",
+    "provenance",
+    "order",
+    "semantics"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "execution_intent.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": ["placeOrder", "closePosition"]
+    },
+    "decisionContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseGateMode"],
+      "properties": {
+        "releaseGateMode": {
+          "type": "string",
+          "enum": ["paper", "live", "auto"]
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer"],
+      "properties": {
+        "producer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategyFamily": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edgeScore": {
+          "type": "number"
+        },
+        "sourceDecisionSchemaVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceDecisionAction": {
+          "type": "string",
+          "enum": ["long", "short", "flat"]
+        }
+      }
+    },
+    "order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["side", "type", "reduceOnly"],
+      "properties": {
+        "side": {
+          "type": "string",
+          "enum": ["buy", "sell"]
+        },
+        "type": {
+          "type": "string",
+          "enum": ["market", "limit"]
+        },
+        "reduceOnly": {
+          "type": "boolean"
+        },
+        "size": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "usdSize": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "price": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "expectedPrice": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "semantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idempotencyKey",
+        "signalBarCloseTs",
+        "submitDecisionTs",
+        "submitDeadlineMs",
+        "orderStaleMs"
+      ],
+      "properties": {
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signalBarCloseTs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "submitDecisionTs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "submitDeadlineMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "orderStaleMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
