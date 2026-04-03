@@ -15,6 +15,11 @@ const registry = new Map<string, GuardRegistryEntry['create']>(
   builtinGuards.map(g => [g.type, g.create]),
 );
 
+const deprecatedGuardReasons: Record<string, string> = {
+  'max-position-size': 'position sizing is enforced centrally by riskConfig/preTradeRiskCheck',
+  'max-leverage': 'leverage limits are enforced centrally by riskConfig/preTradeRiskCheck',
+};
+
 /** Register a custom guard type (for third-party extensions) */
 export function registerGuard(entry: GuardRegistryEntry): void {
   registry.set(entry.type, entry.create);
@@ -26,6 +31,11 @@ export function resolveGuards(
 ): OperationGuard[] {
   const guards: OperationGuard[] = [];
   for (const cfg of configs) {
+    const deprecatedReason = deprecatedGuardReasons[cfg.type];
+    if (deprecatedReason) {
+      console.warn(`guard: "${cfg.type}" is deprecated and was skipped — ${deprecatedReason}`);
+      continue;
+    }
     const factory = registry.get(cfg.type);
     if (!factory) {
       console.warn(`guard: unknown type "${cfg.type}", skipped`);

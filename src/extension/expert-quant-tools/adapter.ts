@@ -1,7 +1,10 @@
+import { readFile } from "node:fs/promises";
 import { tool } from "ai";
 import { z } from "zod";
 import type { IAnalysisContext } from "../analysis-tools/interfaces.js";
 import type { MarketData } from "../analysis-kit/data/interfaces.js";
+import { buildPortfolioTargetFromWeights } from "../../portfolio/target.js";
+import { loadChampionRegistry } from "../../runtime/champion_registry.js";
 import {
   runMlEnsemblePredict,
   type MlEnsembleModelName,
@@ -15,12 +18,19 @@ import {
 } from "../strategy-tools/index.js";
 import { analyzeNewsImpact } from "../../runtime/news_impact.js";
 import { evaluateExpertDecision } from "../../runtime/expert_decision.js";
-import { loadReleaseGateStatus } from "../../runtime/release_gate_status.js";
+import {
+  isReleaseGateStatusBlocking,
+  loadReleaseGateStatus,
+  type PersistedReleaseGateStatus,
+} from "../../runtime/release_gate_status.js";
+import { evaluateRuntimeTruthPipeline } from "../../runtime/runtime_truth_pipeline.js";
 
 const StrategyParamsObjectSchema = z.object({
   allowShort: z.boolean().optional(),
   trendFastPeriod: z.number().int().positive().optional(),
   trendSlowPeriod: z.number().int().positive().optional(),
+  trendConfirmBars: z.number().int().positive().optional(),
+  trendMinDiffPct: z.number().min(0).optional(),
   rsiPeriod: z.number().int().positive().optional(),
   rsiOversold: z.number().positive().max(100).optional(),
   rsiOverbought: z.number().positive().max(100).optional(),
@@ -93,6 +103,7 @@ interface RankedStrategyDecision {
 
 const STRATEGY_CANDIDATES: StrategyName[] = [
   "trend",
+  "regimeTrend",
   "meanReversion",
   "breakout",
   "ensemble",
@@ -108,6 +119,67 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function parseSemanticLookbackHours(value: string | undefined): number {
+  const trimmed = (value ?? "48h").trim().toLowerCase();
+  const match = trimmed.match(/^(\d+)(h|d)$/);
+  if (!match) {
+    throw new Error(`Invalid newsLookback "${value}". Expected formats like "12h" or "2d".`);
+  }
+  const amount = Number(match[1]);
+  return match[2] === "d" ? amount * 24 : amount;
+}
+
+async function readJsonOrNull(path: string | undefined): Promise<unknown | null> {
+  if (!path) {
+    return null;
+  }
+  try {
+    const raw = await readFile(path, "utf-8");
+    return JSON.parse(raw);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function resolvePaperTargetWeight(
+  action: "long" | "short" | "flat",
+  suggestedExposurePct: number,
+): number {
+  const normalizedExposure = Math.max(
+    0,
+    Math.min(1, suggestedExposurePct / 100),
+  );
+  if (action === "long") {
+    return normalizedExposure;
+  }
+  if (action === "short") {
+    return -normalizedExposure;
+  }
+  return 0;
+}
+
+function buildRuntimePlanningState(
+  releaseGateStatus: PersistedReleaseGateStatus | null,
+  now: Date,
+) {
+  const releaseGateDecision = isReleaseGateStatusBlocking(releaseGateStatus, now);
+  return {
+    regimeSeverity: "stable" as const,
+    regimeReason: null,
+    capitalRampStage: "unknown",
+    releaseGateStatus,
+    releaseGateBlocked: releaseGateDecision.blocking,
+    releaseGateBlockedReason: releaseGateDecision.reason ?? null,
+  };
+}
+
 function computeStrategyStrength(
   strategy: StrategyName,
   decision: StrategyDecision
@@ -118,9 +190,13 @@ function computeStrategyStrength(
   if (strategy === "ensemble") {
     const score = finiteOrUndefined(decision.indicators.ensembleScore) ?? 0;
     bonus = clamp01(Math.abs(score)) * 0.45;
-  } else if (strategy === "trend") {
+  } else if (strategy === "trend" || strategy === "regimeTrend") {
     const smaDiffPct = finiteOrUndefined(decision.indicators.smaDiffPct) ?? 0;
-    bonus = clamp01(Math.abs(smaDiffPct) / 1.5) * 0.45;
+    const regimeAllowed =
+      strategy === "regimeTrend"
+        ? finiteOrUndefined(decision.indicators.regimeAllowed) ?? 0
+        : 1;
+    bonus = clamp01(Math.abs(smaDiffPct) / 1.5) * 0.45 * Math.max(0.5, regimeAllowed);
   } else if (strategy === "meanReversion") {
     const rsi = finiteOrUndefined(decision.indicators.rsi);
     if (typeof rsi === "number") {
@@ -322,6 +398,17 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         releaseGateStatusPath: z
           .string()
           .default("data/runtime/release_gate_status.json"),
+        validationRunsPath: z
+          .string()
+          .default("data/research/strategy/strategy_validation_runs.json"),
+        experimentVerdictPath: z
+          .string()
+          .default("data/research/strategy/experiment_verdict.v2.json"),
+        championRegistryPath: z
+          .string()
+          .default("data/runtime/paper_champion_registry.json"),
+        paperBasisEquityUsd: z.number().positive().default(1_000),
+        paperMaxTurnoverPct: z.number().positive().default(1),
         policy: z
           .object({
             requireMl: z.boolean().optional(),
@@ -344,8 +431,13 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         newsLimit,
         useMl,
         ml,
-        requireReleaseGatePass,
-        releaseGateStatusPath,
+        requireReleaseGatePass = true,
+        releaseGateStatusPath = "data/runtime/release_gate_status.json",
+        validationRunsPath = "data/research/strategy/strategy_validation_runs.json",
+        experimentVerdictPath = "data/research/strategy/experiment_verdict.v2.json",
+        championRegistryPath = "data/runtime/paper_champion_registry.json",
+        paperBasisEquityUsd = 1_000,
+        paperMaxTurnoverPct = 1,
         policy,
       }) => {
         const candles = await loadCandles(ctx, symbol, lookbackBars);
@@ -371,7 +463,7 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         const strategyDecision = selection.selected.decision;
 
         const news = await ctx.getNewsV2({
-          lookback: newsLookback,
+          lookbackHours: parseSemanticLookbackHours(newsLookback),
           limit: newsLimit,
         });
         const now = ctx.getPlayheadTime();
@@ -445,9 +537,13 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
           }
         }
 
-        const releaseGateStatus = await loadReleaseGateStatus(
-          releaseGateStatusPath
-        );
+        const [releaseGateStatus, validationRuns, experimentVerdict, championRegistry] =
+          await Promise.all([
+            loadReleaseGateStatus(releaseGateStatusPath),
+            readJsonOrNull(validationRunsPath),
+            readJsonOrNull(experimentVerdictPath),
+            loadChampionRegistry(championRegistryPath),
+          ]);
         const ensembleScore =
           typeof strategyDecision.indicators?.ensembleScore === "number"
             ? strategyDecision.indicators.ensembleScore
@@ -471,6 +567,49 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
             ...(policy ?? {}),
             requireReleaseGatePass,
           },
+        });
+
+        const currentPrice = candles[candles.length - 1]?.close ?? 0;
+        const runtimeTruthTarget = buildPortfolioTargetFromWeights({
+          basisEquityUsd: paperBasisEquityUsd,
+          weights: {
+            [symbol]: resolvePaperTargetWeight(
+              decision.action,
+              decision.suggestedExposurePct
+            ),
+          },
+          generatedAt: now.toISOString(),
+          maxTurnoverPct: paperMaxTurnoverPct,
+          confidenceBySymbol: {
+            [symbol]: decision.confidence,
+          },
+          sizingReasonBySymbol: {
+            [symbol]: `expert_quant:${decision.action}`,
+          },
+          regimeTagBySymbol: {
+            [symbol]: "stable",
+          },
+          priceHintsBySymbol: currentPrice > 0 ? { [symbol]: currentPrice } : undefined,
+          notes: [
+            `selectedStrategy=${selection.selected.strategy}`,
+            `selectorReason=${selection.reason}`,
+          ],
+        });
+
+        const runtimeTruth = evaluateRuntimeTruthPipeline({
+          validationRuns,
+          experimentVerdict,
+          releaseGateStatus,
+          championRegistry,
+          planningState: buildRuntimePlanningState(releaseGateStatus, now),
+          portfolioTarget: runtimeTruthTarget,
+          currentPositions: [],
+          pricesBySymbol: currentPrice > 0 ? { [symbol]: currentPrice } : {},
+          validationRunsPath,
+          verdictPath: experimentVerdictPath,
+          releaseGateStatusPath,
+          registryPath: championRegistryPath,
+          now,
         });
 
         return {
@@ -520,6 +659,12 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
                 expiresAt: releaseGateStatus.expiresAt,
               }
             : null,
+          runtimeTruth: {
+            promotionGate: runtimeTruth.promotionGate,
+            paperGate: runtimeTruth.paperGate,
+            executionPlan: runtimeTruth.executionPlan,
+            snapshot: runtimeTruth.snapshot,
+          },
           decision,
         };
       },

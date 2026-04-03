@@ -36,9 +36,25 @@ export interface TicketValidationResult {
 export class DecisionTicketStore {
   private tickets = new Map<string, DecisionTicket>()
   private config: DecisionTicketConfig
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(config?: Partial<DecisionTicketConfig>) {
     this.config = { ...DEFAULT_TICKET_CONFIG, ...config }
+    // Start periodic cleanup every 5 minutes
+    this.cleanupTimer = setInterval(() => {
+      const removed = this.cleanup()
+      if (removed > 0) {
+        console.warn(`[decision-ticket] Periodic cleanup removed ${removed} expired tickets (remaining: ${this.tickets.size})`)
+      }
+    }, 5 * 60 * 1000)
+  }
+
+  /** Stop the periodic cleanup timer. Call when shutting down. */
+  destroy(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer)
+      this.cleanupTimer = null
+    }
   }
 
   /** Issue a new ticket for a symbol+action. Returns the ticket. */

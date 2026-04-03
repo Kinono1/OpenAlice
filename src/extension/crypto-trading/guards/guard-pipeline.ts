@@ -9,6 +9,7 @@
 import type { Operation } from '../wallet/types.js';
 import type { ICryptoTradingEngine } from '../interfaces.js';
 import type { OperationGuard, GuardContext } from './types.js';
+import { cloneOperationWithPrefetchedRiskState } from '../prefetched-state.js';
 
 export function createGuardPipeline(
   dispatcher: (op: Operation) => Promise<unknown>,
@@ -24,6 +25,11 @@ export function createGuardPipeline(
     ]);
 
     const ctx: GuardContext = { operation: op, positions, account };
+    const operationWithPrefetchedState = cloneOperationWithPrefetchedRiskState(
+      op,
+      op.params,
+      { positions, account },
+    );
 
     for (const guard of guards) {
       const rejection = await guard.check(ctx);
@@ -32,6 +38,6 @@ export function createGuardPipeline(
       }
     }
 
-    return dispatcher(op);
+    return dispatcher(operationWithPrefetchedState);
   };
 }

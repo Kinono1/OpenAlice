@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-31T02:51:54.652Z",
+  "batchId": "batch33_btc_phaseb_r3_trial0_refine_20260331.best_manifest",
+  "batchGoal": "Promote the strongest BTC candidate set from phaseb-r3 trial 0 into a route-ready base manifest for bounded local refinement.",
+  "notes": [
+    "source_run_id=phaseb-r3",
+    "source_id=phaseb-r3:trial000",
+    "source_trial=0",
+    "source_template=baseline+baseline+baseline",
+    "multiple_testing_unit=candidate",
+    "neighborhood_sweep_best_manifest=batch33_btc_phaseb_r3_trial0_refine_20260331",
+    "recommended_trial=13"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "T42_21_70_LS_C1_D50",
+      "strategyName": "trend_21_70_ls_c1_d50",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_trend_family_21_70_c1_d50_ls",
+      "correlationBucket": "btc_usd_trend_21_70_c1_d50_ls",
+      "params": {
+        "trendFastPeriod": 21,
+        "trendSlowPeriod": 70,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0.005,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "T46_34_89_LS_C1_D0",
+      "strategyName": "trend_34_89_ls_c1_d0",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_trend_family_34_89_c1_d0_ls",
+      "correlationBucket": "btc_usd_trend_34_89_c1_d0_ls",
+      "params": {
+        "trendFastPeriod": 34,
+        "trendSlowPeriod": 89,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "T43_24_77_LS_C1_D50",
+      "strategyName": "trend_24_77_ls_c1_d50",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_trend_family_24_77_c1_d50_ls",
+      "correlationBucket": "btc_usd_trend_24_77_c1_d50_ls",
+      "params": {
+        "trendFastPeriod": 24,
+        "trendSlowPeriod": 77,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0.005,
+        "allowShort": true
+      }
+    }
+  ]
+}

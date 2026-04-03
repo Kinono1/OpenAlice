@@ -1,19 +1,24 @@
-import { Hono } from 'hono'
-import { loadConfig, writeConfigSection, readAIProviderConfig, readOpenbbConfig, validSections, type ConfigSection } from '../../../core/config.js'
+import { Hono, type MiddlewareHandler } from 'hono'
+import { loadConfig, writeConfigSection, readAIProviderConfig, readOpenbbConfig, sanitizeConfigForClient, sanitizeConfigSectionForClient, validSections, type ConfigSection } from '../../../core/config.js'
 import { readAIConfig, writeAIConfig, type AIBackend } from '../../../core/ai-config.js'
 
 interface ConfigRouteOpts {
   onConnectorsChange?: () => Promise<void>
+  requireAuth?: MiddlewareHandler
 }
 
 /** Config routes: GET /, PUT /ai-provider, PUT /:section, GET /api-keys/status */
 export function createConfigRoutes(opts?: ConfigRouteOpts) {
   const app = new Hono()
 
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
+
   app.get('/', async (c) => {
     try {
       const config = await loadConfig()
-      return c.json(config)
+      return c.json(sanitizeConfigForClient(config))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -27,7 +32,7 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
         return c.json({ error: 'Invalid backend. Must be "claude-code" or "vercel-ai-sdk".' }, 400)
       }
       await writeAIConfig(backend as AIBackend)
-      return c.json({ backend })
+      return c.json(sanitizeConfigSectionForClient({ backend }))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -45,7 +50,7 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
       if (section === 'connectors') {
         await opts?.onConnectorsChange?.()
       }
-      return c.json(validated)
+      return c.json(sanitizeConfigSectionForClient(validated))
     } catch (err) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)

@@ -4,7 +4,12 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { writeReleaseGateStatus } from "../src/runtime/release_gate_status.js";
 
-type StrategyName = "trend" | "meanReversion" | "breakout" | "ensemble";
+type StrategyName =
+  | "trend"
+  | "regimeTrend"
+  | "meanReversion"
+  | "breakout"
+  | "ensemble";
 type GateProfile = "stage1" | "stage2" | "hard";
 type PartitionMode = "none" | "exchange" | "exchange_regime";
 type RegimeScheme = "rule_v1" | "kmeans_v1";
@@ -177,6 +182,7 @@ function parseStrategies(raw: string | undefined): StrategyName[] {
     const t = item.trim() as StrategyName;
     if (
       t === "trend" ||
+      t === "regimeTrend" ||
       t === "meanReversion" ||
       t === "breakout" ||
       t === "ensemble"

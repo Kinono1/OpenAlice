@@ -16,6 +16,7 @@ export type {
 export {
   estimatePboCscv,
   computeDeflatedSharpe,
+  computeSpaLikePValues,
   evaluateSignificanceGate,
 } from "./statistical_significance.js";
 
@@ -24,6 +25,9 @@ export type {
   PboResult,
   DeflatedSharpeInput,
   DeflatedSharpeResult,
+  SpaLikeInput,
+  SpaLikeCandidateResult,
+  SpaLikeResult,
   SignificanceGateInput,
   SignificanceGateResult,
 } from "./statistical_significance.js";

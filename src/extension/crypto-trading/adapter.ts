@@ -4,6 +4,22 @@ import type { ICryptoTradingEngine } from './interfaces';
 import type { IWallet } from './wallet/interfaces';
 import type { OrderStatusUpdate, WalletState } from './wallet/types';
 import { createCryptoWalletToolsImpl } from './wallet/adapter';
+import {
+  buildPortfolioTargetFromWeights,
+  planPortfolioRebalance,
+} from '../../portfolio/index.js';
+
+const PortfolioTargetPositionSchema = z.object({
+  symbol: z.string().describe('Trading pair symbol, e.g. BTC/USD'),
+  targetWeight: z
+    .number()
+    .min(-3)
+    .max(3)
+    .describe('Signed target portfolio weight. Positive = long, negative = short.'),
+  confidence: z.number().min(0).max(1).optional(),
+  sizingReason: z.string().optional(),
+  regimeTag: z.string().optional(),
+});
 
 /**
  * Create crypto trading AI tools (market interaction + wallet management)
@@ -12,7 +28,7 @@ import { createCryptoWalletToolsImpl } from './wallet/adapter';
  * - cryptoWalletCommit, cryptoWalletPush, cryptoWalletLog, cryptoWalletShow, cryptoWalletStatus, cryptoWalletSync, cryptoSimulatePriceChange
  *
  * Trading operations (staged via wallet):
- * - cryptoPlaceOrder, cryptoClosePosition, cryptoCancelOrder, cryptoAdjustLeverage
+ * - cryptoPlaceOrder, cryptoClosePosition, cryptoCancelOrder, cryptoAdjustLeverage, cryptoStagePortfolioTarget
  *
  * Query operations (direct):
  * - cryptoGetPositions, cryptoGetOrders, cryptoGetAccount
@@ -222,6 +238,123 @@ NOTE: This stages the operation. Call cryptoWalletCommit + cryptoWalletPush to e
           action: 'adjustLeverage',
           params: { symbol, newLeverage },
         });
+      },
+    }),
+
+    cryptoStagePortfolioTarget: tool({
+      description: `
+Convert a portfolio target into staged wallet operations.
+
+This is the bridge from portfolio-level sizing to actual execution:
+1. Reads current account equity and open positions
+2. Builds a concrete portfolio target contract
+3. Computes the rebalance plan subject to turnover and min-trade constraints
+4. Stages the resulting wallet operations
+
+This does NOT execute trades yet. After reviewing the plan, call cryptoWalletCommit + cryptoWalletPush.
+      `.trim(),
+      inputSchema: z.object({
+        positions: z
+          .array(PortfolioTargetPositionSchema)
+          .min(1)
+          .describe('Target portfolio weights by symbol'),
+        basisEquityUsd: z
+          .number()
+          .positive()
+          .optional()
+          .describe('Optional target sizing equity. Defaults to current account equity.'),
+        maxTurnoverPct: z
+          .number()
+          .positive()
+          .max(5)
+          .default(1)
+          .describe('Maximum turnover as a fraction of basis equity'),
+        minTradeNotionalUsd: z
+          .number()
+          .positive()
+          .max(100_000)
+          .default(10)
+          .describe('Minimum USD notional required before a rebalance trade is staged'),
+        notes: z.array(z.string()).optional(),
+      }),
+      execute: async ({
+        positions,
+        basisEquityUsd,
+        maxTurnoverPct,
+        minTradeNotionalUsd,
+        notes,
+      }) => {
+        const account = await tradingEngine.getAccount();
+        const currentPositions = await tradingEngine.getPositions();
+        const effectiveEquity = basisEquityUsd ?? account.equity;
+
+        const symbols = [
+          ...new Set([
+            ...positions.map((position) => position.symbol),
+            ...currentPositions.map((position) => position.symbol),
+          ]),
+        ].sort();
+
+        const pricesBySymbol: Record<string, number> = {};
+        await Promise.all(
+          symbols.map(async symbol => {
+            const current = currentPositions.find(position => position.symbol === symbol);
+            if (current?.markPrice && Number.isFinite(current.markPrice) && current.markPrice > 0) {
+              pricesBySymbol[symbol] = current.markPrice;
+              return;
+            }
+            const ticker = await tradingEngine.getTicker(symbol);
+            pricesBySymbol[symbol] = ticker.last;
+          })
+        );
+
+        const target = buildPortfolioTargetFromWeights({
+          basisEquityUsd: effectiveEquity,
+          weights: Object.fromEntries(
+            positions.map(position => [position.symbol, position.targetWeight])
+          ),
+          maxTurnoverPct,
+          confidenceBySymbol: Object.fromEntries(
+            positions
+              .filter(position => typeof position.confidence === 'number')
+              .map(position => [position.symbol, position.confidence!])
+          ),
+          sizingReasonBySymbol: Object.fromEntries(
+            positions
+              .filter(position => typeof position.sizingReason === 'string' && position.sizingReason.trim())
+              .map(position => [position.symbol, position.sizingReason!.trim()])
+          ),
+          regimeTagBySymbol: Object.fromEntries(
+            positions
+              .filter(position => typeof position.regimeTag === 'string' && position.regimeTag.trim())
+              .map(position => [position.symbol, position.regimeTag!.trim()])
+          ),
+          priceHintsBySymbol: pricesBySymbol,
+          notes,
+        });
+
+        const plan = planPortfolioRebalance({
+          target,
+          currentPositions,
+          pricesBySymbol,
+          config: {
+            minTradeNotionalUsd,
+          },
+        });
+
+        const staged = [];
+        for (const entry of plan.entries) {
+          for (const operation of entry.operations) {
+            staged.push(wallet.add(operation));
+          }
+        }
+
+        return {
+          target,
+          plan,
+          stagedCount: staged.length,
+          staged,
+        };
       },
     }),
 

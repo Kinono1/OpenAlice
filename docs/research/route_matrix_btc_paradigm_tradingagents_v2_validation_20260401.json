@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "route_matrix_spec.v1",
+  "matrixId": "route_matrix_btc_paradigm_tradingagents_v2_validation_20260401",
+  "sourceId": "tradingagents_research_sidecar_v2_validation_pool",
+  "manifest": "docs/research/strategy_candidates.btc_paradigm_tradingagents_v2_validation.json",
+  "defaultMultipleTestingUnit": "family",
+  "rankingObjective": "min(hardGap.totalGap) -> min(wfoFailureDensity) -> min(hardGap.fdrGap) -> max(meanSharpe)",
+  "summaryOutput": "data/research/strategy/analysis/route_matrix_btc_paradigm_tradingagents_v2_validation_20260401.json",
+  "markdownOutput": "data/research/strategy/analysis/route_matrix_btc_paradigm_tradingagents_v2_validation_20260401.md",
+  "profiles": [
+    {
+      "id": "phaseb_native_spa_candidate_v1",
+      "multipleTestingUnit": "candidate",
+      "fdrMethod": "spa",
+      "notes": [
+        "benchmark_aware_donor_validation=true"
+      ],
+      "overrides": {
+        "significance": {
+          "benchmarkStrategyIdBySymbol": {
+            "BTC/USD": "BASELINE_CONTROL"
+          },
+          "spaBootstrapSamples": 400,
+          "spaBlockSize": 12
+        }
+      }
+    },
+    {
+      "id": "phaseb_native_spa_family_v1",
+      "multipleTestingUnit": "family",
+      "fdrMethod": "spa",
+      "notes": [
+        "benchmark_aware_family_admission=true"
+      ],
+      "overrides": {
+        "significance": {
+          "benchmarkStrategyIdBySymbol": {
+            "BTC/USD": "BASELINE_CONTROL"
+          },
+          "spaBootstrapSamples": 400,
+          "spaBlockSize": 12
+        }
+      }
+    },
+    {
+      "id": "phaseb_native_bh_candidate_v1",
+      "multipleTestingUnit": "candidate",
+      "fdrMethod": "bh",
+      "notes": [
+        "candidate_level_bh_control=true"
+      ]
+    },
+    {
+      "id": "phaseb_native_bh_family_v1",
+      "multipleTestingUnit": "family",
+      "fdrMethod": "bh",
+      "notes": [
+        "family_level_bh_control=true"
+      ]
+    }
+  ]
+}

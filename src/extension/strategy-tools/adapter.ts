@@ -4,13 +4,14 @@ import type { IAnalysisContext } from "../analysis-tools/interfaces.js";
 import type { MarketData } from "../analysis-kit/data/interfaces.js";
 import { runStrategyWalkForward } from "../../backtest/wfo.js";
 import { evaluateSignificanceGate } from "../../backtest/statistical_significance.js";
-import { allocateInverseVolatilityPortfolio } from "../../portfolio/allocator.js";
+import { buildInverseVolatilityPortfolioTarget } from "../../portfolio/target.js";
 import { runStrategyBacktest } from "./backtest.js";
 import { evaluateStrategy, getStrategyMinimumBars } from "./strategies.js";
 import type { StrategyName, StrategyParams } from "./types.js";
 
 const StrategyNameSchema = z.enum([
   "trend",
+  "regimeTrend",
   "meanReversion",
   "breakout",
   "ensemble",
@@ -20,6 +21,24 @@ const StrategyParamsObjectSchema = z.object({
   allowShort: z.boolean().optional(),
   trendFastPeriod: z.number().int().positive().optional(),
   trendSlowPeriod: z.number().int().positive().optional(),
+  trendConfirmBars: z.number().int().positive().optional(),
+  trendMinDiffPct: z.number().min(0).optional(),
+  regimeVolWindow: z.number().int().positive().optional(),
+  regimeAtrPeriod: z.number().int().positive().optional(),
+  regimeFastPeriod: z.number().int().positive().optional(),
+  regimeSlowPeriod: z.number().int().positive().optional(),
+  allowedEntryRegimes: z
+    .array(
+      z.enum([
+        "HighVolTrend",
+        "HighVolMeanRevert",
+        "LowVolTrend",
+        "LowVolCarry",
+      ]),
+    )
+    .min(1)
+    .optional(),
+  exitOnRegimeMismatch: z.boolean().optional(),
   rsiPeriod: z.number().int().positive().optional(),
   rsiOversold: z.number().positive().max(100).optional(),
   rsiOverbought: z.number().positive().max(100).optional(),
@@ -216,6 +235,7 @@ function composePortfolioReturns(
 }
 
 function ensureSignificanceCandidates(
+  strategy: StrategyName,
   base: StrategyParams | undefined,
   explicit: StrategyParams[] | undefined,
   fromWfo: StrategyParams[] | undefined,
@@ -224,7 +244,7 @@ function ensureSignificanceCandidates(
     ? explicit
     : fromWfo && fromWfo.length >= 2
       ? fromWfo
-      : buildFallbackCandidates(base);
+      : buildFallbackCandidates(strategy, base);
 
   const dedup = new Map<string, StrategyParams>();
   for (const item of source) {
@@ -238,13 +258,34 @@ function ensureSignificanceCandidates(
     return [...dedup.values()];
   }
 
-  return buildFallbackCandidates(base);
+  return buildFallbackCandidates(strategy, base);
 }
 
-function buildFallbackCandidates(base: StrategyParams | undefined): StrategyParams[] {
+function buildFallbackCandidates(
+  strategy: StrategyName,
+  base: StrategyParams | undefined,
+): StrategyParams[] {
   const baseline = base ?? {};
   const fast = Math.max(3, (baseline.trendFastPeriod ?? 20) - 5);
   const slow = Math.max(fast + 5, (baseline.trendSlowPeriod ?? 50) + 5);
+
+  if (strategy === "regimeTrend") {
+    return [
+      baseline,
+      {
+        ...baseline,
+        trendFastPeriod: fast,
+        trendSlowPeriod: slow,
+        allowedEntryRegimes: ["HighVolTrend"],
+      },
+      {
+        ...baseline,
+        trendFastPeriod: Math.max(6, (baseline.trendFastPeriod ?? 20) + 3),
+        trendSlowPeriod: Math.max(18, (baseline.trendSlowPeriod ?? 50) + 12),
+        allowedEntryRegimes: ["HighVolTrend", "LowVolTrend"],
+      },
+    ];
+  }
 
   return [
     baseline,
@@ -255,6 +296,415 @@ function buildFallbackCandidates(base: StrategyParams | undefined): StrategyPara
       breakoutPeriod: (baseline.breakoutPeriod ?? 20) + 5,
     },
   ];
+}
+
+const TREND_BASELINE_STRATEGY: StrategyName = "trend";
+
+type BacktestSummary = ReturnType<typeof summarizeBacktest>;
+type BacktestMetrics = BacktestSummary["metrics"];
+type CompareSignificanceSummary = {
+  passed: boolean;
+  candidateSetSize: number;
+  pbo: number;
+  pboThreshold: number;
+  dsrValue: number;
+  dsrProbability: number;
+  dsrMin: number;
+};
+type CompareDeltaSummary = {
+  totalReturnPct: number;
+  annualizedReturnPct: number;
+  maxDrawdownPct: number;
+  sharpe: number;
+};
+type RankedBacktestSummary = BacktestSummary & {
+  vsTrendBaseline: CompareDeltaSummary;
+  significance?: CompareSignificanceSummary;
+};
+type ResearchPortfolioSummary = {
+  strategy: StrategyName;
+  symbolCount: number;
+  symbols: string[];
+  metrics: ReturnType<typeof summarizeReturns>;
+  symbolMetrics: Record<string, BacktestMetrics>;
+  weights: Record<string, number>;
+  leverage?: number;
+  predictedAnnualVolatility?: number;
+  portfolioTarget?: ReturnType<typeof buildInverseVolatilityPortfolioTarget>["target"];
+  vsTrendBaseline: CompareDeltaSummary;
+  significance?: CompareSignificanceSummary;
+};
+
+function resolveResearchSymbols(primarySymbol: string, symbols?: string[]): string[] {
+  const ordered = [primarySymbol, ...(symbols ?? [])];
+  const dedup = new Set<string>();
+  const out: string[] = [];
+  for (const symbol of ordered) {
+    const trimmed = symbol.trim();
+    if (!trimmed || dedup.has(trimmed)) {
+      continue;
+    }
+    dedup.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function sortByPerformance<T extends { metrics: { sharpe: number; totalReturnPct: number } }>(
+  items: T[],
+): T[] {
+  return [...items].sort((a, b) => {
+    if (b.metrics.sharpe !== a.metrics.sharpe) {
+      return b.metrics.sharpe - a.metrics.sharpe;
+    }
+    return b.metrics.totalReturnPct - a.metrics.totalReturnPct;
+  });
+}
+
+function summarizeSignificance(
+  selectedReturns: number[],
+  candidateReturns: number[][],
+  significance: z.infer<typeof SignificanceConfigSchema> | undefined,
+): CompareSignificanceSummary | undefined {
+  if (!significance?.enabled) {
+    return undefined;
+  }
+  if (significance.partitions % 2 !== 0) {
+    throw new Error("significance.partitions must be even.");
+  }
+  if (candidateReturns.length < 2) {
+    throw new Error(
+      "strategyCompare significance requires at least 2 candidate return series.",
+    );
+  }
+
+  const gate = evaluateSignificanceGate({
+    candidateReturns,
+    selectedReturns,
+    partitions: significance.partitions,
+    trialCount: significance.trialCount,
+    pboThreshold: significance.pboThreshold,
+    dsrMin: significance.dsrMin,
+  });
+
+  return {
+    passed: gate.passed,
+    candidateSetSize: candidateReturns.length,
+    pbo: Number(gate.pboResult.pbo.toFixed(4)),
+    pboThreshold: gate.pboThreshold,
+    dsrValue: Number(gate.dsrResult.dsrValue.toFixed(4)),
+    dsrProbability: Number(gate.dsrResult.dsrProbability.toFixed(4)),
+    dsrMin: gate.dsrMin,
+  };
+}
+
+function summarizeDeltaAgainstTrend(
+  metrics: BacktestMetrics | ReturnType<typeof summarizeReturns>,
+  baseline: BacktestMetrics | ReturnType<typeof summarizeReturns>,
+): CompareDeltaSummary {
+  return {
+    totalReturnPct: Number((metrics.totalReturnPct - baseline.totalReturnPct).toFixed(2)),
+    annualizedReturnPct: Number(
+      (metrics.annualizedReturnPct - baseline.annualizedReturnPct).toFixed(2),
+    ),
+    maxDrawdownPct: Number((metrics.maxDrawdownPct - baseline.maxDrawdownPct).toFixed(2)),
+    sharpe: Number((metrics.sharpe - baseline.sharpe).toFixed(2)),
+  };
+}
+
+function ensureTrendBaselineReport(
+  reports: ReturnType<typeof runStrategyBacktest>[],
+  candles: MarketData[],
+  initialCapital: number,
+  params: StrategyParams | undefined,
+  costModel: z.infer<typeof CostModelSchema>,
+): ReturnType<typeof runStrategyBacktest> {
+  const existing = reports.find((report) => report.strategy === TREND_BASELINE_STRATEGY);
+  if (existing) {
+    return existing;
+  }
+
+  ensureStrategyData(TREND_BASELINE_STRATEGY, candles, params);
+  return runStrategyBacktest({
+    strategy: TREND_BASELINE_STRATEGY,
+    candles,
+    initialCapital,
+    params,
+    costModel,
+  });
+}
+
+function buildRankedStrategySummaries(
+  reports: ReturnType<typeof runStrategyBacktest>[],
+  trendBaselineReport: ReturnType<typeof runStrategyBacktest>,
+  significance: z.infer<typeof SignificanceConfigSchema> | undefined,
+): RankedBacktestSummary[] {
+  const returnsByStrategy = Object.fromEntries(
+    reports.map((report) => [report.strategy, equityCurveToReturns(report.equityCurve)]),
+  ) as Record<StrategyName, number[]>;
+  const candidateReturns = reports.map((report) => returnsByStrategy[report.strategy]);
+  const trendBaseline = summarizeBacktest(trendBaselineReport);
+
+  return sortByPerformance(
+    reports.map((report) => {
+      const summary = summarizeBacktest(report);
+      return {
+        ...summary,
+        vsTrendBaseline: summarizeDeltaAgainstTrend(summary.metrics, trendBaseline.metrics),
+        significance: summarizeSignificance(
+          returnsByStrategy[report.strategy],
+          candidateReturns,
+          significance,
+        ),
+      };
+    }),
+  );
+}
+
+function buildStrategyPortfolioResearch(
+  strategyList: StrategyName[],
+  symbols: string[],
+  reportsBySymbol: Record<string, ReturnType<typeof runStrategyBacktest>[]>,
+  trendBaselineBySymbol: Record<string, ReturnType<typeof runStrategyBacktest>>,
+  annualizationFactor: number,
+  initialCapital: number,
+  portfolio: z.infer<typeof PortfolioCompareSchema>,
+  significance: z.infer<typeof SignificanceConfigSchema> | undefined,
+): {
+  equalWeightedStrategyPortfolioRanking: ResearchPortfolioSummary[];
+  inverseVolWeightedStrategyPortfolioRanking: ResearchPortfolioSummary[];
+  baseline: {
+    equalWeighted: ResearchPortfolioSummary;
+    inverseVolWeighted: ResearchPortfolioSummary;
+  };
+  winner: {
+    equalWeighted: ResearchPortfolioSummary;
+    inverseVolWeighted: ResearchPortfolioSummary;
+  };
+} {
+  const equalWeightedCandidates: ResearchPortfolioSummary[] = [];
+  const inverseVolCandidates: ResearchPortfolioSummary[] = [];
+
+  for (const strategy of strategyList) {
+    const returnsBySymbol: Record<string, number[]> = {};
+    const symbolMetrics: Record<string, BacktestMetrics> = {};
+
+    for (const symbol of symbols) {
+      const report = reportsBySymbol[symbol].find((entry) => entry.strategy === strategy);
+      if (!report) {
+        throw new Error(`Missing ${strategy} report for ${symbol}.`);
+      }
+      returnsBySymbol[symbol] = equityCurveToReturns(report.equityCurve);
+      symbolMetrics[symbol] = summarizeBacktest(report).metrics;
+    }
+
+    const equalWeights = Object.fromEntries(
+      symbols.map((symbol) => [symbol, 1 / symbols.length]),
+    ) as Record<string, number>;
+    const equalReturns = composePortfolioReturns(returnsBySymbol, equalWeights);
+    equalWeightedCandidates.push({
+      strategy,
+      symbolCount: symbols.length,
+      symbols,
+      metrics: summarizeReturns(equalReturns, annualizationFactor),
+      symbolMetrics,
+      weights: equalWeights,
+      vsTrendBaseline: {
+        totalReturnPct: 0,
+        annualizedReturnPct: 0,
+        maxDrawdownPct: 0,
+        sharpe: 0,
+      },
+    });
+
+    const inverseVol = buildInverseVolatilityPortfolioTarget({
+      basisEquityUsd: initialCapital,
+      returnsByAsset: returnsBySymbol,
+      allocatorConfig: {
+        targetAnnualVolatility: portfolio?.targetAnnualVolatility,
+        leverageCap: portfolio?.leverageCap,
+        correlationThreshold: portfolio?.correlationThreshold,
+        maxPairCombinedWeight: portfolio?.maxPairCombinedWeight,
+        annualizationFactor,
+      },
+      sizingReasonBySymbol: Object.fromEntries(
+        symbols.map((symbol) => [symbol, `strategy_compare_${strategy}_inverse_vol`]),
+      ),
+      notes: [
+        `symbols=${symbols.join(",")}`,
+        `strategy=${strategy}`,
+        "source=strategyCompare",
+      ],
+    });
+    const inverseReturns = composePortfolioReturns(
+      returnsBySymbol,
+      inverseVol.allocation.scaledWeights,
+    );
+    inverseVolCandidates.push({
+      strategy,
+      symbolCount: symbols.length,
+      symbols,
+      metrics: summarizeReturns(inverseReturns, annualizationFactor),
+      symbolMetrics,
+      weights: inverseVol.allocation.scaledWeights,
+      leverage: Number(inverseVol.allocation.leverage.toFixed(3)),
+      predictedAnnualVolatility: Number(
+        inverseVol.allocation.predictedAnnualVolatility.toFixed(4),
+      ),
+      portfolioTarget: inverseVol.target,
+      vsTrendBaseline: {
+        totalReturnPct: 0,
+        annualizedReturnPct: 0,
+        maxDrawdownPct: 0,
+        sharpe: 0,
+      },
+    });
+  }
+
+  const equalCandidateReturns = equalWeightedCandidates.map((item) =>
+    composePortfolioReturns(
+      Object.fromEntries(
+        symbols.map((symbol) => {
+          const report = reportsBySymbol[symbol].find((entry) => entry.strategy === item.strategy);
+          if (!report) {
+            throw new Error(`Missing ${item.strategy} report for ${symbol}.`);
+          }
+          return [symbol, equityCurveToReturns(report.equityCurve)];
+        }),
+      ),
+      item.weights,
+    ),
+  );
+  const inverseCandidateReturns = inverseVolCandidates.map((item) =>
+    composePortfolioReturns(
+      Object.fromEntries(
+        symbols.map((symbol) => {
+          const report = reportsBySymbol[symbol].find((entry) => entry.strategy === item.strategy);
+          if (!report) {
+            throw new Error(`Missing ${item.strategy} report for ${symbol}.`);
+          }
+          return [symbol, equityCurveToReturns(report.equityCurve)];
+        }),
+      ),
+      item.weights,
+    ),
+  );
+
+  const trendReturnsBySymbol = Object.fromEntries(
+    symbols.map((symbol) => [
+      symbol,
+      equityCurveToReturns(trendBaselineBySymbol[symbol].equityCurve),
+    ]),
+  ) as Record<string, number[]>;
+  const trendSymbolMetrics = Object.fromEntries(
+    symbols.map((symbol) => [
+      symbol,
+      summarizeBacktest(trendBaselineBySymbol[symbol]).metrics,
+    ]),
+  ) as Record<string, BacktestMetrics>;
+  const trendEqualWeights = Object.fromEntries(
+    symbols.map((symbol) => [symbol, 1 / symbols.length]),
+  ) as Record<string, number>;
+  const trendEqualBaseline: ResearchPortfolioSummary = {
+    strategy: TREND_BASELINE_STRATEGY,
+    symbolCount: symbols.length,
+    symbols,
+    metrics: summarizeReturns(
+      composePortfolioReturns(trendReturnsBySymbol, trendEqualWeights),
+      annualizationFactor,
+    ),
+    symbolMetrics: trendSymbolMetrics,
+    weights: trendEqualWeights,
+    vsTrendBaseline: {
+      totalReturnPct: 0,
+      annualizedReturnPct: 0,
+      maxDrawdownPct: 0,
+      sharpe: 0,
+    },
+  };
+  const trendInverseVol = buildInverseVolatilityPortfolioTarget({
+    basisEquityUsd: initialCapital,
+    returnsByAsset: trendReturnsBySymbol,
+    allocatorConfig: {
+      targetAnnualVolatility: portfolio?.targetAnnualVolatility,
+      leverageCap: portfolio?.leverageCap,
+      correlationThreshold: portfolio?.correlationThreshold,
+      maxPairCombinedWeight: portfolio?.maxPairCombinedWeight,
+      annualizationFactor,
+    },
+    sizingReasonBySymbol: Object.fromEntries(
+      symbols.map((symbol) => [symbol, "strategy_compare_trend_inverse_vol"]),
+    ),
+    notes: [
+      `symbols=${symbols.join(",")}`,
+      "strategy=trend",
+      "source=strategyCompare",
+    ],
+  });
+  const trendInverseBaseline: ResearchPortfolioSummary = {
+    strategy: TREND_BASELINE_STRATEGY,
+    symbolCount: symbols.length,
+    symbols,
+    metrics: summarizeReturns(
+      composePortfolioReturns(trendReturnsBySymbol, trendInverseVol.allocation.scaledWeights),
+      annualizationFactor,
+    ),
+    symbolMetrics: trendSymbolMetrics,
+    weights: trendInverseVol.allocation.scaledWeights,
+    leverage: Number(trendInverseVol.allocation.leverage.toFixed(3)),
+    predictedAnnualVolatility: Number(
+      trendInverseVol.allocation.predictedAnnualVolatility.toFixed(4),
+    ),
+    portfolioTarget: trendInverseVol.target,
+    vsTrendBaseline: {
+      totalReturnPct: 0,
+      annualizedReturnPct: 0,
+      maxDrawdownPct: 0,
+      sharpe: 0,
+    },
+  };
+
+  const equalWeightedStrategyPortfolioRanking = sortByPerformance(
+    equalWeightedCandidates.map((item, index) => ({
+      ...item,
+      vsTrendBaseline: summarizeDeltaAgainstTrend(
+        item.metrics,
+        trendEqualBaseline.metrics,
+      ),
+      significance: summarizeSignificance(
+        equalCandidateReturns[index],
+        equalCandidateReturns,
+        significance,
+      ),
+    })),
+  );
+  const inverseVolWeightedStrategyPortfolioRanking = sortByPerformance(
+    inverseVolCandidates.map((item, index) => ({
+      ...item,
+      vsTrendBaseline: summarizeDeltaAgainstTrend(
+        item.metrics,
+        trendInverseBaseline.metrics,
+      ),
+      significance: summarizeSignificance(
+        inverseCandidateReturns[index],
+        inverseCandidateReturns,
+        significance,
+      ),
+    })),
+  );
+
+  return {
+    equalWeightedStrategyPortfolioRanking,
+    inverseVolWeightedStrategyPortfolioRanking,
+    baseline: {
+      equalWeighted: trendEqualBaseline,
+      inverseVolWeighted: trendInverseBaseline,
+    },
+    winner: {
+      equalWeighted: equalWeightedStrategyPortfolioRanking[0],
+      inverseVolWeighted: inverseVolWeightedStrategyPortfolioRanking[0],
+    },
+  };
 }
 
 export function createStrategyTools(ctx: IAnalysisContext) {
@@ -396,6 +846,7 @@ Optional advanced modes:
           }
 
           const significanceCandidates = ensureSignificanceCandidates(
+            strategy,
             params,
             significance.candidates,
             wfo?.candidates,
@@ -446,6 +897,12 @@ Optional portfolio view compares equal-weight vs inverse-vol strategy baskets.
       `.trim(),
       inputSchema: z.object({
         symbol: z.string().describe('Trading pair, e.g. "BTC/USD"'),
+        symbols: z
+          .array(z.string())
+          .min(1)
+          .max(8)
+          .optional()
+          .describe("Optional research basket. Include BTC/USD + ETH/USD for dual-symbol portfolio research."),
         strategies: z
           .array(StrategyNameSchema)
           .min(1)
@@ -457,49 +914,88 @@ Optional portfolio view compares equal-weight vs inverse-vol strategy baskets.
         params: StrategyParamsSchema,
         costModel: CostModelSchema,
         portfolio: PortfolioCompareSchema,
+        significance: SignificanceConfigSchema,
       }),
       execute: async ({
         symbol,
+        symbols,
         strategies,
         lookbackBars,
         initialCapital,
         params,
         costModel,
         portfolio,
+        significance,
       }) => {
         const strategyList: StrategyName[] =
           strategies && strategies.length
             ? strategies
             : ["trend", "meanReversion", "breakout", "ensemble"];
 
-        const candles = await loadCandles(ctx, symbol, lookbackBars);
-        const reports = strategyList.map((name) => {
-          ensureStrategyData(name, candles, params);
-          return runStrategyBacktest({
-            strategy: name,
+        const researchSymbols = resolveResearchSymbols(symbol, symbols);
+        const candlesBySymbol = Object.fromEntries(
+          await Promise.all(
+            researchSymbols.map(async (researchSymbol) => [
+              researchSymbol,
+              await loadCandles(ctx, researchSymbol, lookbackBars),
+            ]),
+          ),
+        ) as Record<string, MarketData[]>;
+
+        const reportsBySymbol: Record<string, ReturnType<typeof runStrategyBacktest>[]> = {};
+        const trendBaselineBySymbol: Record<string, ReturnType<typeof runStrategyBacktest>> = {};
+
+        for (const researchSymbol of researchSymbols) {
+          const candles = candlesBySymbol[researchSymbol];
+          const reports = strategyList.map((name) => {
+            ensureStrategyData(name, candles, params);
+            return runStrategyBacktest({
+              strategy: name,
+              candles,
+              initialCapital,
+              params,
+              costModel,
+            });
+          });
+          reportsBySymbol[researchSymbol] = reports;
+          trendBaselineBySymbol[researchSymbol] = ensureTrendBaselineReport(
+            reports,
             candles,
             initialCapital,
             params,
             costModel,
-          });
-        });
+          );
+        }
 
-        const ranked = reports
-          .map((report) => summarizeBacktest(report))
-          .sort((a, b) => {
-            if (b.metrics.sharpe !== a.metrics.sharpe) {
-              return b.metrics.sharpe - a.metrics.sharpe;
-            }
-            return b.metrics.totalReturnPct - a.metrics.totalReturnPct;
-          });
+        const candles = candlesBySymbol[symbol];
+        const reports = reportsBySymbol[symbol];
+        const ranked = buildRankedStrategySummaries(
+          reports,
+          trendBaselineBySymbol[symbol],
+          significance,
+        );
 
         const response: Record<string, unknown> = {
           symbol,
+          symbols: researchSymbols,
+          baselineStrategy: TREND_BASELINE_STRATEGY,
           lookbackBars: candles.length,
           from: candles[0].time,
           to: candles[candles.length - 1].time,
           ranking: ranked,
           winner: ranked[0],
+          trendBaseline:
+            ranked.find((entry) => entry.strategy === TREND_BASELINE_STRATEGY) ??
+            summarizeBacktest(trendBaselineBySymbol[symbol]),
+          validation: significance?.enabled
+            ? {
+                mode: "research_surface_with_statistical_context",
+                note: "Use strategyBacktest for promotion-grade WFO/significance validation.",
+              }
+            : {
+                mode: "research_surface_only",
+                note: "Use strategyBacktest for promotion-grade WFO/significance validation.",
+              },
         };
 
         if (portfolio?.enabled && strategyList.length >= 2) {
@@ -515,16 +1011,30 @@ Optional portfolio view compares equal-weight vs inverse-vol strategy baskets.
             equalWeights[name] = 1 / names.length;
           }
 
-          const inverseVol = allocateInverseVolatilityPortfolio(returnsByAsset, {
-            targetAnnualVolatility: portfolio.targetAnnualVolatility,
-            leverageCap: portfolio.leverageCap,
-            correlationThreshold: portfolio.correlationThreshold,
-            maxPairCombinedWeight: portfolio.maxPairCombinedWeight,
-            annualizationFactor,
+          const inverseVol = buildInverseVolatilityPortfolioTarget({
+            basisEquityUsd: initialCapital,
+            returnsByAsset,
+            allocatorConfig: {
+              targetAnnualVolatility: portfolio.targetAnnualVolatility,
+              leverageCap: portfolio.leverageCap,
+              correlationThreshold: portfolio.correlationThreshold,
+              maxPairCombinedWeight: portfolio.maxPairCombinedWeight,
+              annualizationFactor,
+            },
+            sizingReasonBySymbol: Object.fromEntries(
+              Object.keys(returnsByAsset).map((name) => [name, "strategy_compare_inverse_vol"])
+            ),
+            notes: [
+              `symbol=${symbol}`,
+              "source=strategyCompare",
+            ],
           });
 
           const equalReturns = composePortfolioReturns(returnsByAsset, equalWeights);
-          const inverseReturns = composePortfolioReturns(returnsByAsset, inverseVol.scaledWeights);
+          const inverseReturns = composePortfolioReturns(
+            returnsByAsset,
+            inverseVol.allocation.scaledWeights
+          );
 
           response.portfolioComparison = {
             equalWeighted: {
@@ -532,11 +1042,50 @@ Optional portfolio view compares equal-weight vs inverse-vol strategy baskets.
               ...summarizeReturns(equalReturns, annualizationFactor),
             },
             inverseVolWeighted: {
-              weights: inverseVol.scaledWeights,
-              leverage: Number(inverseVol.leverage.toFixed(3)),
-              predictedAnnualVolatility: Number(inverseVol.predictedAnnualVolatility.toFixed(4)),
+              weights: inverseVol.allocation.scaledWeights,
+              leverage: Number(inverseVol.allocation.leverage.toFixed(3)),
+              predictedAnnualVolatility: Number(
+                inverseVol.allocation.predictedAnnualVolatility.toFixed(4)
+              ),
+              portfolioTarget: inverseVol.target,
               ...summarizeReturns(inverseReturns, annualizationFactor),
             },
+          };
+        }
+
+        if (researchSymbols.length >= 2) {
+          const annualizationFactor = annualizationFactorFromCandles(candles);
+          response.multiSymbolResearch = {
+            symbols: researchSymbols,
+            baselineStrategy: TREND_BASELINE_STRATEGY,
+            perSymbol: researchSymbols.map((researchSymbol) => {
+              const ranking = buildRankedStrategySummaries(
+                reportsBySymbol[researchSymbol],
+                trendBaselineBySymbol[researchSymbol],
+                significance,
+              );
+              return {
+                symbol: researchSymbol,
+                lookbackBars: candlesBySymbol[researchSymbol].length,
+                from: candlesBySymbol[researchSymbol][0].time,
+                to: candlesBySymbol[researchSymbol][candlesBySymbol[researchSymbol].length - 1].time,
+                ranking,
+                winner: ranking[0],
+                trendBaseline:
+                  ranking.find((entry) => entry.strategy === TREND_BASELINE_STRATEGY) ??
+                  summarizeBacktest(trendBaselineBySymbol[researchSymbol]),
+              };
+            }),
+            ...buildStrategyPortfolioResearch(
+              strategyList,
+              researchSymbols,
+              reportsBySymbol,
+              trendBaselineBySymbol,
+              annualizationFactor,
+              initialCapital,
+              portfolio,
+              significance,
+            ),
           };
         }
 

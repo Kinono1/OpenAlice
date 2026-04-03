@@ -34,6 +34,24 @@ export interface OperationMeta {
 const als = new AsyncLocalStorage<TrustedRequestContext>()
 const contextStore = new Map<string, TrustedRequestContext>()
 
+// Periodic TTL cleanup for leaked contexts (those not removed via removeContext)
+const CONTEXT_TTL_MS = 30 * 60 * 1000 // 30 minutes
+setInterval(() => {
+  const now = Date.now()
+  const staleKeys: string[] = []
+  contextStore.forEach((ctx, id) => {
+    if (now - ctx.timestamp > CONTEXT_TTL_MS) {
+      staleKeys.push(id)
+    }
+  })
+  for (const key of staleKeys) {
+    contextStore.delete(key)
+  }
+  if (staleKeys.length > 0) {
+    console.warn(`[trusted-context] TTL cleanup removed ${staleKeys.length} stale contexts (remaining: ${contextStore.size})`)
+  }
+}, 5 * 60 * 1000) // Every 5 minutes
+
 // ==================== Creation (connector/engine layer only) ====================
 
 export interface CreateContextParams {
@@ -70,14 +88,26 @@ export function createTrustedContext(params: CreateContextParams): TrustedReques
  * via getContextId() inside the callback.
  */
 export function runWithContext<T>(ctx: TrustedRequestContext, fn: () => T): T {
-  return als.run(ctx, fn)
+  return als.run(ctx, () => {
+    try {
+      return fn()
+    } finally {
+      removeContext(ctx.contextId)
+    }
+  })
 }
 
 /**
  * Async version for middleware use.
  */
 export function runWithContextAsync<T>(ctx: TrustedRequestContext, fn: () => Promise<T>): Promise<T> {
-  return als.run(ctx, fn)
+  return als.run(ctx, async () => {
+    try {
+      return await fn()
+    } finally {
+      removeContext(ctx.contextId)
+    }
+  })
 }
 
 // ==================== Tool-layer access (safe) ====================

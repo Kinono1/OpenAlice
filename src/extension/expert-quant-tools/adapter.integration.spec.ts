@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { IAnalysisContext } from "../analysis-tools/interfaces.js";
 import type { IMarketDataProvider, MarketData, NewsItem } from "../analysis-kit/data/interfaces.js";
@@ -85,10 +88,108 @@ describe("expert-quant-tools adapter integration", () => {
     expect(result).toHaveProperty("strategy");
     expect(result).toHaveProperty("news");
     expect(result).toHaveProperty("decision");
+    expect(result).toHaveProperty("runtimeTruth");
     expect(result.decision).toHaveProperty("action");
     expect(["long", "short", "flat"]).toContain(result.decision.action);
     expect(typeof result.decision.confidence).toBe("number");
     expect(result.news.totalNews).toBeGreaterThan(0);
+    expect(result.runtimeTruth.promotionGate.pass).toBe(false);
+    expect(result.runtimeTruth.executionPlan.kind).toBe("blocked");
+  });
+
+  it("surfaces active formal runtime truth when upstream artifacts pass", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "expert-quant-runtime-truth-"));
+    const validationRunsPath = join(tempDir, "strategy_validation_runs.json");
+    const experimentVerdictPath = join(tempDir, "experiment_verdict.v2.json");
+    const releaseGateStatusPath = join(tempDir, "release_gate_status.json");
+    const championRegistryPath = join(tempDir, "paper_champion_registry.json");
+
+    await writeFile(
+      validationRunsPath,
+      JSON.stringify(
+        {
+          champion: { strategyId: "S1" },
+          candidates: [
+            {
+              strategyId: "S1",
+              strategyName: "Trend",
+              strategy: "trend",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      experimentVerdictPath,
+      JSON.stringify(
+        {
+          schemaVersion: "experiment_verdict.v2",
+          result: "GO",
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      releaseGateStatusPath,
+      JSON.stringify(
+        {
+          version: 1,
+          generatedAt: "2026-02-22T12:00:00.000Z",
+          allowPaperTrading: true,
+          allowLiveTrading: true,
+          failedChecks: [],
+          warningChecks: [],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      championRegistryPath,
+      JSON.stringify(
+        {
+          version: 1,
+          generatedAt: "2026-02-22T12:00:00.000Z",
+          entries: [
+            {
+              strategyId: "S1",
+              strategyFamily: "trend",
+              symbols: ["BTC/USD"],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const tools = createExpertQuantTools(ctx);
+    const result = await (tools.expertQuantDecision as any).execute({
+      symbol: "BTC/USD",
+      lookbackBars: 500,
+      useMl: false,
+      requireReleaseGatePass: false,
+      validationRunsPath,
+      experimentVerdictPath,
+      releaseGateStatusPath,
+      championRegistryPath,
+      paperBasisEquityUsd: 1_000,
+      paperMaxTurnoverPct: 1,
+      policy: {
+        minCompositeScore: 0.15,
+        allowShort: true,
+      },
+    });
+
+    expect(result.runtimeTruth.promotionGate.pass).toBe(true);
+    expect(result.runtimeTruth.paperGate.allowPaperTrading).toBe(true);
+    expect(result.runtimeTruth.executionPlan.kind).toBe("active");
+    expect(result.runtimeTruth.snapshot.paperExecutorStatus.summary).toMatchObject({
+      releaseGate: "PASS",
+      paperGate: "PASS",
+    });
   });
 });
-

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "wfo_sensitivity_spec.v1",
+  "sensitivityId": "wfo_sensitivity_btc_paradigm_tradingagents_v2_independent_guard_20260402",
+  "sourceId": "tradingagents_research_sidecar_v2_validation_pool_independent_guard",
+  "manifest": "docs/research/strategy_candidates.btc_paradigm_tradingagents_v2_validation_independent_guard.json",
+  "defaultMultipleTestingUnit": "candidate",
+  "defaultFdrMethod": "spa",
+  "summaryOutput": "data/research/strategy/analysis/wfo_sensitivity_btc_paradigm_tradingagents_v2_independent_guard_20260402.json",
+  "markdownOutput": "data/research/strategy/analysis/wfo_sensitivity_btc_paradigm_tradingagents_v2_independent_guard_20260402.md",
+  "profiles": [
+    {
+      "id": "native_short_test",
+      "notes": [
+        "wfo_baseline_current_validation_window=true"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3600
+        },
+        "wfo": {
+          "trainBars": 840,
+          "testBars": 120,
+          "stepBars": 180
+        }
+      }
+    },
+    {
+      "id": "medium_oos",
+      "notes": [
+        "wfo_medium_oos_window=true"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3600
+        },
+        "wfo": {
+          "trainBars": 840,
+          "testBars": 240,
+          "stepBars": 240
+        }
+      }
+    },
+    {
+      "id": "long_oos",
+      "notes": [
+        "wfo_long_oos_window=true"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3600
+        },
+        "wfo": {
+          "trainBars": 720,
+          "testBars": 360,
+          "stepBars": 360
+        }
+      }
+    }
+  ]
+}

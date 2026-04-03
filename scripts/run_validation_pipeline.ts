@@ -266,6 +266,7 @@ function parseRawArgs(argv: string[]): Map<string, string> {
 function parseStrategy(value: string): StrategyName {
   if (
     value === "trend" ||
+    value === "regimeTrend" ||
     value === "meanReversion" ||
     value === "breakout" ||
     value === "ensemble"
@@ -340,6 +341,20 @@ function ensureCandidates(
           ...base,
           trendFastPeriod: Math.max(6, (base.trendFastPeriod ?? 20) + 3),
           trendSlowPeriod: Math.max(18, (base.trendSlowPeriod ?? 50) + 12),
+        },
+      ];
+    case "regimeTrend":
+      return [
+        { ...base },
+        {
+          ...base,
+          allowedEntryRegimes: ["HighVolTrend"],
+          exitOnRegimeMismatch: true,
+        },
+        {
+          ...base,
+          allowedEntryRegimes: ["HighVolTrend", "LowVolTrend"],
+          exitOnRegimeMismatch: true,
         },
       ];
     case "meanReversion":

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "route_matrix_spec.v1",
+  "matrixId": "route_matrix_btc_paradigm_tradingagents_v2_robustness_20260401",
+  "sourceId": "tradingagents_research_sidecar_v2_validation_pool_robust_anchor",
+  "manifest": "docs/research/strategy_candidates.btc_paradigm_tradingagents_v2_validation_robust_anchor.json",
+  "defaultMultipleTestingUnit": "candidate",
+  "rankingObjective": "min(hardGap.totalGap) -> min(wfoFailureDensity) -> min(hardGap.fdrGap) -> max(meanSharpe)",
+  "summaryOutput": "data/research/strategy/analysis/route_matrix_btc_paradigm_tradingagents_v2_robustness_20260401.json",
+  "markdownOutput": "data/research/strategy/analysis/route_matrix_btc_paradigm_tradingagents_v2_robustness_20260401.md",
+  "profiles": [
+    {
+      "id": "phaseb_native_spa_candidate_v1",
+      "multipleTestingUnit": "candidate",
+      "fdrMethod": "spa",
+      "notes": [
+        "native_anchor_for_robustness_check=true",
+        "benchmark_aware_donor_validation=true",
+        "validation_pool_profile=baseline_robust_anchor_v1"
+      ],
+      "overrides": {
+        "significance": {
+          "benchmarkStrategyIdBySymbol": {
+            "BTC/USD": "BASELINE_CONTROL"
+          },
+          "spaBootstrapSamples": 400,
+          "spaBlockSize": 12
+        }
+      }
+    },
+    {
+      "id": "route_robust_spa_candidate_v1",
+      "multipleTestingUnit": "candidate",
+      "fdrMethod": "spa",
+      "notes": [
+        "benchmark_aware_donor_validation=true",
+        "route_robust_protocol=true",
+        "validation_pool_profile=baseline_robust_anchor_v1"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3300
+        },
+        "wfo": {
+          "trainBars": 900,
+          "testBars": 180,
+          "stepBars": 180,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 1800,
+          "blockSize": 18,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0005,
+          "slippageBps": 5,
+          "latencyBars": 1
+        },
+        "significance": {
+          "benchmarkStrategyIdBySymbol": {
+            "BTC/USD": "BASELINE_CONTROL"
+          },
+          "spaBootstrapSamples": 400,
+          "spaBlockSize": 18
+        }
+      }
+    }
+  ]
+}

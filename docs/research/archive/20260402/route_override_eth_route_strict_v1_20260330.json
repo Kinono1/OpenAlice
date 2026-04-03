@@ -1,0 +1,24 @@
+{
+  "dataset": {
+    "lookbackBars": 3000
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "riskSimulation": {
+    "simulations": 2000,
+    "blockSize": 24,
+    "horizonBars": 240,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-30T10:43:46.563Z",
+  "batchId": "route_batch19_btc_multi_domain_source_v1",
+  "batchGoal": "Materialize BTC multi-domain pretrain proxy source family from the current BTC frontier.",
+  "notes": [
+    "source_run_id=20260303T113824Z",
+    "source_trial=0",
+    "source_template=baseline+baseline+baseline",
+    "source_id=btc_phaseb_baseline_neighborhood",
+    "neighborhood_seed_manifest=docs/research/strategy_candidates.route_batch8_btc_phaseb_baseline.v1.json",
+    "neighborhood_best_trial=34",
+    "mutation=HC001:34_65_ls->34_70_ls",
+    "mutation=HC002:34_75_ls->34_80_ls",
+    "multiple_testing_unit=candidate",
+    "structured_source_family=multi_domain_pretrain",
+    "source_id=btc_structured_source_multi_domain",
+    "multiple_testing_unit=candidate"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "MDP_1_34_70",
+      "strategyName": "ensemble_pretrain_34_70_1",
+      "strategy": "ensemble",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_multi_domain_pretrain_family_1",
+      "correlationBucket": "btc_usd_multi_domain_pretrain_1",
+      "params": {
+        "trendFastPeriod": 34,
+        "trendSlowPeriod": 70,
+        "allowShort": true,
+        "breakoutPeriod": 20,
+        "breakoutExitPeriod": 10,
+        "rsiPeriod": 14,
+        "rsiOversold": 30,
+        "rsiOverbought": 70,
+        "ensembleThreshold": 0.3,
+        "ensembleWeights": {
+          "trend": 3,
+          "meanReversion": 1,
+          "breakout": 1
+        }
+      }
+    },
+    {
+      "strategyId": "MDP_2_34_80",
+      "strategyName": "ensemble_pretrain_34_80_2",
+      "strategy": "ensemble",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_multi_domain_pretrain_family_2",
+      "correlationBucket": "btc_usd_multi_domain_pretrain_2",
+      "params": {
+        "trendFastPeriod": 34,
+        "trendSlowPeriod": 80,
+        "allowShort": true,
+        "breakoutPeriod": 25,
+        "breakoutExitPeriod": 12,
+        "rsiPeriod": 14,
+        "rsiOversold": 30,
+        "rsiOverbought": 70,
+        "ensembleThreshold": 0.34,
+        "ensembleWeights": {
+          "trend": 4,
+          "meanReversion": 1,
+          "breakout": 2
+        }
+      }
+    },
+    {
+      "strategyId": "MDP_3_18_80",
+      "strategyName": "ensemble_pretrain_18_80_3",
+      "strategy": "ensemble",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_multi_domain_pretrain_family_3",
+      "correlationBucket": "btc_usd_multi_domain_pretrain_3",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 80,
+        "allowShort": true,
+        "breakoutPeriod": 30,
+        "breakoutExitPeriod": 14,
+        "rsiPeriod": 14,
+        "rsiOversold": 30,
+        "rsiOverbought": 70,
+        "ensembleThreshold": 0.28,
+        "ensembleWeights": {
+          "trend": 2,
+          "meanReversion": 2,
+          "breakout": 1
+        }
+      }
+    }
+  ]
+}

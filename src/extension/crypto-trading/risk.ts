@@ -1,4 +1,5 @@
 import type {
+  CryptoAccountInfo,
   CryptoPlaceOrderRequest,
   CryptoPosition,
   ICryptoTradingEngine,
@@ -41,6 +42,8 @@ export interface RiskCheckContext {
   consecutiveLossPct?: number;
   volatilityQuantile?: number;
   capitalRampStage?: string;
+  positions?: CryptoPosition[];
+  account?: CryptoAccountInfo;
 }
 
 export interface RiskCheckResult {
@@ -165,10 +168,12 @@ export async function preTradeRiskCheck(
     };
   }
 
-  const [positions, account] = await Promise.all([
-    engine.getPositions(),
-    engine.getAccount(),
-  ]);
+  const positions =
+    context?.positions ??
+    (await engine.getPositions());
+  const account =
+    context?.account ??
+    (await engine.getAccount());
   const existing = positions.find(p => p.symbol === order.symbol);
 
   const isNewOpen = !order.reduceOnly && !existing;

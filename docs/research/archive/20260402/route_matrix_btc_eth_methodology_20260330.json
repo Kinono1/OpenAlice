@@ -1,0 +1,198 @@
+{
+  "schemaVersion": "route_matrix_spec.v1",
+  "matrixId": "route_matrix_btc_eth_methodology_20260330",
+  "sourceId": "btc_phaseb_baseline_trial0+eth_phaseb_r3_trial33",
+  "manifest": "docs/research/strategy_candidates.route_batch12_btc_eth_phaseb_combo_r3.v1.json",
+  "defaultMultipleTestingUnit": "candidate",
+  "rankingObjective": "min(hardGap.totalGap) -> min(hardGap.fdrGap) -> min(hardGap.pboGap) -> min(wfoFailureDensity) -> max(meanSharpe)",
+  "summaryOutput": "data/research/strategy/analysis/route_matrix_btc_eth_methodology_20260330.json",
+  "markdownOutput": "data/research/strategy/analysis/route_matrix_btc_eth_methodology_20260330.md",
+  "profiles": [
+    {
+      "id": "route_strict_bh_stable_v1",
+      "fdrMethod": "bh",
+      "wfoProfile": "stable",
+      "notes": [
+        "strict_protocol_baseline=true"
+      ],
+      "overrides": {
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "route_strict_by_stable_v1",
+      "fdrMethod": "by",
+      "wfoProfile": "stable",
+      "notes": [
+        "strict_protocol_with_by=true"
+      ],
+      "overrides": {
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "route_strict_cv_storey_stable_v1",
+      "fdrMethod": "cv_storey_bh",
+      "wfoProfile": "stable",
+      "storeyLambda": 0.5,
+      "cvAggQuantile": 0.9,
+      "notes": [
+        "strict_protocol_with_cv_storey=true"
+      ],
+      "overrides": {
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "route_strict_bh_shift_v1",
+      "fdrMethod": "bh",
+      "wfoProfile": "shift",
+      "notes": [
+        "strict_protocol_with_shift_wfo=true"
+      ],
+      "overrides": {
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "route_strict_by_shift_v1",
+      "fdrMethod": "by",
+      "wfoProfile": "shift",
+      "notes": [
+        "strict_protocol_with_by_and_shift=true"
+      ],
+      "overrides": {
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "route_strict_cv_storey_shift_v1",
+      "fdrMethod": "cv_storey_bh",
+      "wfoProfile": "shift",
+      "storeyLambda": 0.5,
+      "cvAggQuantile": 0.9,
+      "notes": [
+        "strict_protocol_with_cv_storey_and_shift=true"
+      ],
+      "overrides": {
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "phaseb_native_bh_stable_v1",
+      "fdrMethod": "bh",
+      "wfoProfile": "stable",
+      "notes": [
+        "native_protocol_reference=true"
+      ]
+    }
+  ]
+}

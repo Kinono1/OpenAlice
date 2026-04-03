@@ -18,6 +18,10 @@ import type {
   SlippageDriftGateConfig,
   SlippageGateDecision,
 } from "../live/execution_quality.js";
+import {
+  buildExecutionRecord,
+  estimateRequestedNotionalUsd,
+} from "./live_gate_manager.execution.js";
 import { loadManualOverride } from "./manual_override.js";
 import { RiskBreakerStore } from "./risk_breaker_state.js";
 import { writeDailyGateSummary } from "./daily_gate_summary.js";
@@ -53,6 +57,11 @@ export interface LiveGateManagerConfig {
     watchStageReduction: number;
     highStageReduction: number;
   };
+  deploymentRamp: {
+    enabled: boolean;
+    tinyCapitalMaxUsd: number;
+    tinyCapitalMaxEquityFraction: number;
+  };
 }
 
 export interface LiveGateManagerOptions {
@@ -63,6 +72,26 @@ export interface LiveGateManagerOptions {
   baseDir?: string;
   manualOverridePath?: string;
   config?: Partial<LiveGateManagerConfig>;
+}
+
+export interface RuntimePlanningState {
+  regimeSeverity: "stable" | "watch" | "high";
+  regimeReason: string | null;
+  capitalRampStage: string;
+  releaseGateStatus: PersistedReleaseGateStatus | null;
+  releaseGateBlocked: boolean;
+  releaseGateBlockedReason: string | null;
+  releaseGateAllowsPaperTrading?: boolean | null;
+  releaseGateAllowsLiveTrading?: boolean | null;
+  paperTradingBlocked?: boolean;
+  paperTradingBlockedReason?: string | null;
+  availableSymbols?: string[];
+  regimeShiftSymbol?: string | null;
+  volatilitySymbol?: string | null;
+  liveDeploymentMode?: "not_ready" | "tiny_cap_only" | "normal_cap";
+  liveDeploymentReason?: string | null;
+  tinyCapitalMaxUsd?: number | null;
+  tinyCapitalMaxEquityFraction?: number | null;
 }
 
 const DEFAULT_CONFIG: LiveGateManagerConfig = {
@@ -88,6 +117,11 @@ const DEFAULT_CONFIG: LiveGateManagerConfig = {
     trendZHigh: 2.5,
     watchStageReduction: 1,
     highStageReduction: 2,
+  },
+  deploymentRamp: {
+    enabled: false,
+    tinyCapitalMaxUsd: 100,
+    tinyCapitalMaxEquityFraction: 0.02,
   },
 };
 
@@ -138,6 +172,10 @@ export class LiveGateManager {
         ...DEFAULT_CONFIG.regimeShift,
         ...(opts.config?.regimeShift ?? {}),
       },
+      deploymentRamp: {
+        ...DEFAULT_CONFIG.deploymentRamp,
+        ...(opts.config?.deploymentRamp ?? {}),
+      },
     };
     this.currentDate = toDateKey(new Date());
   }
@@ -163,12 +201,39 @@ export class LiveGateManager {
       !manualOverride.ignoreReleaseGate
     ) {
       const gateStatus = await this.loadReleaseGateStatus();
+      const deployment = this.resolveLiveDeploymentMode(gateStatus);
       const blocked = isReleaseGateStatusBlocking(gateStatus);
-      if (blocked.blocking) {
+      if (blocked.blocking && deployment.mode !== "tiny_cap_only") {
         return {
           approved: false,
           reason: `Release gate blocking new opens: ${blocked.reason ?? "unknown"}`,
         };
+      }
+
+      if (deployment.mode === "tiny_cap_only") {
+        const expectedPrice = await this.estimateExpectedPrice(req);
+        const requestedNotionalUsd = estimateRequestedNotionalUsd(
+          req,
+          expectedPrice,
+        );
+        if (!(requestedNotionalUsd && requestedNotionalUsd > 0)) {
+          return {
+            approved: false,
+            reason: "Tiny-capital mode requires a positive order notional.",
+          };
+        }
+
+        const account = await this.opts.engine.getAccount();
+        const equity = account.equity > 0 ? account.equity : account.balance;
+        const tinyCapLimitUsd = this.resolveTinyCapitalLimitUsd(equity);
+        if (requestedNotionalUsd > tinyCapLimitUsd) {
+          return {
+            approved: false,
+            reason:
+              `Tiny-capital mode allows at most ${tinyCapLimitUsd.toFixed(2)} USD ` +
+              `per new open; requested ${requestedNotionalUsd.toFixed(2)} USD.`,
+          };
+        }
       }
     }
 
@@ -267,64 +332,88 @@ export class LiveGateManager {
     return undefined;
   }
 
+  async buildRuntimePlanningState(): Promise<RuntimePlanningState> {
+    const manualOverride = await loadManualOverride(this.manualOverridePath);
+    const gateStatus = await this.loadReleaseGateStatus();
+    const now = new Date();
+    const releaseGateDecision =
+      this.config.requireReleaseGatePass && !manualOverride.ignoreReleaseGate
+        ? isReleaseGateStatusBlocking(gateStatus, now)
+        : { blocking: false as const };
+    const paperGateDecision =
+      this.config.requireReleaseGatePass && !manualOverride.ignoreReleaseGate
+        ? getPaperReleaseGateStatusBlocking(gateStatus, now)
+        : { blocking: false as const };
+    const regime = manualOverride.ignoreRegimeShift
+      ? null
+      : await this.refreshRegimeShiftSignal();
+    const availableSymbols = this.opts.klineStore.getAvailableSymbols();
+    const deployment = manualOverride.ignoreReleaseGate
+      ? {
+          mode: "normal_cap" as const,
+          reason: "manual_override_ignore_release_gate",
+        }
+      : this.resolveLiveDeploymentMode(gateStatus);
+
+    let capitalRampStage =
+      manualOverride.forceCapitalRampStage ??
+      this.rampStore.getCurrentStageLabel();
+    if (!manualOverride.forceCapitalRampStage && regime?.triggered) {
+      const reduction =
+        regime.severity === "high"
+          ? this.config.regimeShift.highStageReduction
+          : regime.severity === "watch"
+            ? this.config.regimeShift.watchStageReduction
+            : 0;
+      if (reduction > 0) {
+        capitalRampStage = this.getReducedStageLabel(reduction);
+      }
+    }
+
+    return {
+      regimeSeverity:
+        regime?.triggered && regime.severity !== "none"
+          ? regime.severity
+          : "stable",
+      regimeReason: regime?.reason ?? null,
+      capitalRampStage,
+      releaseGateStatus: gateStatus,
+      releaseGateBlocked: releaseGateDecision.blocking,
+      releaseGateBlockedReason: releaseGateDecision.reason ?? null,
+      releaseGateAllowsPaperTrading: gateStatus?.allowPaperTrading ?? null,
+      releaseGateAllowsLiveTrading: gateStatus?.allowLiveTrading ?? null,
+      paperTradingBlocked: paperGateDecision.blocking,
+      paperTradingBlockedReason: paperGateDecision.reason ?? null,
+      availableSymbols,
+      regimeShiftSymbol: resolvePlanningSymbol(
+        this.config.regimeShift.symbol,
+        availableSymbols
+      ),
+      volatilitySymbol: resolvePlanningSymbol(
+        this.config.volatilitySymbol,
+        availableSymbols
+      ),
+      liveDeploymentMode: deployment.mode,
+      liveDeploymentReason: deployment.reason,
+      tinyCapitalMaxUsd: this.config.deploymentRamp.enabled
+        ? this.config.deploymentRamp.tinyCapitalMaxUsd
+        : null,
+      tinyCapitalMaxEquityFraction: this.config.deploymentRamp.enabled
+        ? this.config.deploymentRamp.tinyCapitalMaxEquityFraction
+        : null,
+    };
+  }
+
   async recordExecution(
     req: CryptoPlaceOrderRequest,
     result: CryptoOrderResult,
     expectedPrice?: number
   ): Promise<void> {
-    if (!result.success) {
+    const record = buildExecutionRecord(req, result, expectedPrice);
+    if (!record) {
       return;
     }
-
-    const fallbackPriceRaw = expectedPrice ?? req.price ?? result.filledPrice;
-    if (
-      typeof fallbackPriceRaw !== "number" ||
-      !Number.isFinite(fallbackPriceRaw) ||
-      fallbackPriceRaw <= 0
-    ) {
-      return;
-    }
-    const fallbackPrice = fallbackPriceRaw;
-
-    const filledPrice = result.filledPrice ?? fallbackPrice;
-    const requestedQty =
-      (typeof result.requestedSize === "number" && result.requestedSize > 0
-        ? result.requestedSize
-        : undefined) ??
-      (req.size && req.size > 0
-        ? req.size
-        : req.usd_size && req.usd_size > 0
-          ? req.usd_size / fallbackPrice
-          : (result.filledSize ?? 0));
-    const filledQty = result.filledSize ?? requestedQty;
-
-    if (!(filledQty > 0) || !(requestedQty > 0)) {
-      return;
-    }
-
-    const nowMs = Date.now();
-    const firstFillAtMs =
-      typeof result.firstFillAtMs === "number" ? result.firstFillAtMs : nowMs;
-    const completedAtMs =
-      typeof result.completedAtMs === "number" ? result.completedAtMs : null;
-    const exchangeUpdateTs =
-      typeof result.exchangeUpdateTs === "number"
-        ? result.exchangeUpdateTs
-        : nowMs;
-    await this.executionStore.addRecord({
-      orderId:
-        result.orderId ??
-        `order_${nowMs}_${Math.floor(Math.random() * 1_000_000)}`,
-      symbol: req.symbol,
-      side: req.side,
-      expectedPrice: fallbackPrice,
-      actualPrice: filledPrice,
-      requestedQty,
-      filledQty,
-      submittedAtMs: Math.min(nowMs, firstFillAtMs, exchangeUpdateTs),
-      firstFillAtMs,
-      completedAtMs,
-    });
+    await this.executionStore.addRecord(record);
   }
 
   async tick(now: Date): Promise<void> {
@@ -594,6 +683,53 @@ export class LiveGateManager {
       // ignore event-log failures
     }
   }
+
+  private resolveLiveDeploymentMode(
+    gateStatus: PersistedReleaseGateStatus | null,
+  ): {
+    mode: "not_ready" | "tiny_cap_only" | "normal_cap";
+    reason: string | null;
+  } {
+    if (!gateStatus) {
+      return {
+        mode: "not_ready",
+        reason: "release_gate_status_missing",
+      };
+    }
+
+    if (gateStatus.allowLiveTrading) {
+      return {
+        mode: "normal_cap",
+        reason: null,
+      };
+    }
+
+    if (
+      this.config.deploymentRamp.enabled &&
+      gateStatus.allowPaperTrading
+    ) {
+      return {
+        mode: "tiny_cap_only",
+        reason: "paper_ready_live_tiny_cap_only",
+      };
+    }
+
+    return {
+      mode: "not_ready",
+      reason: gateStatus.allowPaperTrading
+        ? "live_release_gate_not_passed"
+        : "paper_release_gate_not_passed",
+    };
+  }
+
+  private resolveTinyCapitalLimitUsd(equity: number): number {
+    const byUsd = Math.max(0, this.config.deploymentRamp.tinyCapitalMaxUsd);
+    const byEquity =
+      equity > 0
+        ? equity * Math.max(0, this.config.deploymentRamp.tinyCapitalMaxEquityFraction)
+        : byUsd;
+    return Math.max(0, Math.min(byUsd, byEquity));
+  }
 }
 
 function stdDev(values: number[]): number {
@@ -611,4 +747,45 @@ function stdDev(values: number[]): number {
 
 function toDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+function getPaperReleaseGateStatusBlocking(
+  status: PersistedReleaseGateStatus | null,
+  now: Date = new Date()
+): { blocking: boolean; reason?: string } {
+  if (!status) {
+    return {
+      blocking: true,
+      reason: "release_gate_status_missing",
+    };
+  }
+
+  if (status.expiresAt) {
+    const expiresAt = Date.parse(status.expiresAt);
+    if (Number.isFinite(expiresAt) && now.getTime() > expiresAt) {
+      return {
+        blocking: true,
+        reason: `release_gate_status_expired:${status.expiresAt}`,
+      };
+    }
+  }
+
+  if (!status.allowPaperTrading) {
+    return {
+      blocking: true,
+      reason: `paper_release_gate_failed:${status.failedChecks.join(",") || "unknown"}`,
+    };
+  }
+
+  return { blocking: false };
+}
+
+function resolvePlanningSymbol(
+  configuredSymbol: string | undefined,
+  availableSymbols: string[]
+): string | null {
+  if (configuredSymbol && configuredSymbol.trim().length > 0) {
+    return configuredSymbol;
+  }
+  return availableSymbols[0] ?? null;
 }

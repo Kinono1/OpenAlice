@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-04-01T02:00:36.330Z",
+  "batchId": "btc_paradigm_cryptotrade_v2",
+  "batchGoal": "Materialize cryptotrade_reflection_narrative_v2 BTC candidate family for fixed-policy route comparison.",
+  "notes": [
+    "source_run_id=20260303T113824Z",
+    "source_trial=0",
+    "source_template=baseline+baseline+baseline",
+    "source_id=btc_phaseb_baseline_neighborhood",
+    "neighborhood_seed_manifest=docs/research/strategy_candidates.route_batch8_btc_phaseb_baseline.v1.json",
+    "neighborhood_best_trial=34",
+    "mutation=HC001:34_65_ls->34_70_ls",
+    "mutation=HC002:34_75_ls->34_80_ls",
+    "multiple_testing_unit=candidate",
+    "source_paradigm=cryptotrade_reflection_narrative_v2",
+    "source_id=cryptotrade_reflection_narrative_v2",
+    "input_artifact=/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/data/research/strategy/paradigms/cryptotrade/btc_reflection_context_v2.latest.json",
+    "candidate_cap=3",
+    "reflection_source=openalice_paper_history",
+    "not_donor_native=true"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "CT_V2_NARRATIVE_CONVICTION",
+      "strategyName": "ct_v2_narrative_conviction",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_cryptotrade_v2_narrative_family",
+      "correlationBucket": "btc_usd_ct_v2_narrative_conviction",
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 50,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "CT_V2_REFLECTION_GUARD",
+      "strategyName": "ct_v2_reflection_guard",
+      "strategy": "regimeTrend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_cryptotrade_v2_reflection_guard_family",
+      "correlationBucket": "btc_usd_ct_v2_reflection_guard",
+      "params": {
+        "regimeFastPeriod": 12,
+        "regimeSlowPeriod": 48,
+        "allowShort": true,
+        "allowedEntryRegimes": [
+          "LowVolTrend"
+        ],
+        "exitOnRegimeMismatch": true
+      }
+    },
+    {
+      "strategyId": "CT_V2_DISAGREEMENT_BLEND",
+      "strategyName": "ct_v2_disagreement_blend",
+      "strategy": "ensemble",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_cryptotrade_v2_disagreement_family",
+      "correlationBucket": "btc_usd_ct_v2_disagreement_blend",
+      "params": {
+        "ensembleThreshold": 0.34,
+        "allowShort": true,
+        "ensembleWeights": {
+          "trend": 1,
+          "meanReversion": 1,
+          "breakout": 1
+        }
+      }
+    }
+  ]
+}

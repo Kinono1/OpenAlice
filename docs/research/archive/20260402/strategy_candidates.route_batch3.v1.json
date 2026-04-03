@@ -1,0 +1,180 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-29T14:25:00Z",
+  "batchId": "route_batch3_v1",
+  "batchGoal": "Reduce candidate-pool correlation while preserving the BTC low-PBO improvements from batch1 and the ETH high-DSR improvements from batch2.",
+  "notes": [
+    "batch3_focus=anti_correlation",
+    "btc_source_bias=batch1_low_pbo_plus_one_batch2_high_dsr_probe",
+    "eth_source_bias=batch2_high_dsr_plus_batch1_diversifier",
+    "keep_control=true"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3000,
+    "symbols": [
+      {
+        "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+        "symbol": "BTC/USD",
+        "lookbackBars": 3000
+      },
+      {
+        "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+        "symbol": "ETH/USD",
+        "lookbackBars": 3000
+      }
+    ]
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 2000,
+    "horizonBars": 240,
+    "blockSize": 24,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "B3-CTRL-01",
+      "strategyName": "trend_control_dual_20_55",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD",
+        "ETH/USD"
+      ],
+      "role": "control",
+      "hypothesisFamily": "baseline_control",
+      "correlationBucket": "shared_baseline",
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 55,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B3-BTC-01",
+      "strategyName": "trend_btc_30_55",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "role": "primary",
+      "hypothesisFamily": "btc_low_pbo_core",
+      "correlationBucket": "btc_mid_speed",
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 55,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B3-BTC-02",
+      "strategyName": "trend_btc_48_90",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "role": "diversifier",
+      "hypothesisFamily": "btc_low_pbo_core",
+      "correlationBucket": "btc_slow_memory",
+      "params": {
+        "trendFastPeriod": 48,
+        "trendSlowPeriod": 90,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B3-BTC-03",
+      "strategyName": "trend_btc_24_72_confirm3_band035",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "role": "probe",
+      "hypothesisFamily": "btc_high_dsr_probe",
+      "correlationBucket": "btc_confirmed_band",
+      "params": {
+        "trendFastPeriod": 24,
+        "trendSlowPeriod": 72,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.35,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B3-ETH-01",
+      "strategyName": "trend_eth_30_55_confirm3_band020",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "role": "primary",
+      "hypothesisFamily": "eth_high_dsr_core",
+      "correlationBucket": "eth_confirmed_fast",
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 55,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.2,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B3-ETH-02",
+      "strategyName": "trend_eth_30_90_confirm2_band035",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "role": "primary",
+      "hypothesisFamily": "eth_high_dsr_core",
+      "correlationBucket": "eth_confirmed_slow",
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 90,
+        "trendConfirmBars": 2,
+        "trendMinDiffPct": 0.35,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B3-ETH-03",
+      "strategyName": "trend_eth_16_120",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "role": "diversifier",
+      "hypothesisFamily": "eth_decorrelation_tail",
+      "correlationBucket": "eth_long_memory",
+      "params": {
+        "trendFastPeriod": 16,
+        "trendSlowPeriod": 120,
+        "allowShort": true
+      }
+    }
+  ]
+}

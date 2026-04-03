@@ -291,7 +291,7 @@ export async function snapshotDom(opts: {
       const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
       const name = el.getAttribute && el.getAttribute("aria-label") ? String(el.getAttribute("aria-label")) : undefined;
       let text = "";
-      try { text = String(el.innerText || "").trim(); } catch {}
+      try { text = String(el.innerText || "").trim(); } catch (err) { console.warn("[cdp] failed to read element innerText in snapshot", err); }
       if (maxText && text.length > maxText) text = text.slice(0, maxText) + "…";
       const href = (el.href !== undefined && el.href !== null) ? String(el.href) : undefined;
       const type = (el.type !== undefined && el.type !== null) ? String(el.type) : undefined;
@@ -363,10 +363,10 @@ export async function getDomText(opts: {
     let out = "";
     if (fmt === "text") {
       const el = pick || document.body || document.documentElement;
-      try { out = String(el && el.innerText ? el.innerText : ""); } catch { out = ""; }
+      try { out = String(el && el.innerText ? el.innerText : ""); } catch (err) { console.warn("[cdp] failed to read text content", err); out = ""; }
     } else {
       const el = pick || document.documentElement;
-      try { out = String(el && el.outerHTML ? el.outerHTML : ""); } catch { out = ""; }
+      try { out = String(el && el.outerHTML ? el.outerHTML : ""); } catch (err) { console.warn("[cdp] failed to read outerHTML", err); out = ""; }
     }
     if (max && out.length > max) out = out.slice(0, max) + "\\n<!-- …truncated… -->";
     return out;
@@ -412,12 +412,12 @@ export async function querySelector(opts: {
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       let text = "";
-      try { text = String(el.innerText || "").trim(); } catch {}
+      try { text = String(el.innerText || "").trim(); } catch (err) { console.warn("[cdp] failed to read querySelector innerText", err); }
       if (maxText && text.length > maxText) text = text.slice(0, maxText) + "…";
       const value = (el.value !== undefined && el.value !== null) ? String(el.value).slice(0, 500) : undefined;
       const href = (el.href !== undefined && el.href !== null) ? String(el.href) : undefined;
       let outerHTML = "";
-      try { outerHTML = String(el.outerHTML || ""); } catch {}
+      try { outerHTML = String(el.outerHTML || ""); } catch (err) { console.warn("[cdp] failed to read querySelector outerHTML", err); }
       if (maxHtml && outerHTML.length > maxHtml) outerHTML = outerHTML.slice(0, maxHtml) + "…";
       return {
         index: i + 1,

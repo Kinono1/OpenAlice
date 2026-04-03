@@ -4,6 +4,7 @@ import { resolve } from 'path'
 import { newsCollectorSchema } from '../extension/news-collector/config.js'
 
 const CONFIG_DIR = resolve("data/config");
+const REDACTED_SECRET = "[redacted]";
 
 // ==================== Individual Schemas ====================
 
@@ -272,14 +273,26 @@ const activeHoursSchema = z
 
 
 const connectorsSchema = z.object({
-  web: z.object({ port: z.number().int().positive().default(3002) }).default({ port: 3002 }),
+  web: z.object({
+    port: z.number().int().positive().default(3002),
+    allowOrigins: z.array(z.string()).default([]),
+    maxSseClients: z.number().int().positive().max(1000).default(100),
+    sseMaxDurationMs: z.number().int().positive().max(86_400_000).default(900_000),
+  }).default({
+    port: 3002,
+    allowOrigins: [],
+    maxSseClients: 100,
+    sseMaxDurationMs: 900_000,
+  }),
   mcp: z.object({
     port: z.number().int().positive().default(3001),
-  }).default({ port: 3001 }),
+    allowOrigins: z.array(z.string()).default([]),
+  }).default({ port: 3001, allowOrigins: [] }),
   mcpAsk: z.object({
     enabled: z.boolean().default(false),
     port: z.number().int().positive().optional(),
-  }).default({ enabled: false }),
+    allowOrigins: z.array(z.string()).default([]),
+  }).default({ enabled: false, allowOrigins: [] }),
   telegram: z.object({
     enabled: z.boolean().default(false),
     botToken: z.string().optional(),
@@ -302,11 +315,11 @@ const heartbeatSchema = z.object({
 const authSchema = z
   .object({
     /** If true, auth is enforced even if env tokens are not set (rejects all). */
-    enforceAuth: z.boolean().default(false),
+    enforceAuth: z.boolean().default(true),
     /** Token TTL for session tokens (future use). */
     sessionTtlMs: z.number().int().positive().default(86_400_000),
   })
-  .default({ enforceAuth: false, sessionTtlMs: 86_400_000 });
+  .default({ enforceAuth: true, sessionTtlMs: 86_400_000 });
 
 const decisionTicketSchema = z
   .object({
@@ -392,7 +405,16 @@ export type Config = {
   securities: z.infer<typeof securitiesSchema>
   openbb: z.infer<typeof openbbSchema>
   compaction: z.infer<typeof compactionSchema>
+  risk: z.infer<typeof riskSchema>
+  news: z.infer<typeof newsSchema>
   aiProvider: z.infer<typeof aiProviderSchema>
+  auth: z.infer<typeof authSchema>
+  decisionTicket: z.infer<typeof decisionTicketSchema>
+  killSwitch: z.infer<typeof killSwitchSchema>
+  slippage: z.infer<typeof slippageSchema>
+  reconciliation: z.infer<typeof reconciliationSchema>
+  reviewGate: z.infer<typeof reviewGateSchema>
+  shutdown: z.infer<typeof shutdownSchema>
   heartbeat: z.infer<typeof heartbeatSchema>
   connectors: z.infer<typeof connectorsSchema>
   newsCollector: z.infer<typeof newsCollectorSchema>
@@ -422,6 +444,191 @@ async function removeJsonFile(filename: string): Promise<void> {
   try { await unlink(resolve(CONFIG_DIR, filename)) } catch { /* ENOENT ok */ }
 }
 
+function readFirstEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function sanitizeSecretsForClient(value: unknown, parentKey?: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSecretsForClient(item, parentKey));
+  }
+  if (!value || typeof value !== "object") {
+    if (
+      typeof value === "string" &&
+      (parentKey === "apiKeys" || parentKey === "providerKeys")
+    ) {
+      return REDACTED_SECRET;
+    }
+    return value;
+  }
+
+  const secretFields = new Set([
+    "apiKey",
+    "apiSecret",
+    "secretKey",
+    "password",
+    "botToken",
+  ]);
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, child]) => {
+      if (secretFields.has(key)) {
+        if (typeof child === "string" && child.length > 0) {
+          return [key, REDACTED_SECRET];
+        }
+        return [key, child];
+      }
+
+      if (
+        (key === "apiKeys" || key === "providerKeys") &&
+        child &&
+        typeof child === "object"
+      ) {
+        return [key, sanitizeSecretsForClient(child, key)];
+      }
+
+      return [key, sanitizeSecretsForClient(child, key)];
+    }),
+  );
+}
+
+function stripSecretsForPersistence(
+  section: ConfigSection,
+  value: unknown,
+): unknown {
+  if (section === "crypto" && value && typeof value === "object") {
+    const crypto = value as z.infer<typeof cryptoSchema>;
+    if (crypto.provider.type === "ccxt") {
+      return {
+        ...crypto,
+        provider: {
+          ...crypto.provider,
+          apiKey: undefined,
+          apiSecret: undefined,
+          password: undefined,
+        },
+      };
+    }
+  }
+
+  if (section === "securities" && value && typeof value === "object") {
+    const securities = value as z.infer<typeof securitiesSchema>;
+    if (securities.provider.type === "alpaca") {
+      return {
+        ...securities,
+        provider: {
+          ...securities.provider,
+          apiKey: undefined,
+          secretKey: undefined,
+        },
+      };
+    }
+  }
+
+  if (section === "aiProvider" && value && typeof value === "object") {
+    const aiProvider = value as z.infer<typeof aiProviderSchema>;
+    return {
+      ...aiProvider,
+      apiKeys: {},
+    };
+  }
+
+  if (section === "connectors" && value && typeof value === "object") {
+    const connectors = value as z.infer<typeof connectorsSchema>;
+    return {
+      ...connectors,
+      telegram: {
+        ...connectors.telegram,
+        botToken: undefined,
+      },
+    };
+  }
+
+  return value;
+}
+
+function hydrateSecrets(config: Config): Config {
+  const aiProvider = {
+    ...config.aiProvider,
+    apiKeys: {
+      anthropic:
+        config.aiProvider.apiKeys.anthropic ??
+        readFirstEnv("ANTHROPIC_API_KEY"),
+      openai:
+        config.aiProvider.apiKeys.openai ??
+        readFirstEnv("OPENAI_API_KEY"),
+      google:
+        config.aiProvider.apiKeys.google ??
+        readFirstEnv("GOOGLE_API_KEY"),
+    },
+  };
+
+  const crypto =
+    config.crypto.provider.type === "ccxt"
+      ? {
+          ...config.crypto,
+          provider: {
+            ...config.crypto.provider,
+            apiKey:
+              config.crypto.provider.apiKey ??
+              readFirstEnv("EXCHANGE_API_KEY"),
+            apiSecret:
+              config.crypto.provider.apiSecret ??
+              readFirstEnv("EXCHANGE_API_SECRET"),
+            password:
+              config.crypto.provider.password ??
+              readFirstEnv("EXCHANGE_PASSWORD"),
+          },
+        }
+      : config.crypto;
+
+  const securities =
+    config.securities.provider.type === "alpaca"
+      ? {
+          ...config.securities,
+          provider: {
+            ...config.securities.provider,
+            apiKey:
+              config.securities.provider.apiKey ??
+              readFirstEnv("ALPACA_API_KEY"),
+            secretKey:
+              config.securities.provider.secretKey ??
+              readFirstEnv("ALPACA_SECRET_KEY"),
+          },
+        }
+      : config.securities;
+
+  const connectors = {
+    ...config.connectors,
+    telegram: {
+      ...config.connectors.telegram,
+      botToken:
+        config.connectors.telegram.botToken ??
+        readFirstEnv("TELEGRAM_BOT_TOKEN"),
+    },
+  };
+
+  return {
+    ...config,
+    aiProvider,
+    crypto,
+    securities,
+    connectors,
+  };
+}
+
+export function sanitizeConfigForClient(config: Config): unknown {
+  return sanitizeSecretsForClient(config);
+}
+
+export function sanitizeConfigSectionForClient(value: unknown): unknown {
+  return sanitizeSecretsForClient(value);
+}
+
 /** Parse with Zod; if the file was missing, seed it to disk with defaults. */
 async function parseAndSeed<T>(
   filename: string,
@@ -440,11 +647,32 @@ async function parseAndSeed<T>(
 }
 
 export async function loadConfig(): Promise<Config> {
-  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'openbb.json', 'compaction.json', 'ai-provider.json', 'heartbeat.json', 'connectors.json', 'news-collector.json', 'tools.json'] as const
+  const files = [
+    'engine.json',
+    'agent.json',
+    'crypto.json',
+    'securities.json',
+    'openbb.json',
+    'compaction.json',
+    'risk.json',
+    'news.json',
+    'ai-provider.json',
+    'auth.json',
+    'decision-ticket.json',
+    'kill-switch.json',
+    'slippage.json',
+    'reconciliation.json',
+    'review-gate.json',
+    'shutdown.json',
+    'heartbeat.json',
+    'connectors.json',
+    'news-collector.json',
+    'tools.json',
+  ] as const
   const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
 
   // ---------- Migration: consolidate old ai-provider + model + api-keys → ai-provider ----------
-  const aiProviderRaw = raws[6] as Record<string, unknown> | undefined
+  const aiProviderRaw = raws[8] as Record<string, unknown> | undefined
   if (aiProviderRaw && !('backend' in aiProviderRaw)) {
     // Old format detected — merge model.json + api-keys.json into ai-provider.json
     const oldModel = await loadJsonFile('model.json') as Record<string, unknown> | undefined
@@ -456,7 +684,7 @@ export async function loadConfig(): Promise<Config> {
       ...(oldModel?.baseUrl ? { baseUrl: oldModel.baseUrl } : {}),
       apiKeys: oldKeys ?? {},
     }
-    raws[6] = migrated
+    raws[8] = migrated
     await mkdir(CONFIG_DIR, { recursive: true })
     await writeFile(resolve(CONFIG_DIR, 'ai-provider.json'), JSON.stringify(migrated, null, 2) + '\n')
     await removeJsonFile('model.json')
@@ -464,7 +692,7 @@ export async function loadConfig(): Promise<Config> {
   }
 
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
-  const connectorsRaw = raws[8] as Record<string, unknown> | undefined
+  const connectorsRaw = raws[17] as Record<string, unknown> | undefined
   if (connectorsRaw === undefined) {
     const oldTelegram = await loadJsonFile('telegram.json')
     const oldEngine = raws[0] as Record<string, unknown> | undefined
@@ -481,22 +709,33 @@ export async function loadConfig(): Promise<Config> {
       await mkdir(CONFIG_DIR, { recursive: true })
       await writeFile(resolve(CONFIG_DIR, 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
     }
-    raws[8] = Object.keys(migrated).length > 0 ? migrated : undefined
+    raws[17] = Object.keys(migrated).length > 0 ? migrated : undefined
   }
 
-  return {
+  const parsedConfig: Config = {
     engine:        await parseAndSeed(files[0], engineSchema, raws[0]),
     agent:         await parseAndSeed(files[1], agentSchema, raws[1]),
     crypto:        await parseAndSeed(files[2], cryptoSchema, raws[2]),
     securities:    await parseAndSeed(files[3], securitiesSchema, raws[3]),
     openbb:        await parseAndSeed(files[4], openbbSchema, raws[4]),
     compaction:    await parseAndSeed(files[5], compactionSchema, raws[5]),
-    aiProvider:    await parseAndSeed(files[6], aiProviderSchema, raws[6]),
-    heartbeat:     await parseAndSeed(files[7], heartbeatSchema, raws[7]),
-    connectors:    await parseAndSeed(files[8], connectorsSchema, raws[8]),
-    newsCollector: await parseAndSeed(files[9], newsCollectorSchema, raws[9]),
-    tools:         await parseAndSeed(files[10], toolsSchema, raws[10]),
+    risk:          await parseAndSeed(files[6], riskSchema, raws[6]),
+    news:          await parseAndSeed(files[7], newsSchema, raws[7]),
+    aiProvider:    await parseAndSeed(files[8], aiProviderSchema, raws[8]),
+    auth:          await parseAndSeed(files[9], authSchema, raws[9]),
+    decisionTicket: await parseAndSeed(files[10], decisionTicketSchema, raws[10]),
+    killSwitch:    await parseAndSeed(files[11], killSwitchSchema, raws[11]),
+    slippage:      await parseAndSeed(files[12], slippageSchema, raws[12]),
+    reconciliation: await parseAndSeed(files[13], reconciliationSchema, raws[13]),
+    reviewGate:    await parseAndSeed(files[14], reviewGateSchema, raws[14]),
+    shutdown:      await parseAndSeed(files[15], shutdownSchema, raws[15]),
+    heartbeat:     await parseAndSeed(files[16], heartbeatSchema, raws[16]),
+    connectors:    await parseAndSeed(files[17], connectorsSchema, raws[17]),
+    newsCollector: await parseAndSeed(files[18], newsCollectorSchema, raws[18]),
+    tools:         await parseAndSeed(files[19], toolsSchema, raws[19]),
   }
+
+  return hydrateSecrets(parsedConfig)
 }
 
 // ==================== Hot-read helpers ====================
@@ -517,9 +756,51 @@ export async function readAgentConfig() {
 export async function readAIProviderConfig() {
   try {
     const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'ai-provider.json'), 'utf-8'))
-    return aiProviderSchema.parse(raw)
+    return hydrateSecrets({
+      engine: engineSchema.parse({}),
+      agent: agentSchema.parse({}),
+      crypto: cryptoSchema.parse({}),
+      securities: securitiesSchema.parse({}),
+      openbb: openbbSchema.parse({}),
+      compaction: compactionSchema.parse({}),
+      risk: riskSchema.parse({}),
+      news: newsSchema.parse({}),
+      aiProvider: aiProviderSchema.parse(raw),
+      auth: authSchema.parse({}),
+      decisionTicket: decisionTicketSchema.parse({}),
+      killSwitch: killSwitchSchema.parse({}),
+      slippage: slippageSchema.parse({}),
+      reconciliation: reconciliationSchema.parse({}),
+      reviewGate: reviewGateSchema.parse({}),
+      shutdown: shutdownSchema.parse({}),
+      heartbeat: heartbeatSchema.parse({}),
+      connectors: connectorsSchema.parse({}),
+      newsCollector: newsCollectorSchema.parse({}),
+      tools: toolsSchema.parse({}),
+    }).aiProvider
   } catch {
-    return aiProviderSchema.parse({})
+    return hydrateSecrets({
+      engine: engineSchema.parse({}),
+      agent: agentSchema.parse({}),
+      crypto: cryptoSchema.parse({}),
+      securities: securitiesSchema.parse({}),
+      openbb: openbbSchema.parse({}),
+      compaction: compactionSchema.parse({}),
+      risk: riskSchema.parse({}),
+      news: newsSchema.parse({}),
+      aiProvider: aiProviderSchema.parse({}),
+      auth: authSchema.parse({}),
+      decisionTicket: decisionTicketSchema.parse({}),
+      killSwitch: killSwitchSchema.parse({}),
+      slippage: slippageSchema.parse({}),
+      reconciliation: reconciliationSchema.parse({}),
+      reviewGate: reviewGateSchema.parse({}),
+      shutdown: shutdownSchema.parse({}),
+      heartbeat: heartbeatSchema.parse({}),
+      connectors: connectorsSchema.parse({}),
+      newsCollector: newsCollectorSchema.parse({}),
+      tools: toolsSchema.parse({}),
+    }).aiProvider
   }
 }
 
@@ -557,6 +838,13 @@ const sectionSchemas: Record<ConfigSection, z.ZodTypeAny> = {
   risk: riskSchema,
   news: newsSchema,
   aiProvider: aiProviderSchema,
+  auth: authSchema,
+  decisionTicket: decisionTicketSchema,
+  killSwitch: killSwitchSchema,
+  slippage: slippageSchema,
+  reconciliation: reconciliationSchema,
+  reviewGate: reviewGateSchema,
+  shutdown: shutdownSchema,
   heartbeat: heartbeatSchema,
   connectors: connectorsSchema,
   newsCollector: newsCollectorSchema,
@@ -570,7 +858,16 @@ const sectionFiles: Record<ConfigSection, string> = {
   securities: 'securities.json',
   openbb: 'openbb.json',
   compaction: 'compaction.json',
+  risk: 'risk.json',
+  news: 'news.json',
   aiProvider: 'ai-provider.json',
+  auth: 'auth.json',
+  decisionTicket: 'decision-ticket.json',
+  killSwitch: 'kill-switch.json',
+  slippage: 'slippage.json',
+  reconciliation: 'reconciliation.json',
+  reviewGate: 'review-gate.json',
+  shutdown: 'shutdown.json',
   heartbeat: 'heartbeat.json',
   connectors: 'connectors.json',
   newsCollector: 'news-collector.json',
@@ -587,10 +884,11 @@ export async function writeConfigSection(
 ): Promise<unknown> {
   const schema = sectionSchemas[section];
   const validated = schema.parse(data);
+  const persisted = stripSecretsForPersistence(section, validated);
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(
     resolve(CONFIG_DIR, sectionFiles[section]),
-    JSON.stringify(validated, null, 2) + "\n"
+    JSON.stringify(persisted, null, 2) + "\n"
   );
-  return validated;
+  return persisted;
 }

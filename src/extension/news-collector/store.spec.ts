@@ -4,6 +4,7 @@ import { unlink, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const TEST_LOG_PATH = resolve('data/test-news-collector/news.jsonl')
+const RECENT_BASE_TIME = new Date(Date.now() - 60 * 60 * 1000)
 
 describe('computeDedupKey', () => {
   it('prefers guid', () => {
@@ -82,17 +83,19 @@ describe('NewsCollectorStore', () => {
   })
 
   it('persists to JSONL and recovers on init', async () => {
+    const firstPubTime = new Date(RECENT_BASE_TIME.getTime())
+    const secondPubTime = new Date(RECENT_BASE_TIME.getTime() + 60 * 60 * 1000)
     await store.ingest({
       title: 'Article 1',
       content: 'Content 1',
-      pubTime: new Date('2026-02-27T10:00:00Z'),
+      pubTime: firstPubTime,
       dedupKey: 'guid:1',
       metadata: { source: 'test' },
     })
     await store.ingest({
       title: 'Article 2',
       content: 'Content 2',
-      pubTime: new Date('2026-02-27T11:00:00Z'),
+      pubTime: secondPubTime,
       dedupKey: 'guid:2',
       metadata: { source: 'test' },
     })
@@ -111,7 +114,7 @@ describe('NewsCollectorStore', () => {
     const dup = await store2.ingest({
       title: 'Article 1',
       content: 'Content 1',
-      pubTime: new Date('2026-02-27T10:00:00Z'),
+      pubTime: firstPubTime,
       dedupKey: 'guid:1',
       metadata: { source: 'test' },
     })

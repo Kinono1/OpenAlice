@@ -79,6 +79,7 @@ export class McpPlugin implements Plugin {
   constructor(
     private toolCenter: ToolCenter,
     private port: number,
+    private allowOrigins: string[] = [],
   ) {}
 
   async start(ctx: EngineContext) {
@@ -121,17 +122,22 @@ export class McpPlugin implements Plugin {
     };
 
     const app = new Hono()
+    const allowedOrigins = new Set(
+      this.allowOrigins.map(origin => origin.trim()).filter(Boolean),
+    )
 
     const requireAuth = createRequireAuth(ctx.config.auth.enforceAuth)
     const requireTrade = createRequireTrade(ctx.config.auth.enforceAuth)
     const mcpAuth = createMcpAuthMiddleware(requireAuth, requireTrade)
 
-    app.use('*', cors({
-      origin: '*',
-      allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Authorization', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
-      exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
-    }))
+    if (allowedOrigins.size > 0) {
+      app.use('*', cors({
+        origin: (origin) => (allowedOrigins.has(origin) ? origin : ''),
+        allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+        allowHeaders: ['Content-Type', 'Authorization', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
+        exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
+      }))
+    }
 
     // Apply MCP auth (read/write split based on JSON-RPC method)
     app.use('/mcp', mcpAuth)

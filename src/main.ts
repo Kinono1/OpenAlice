@@ -42,6 +42,13 @@ import { createCryptoTools } from './extension/crypto/index.js'
 import { createCurrencyTools } from './extension/currency/index.js'
 import { createNewsTools } from './extension/news/index.js'
 import { createAnalysisTools } from './extension/analysis-kit/index.js'
+import type { KlineStore } from './extension/analysis-kit/kline/KlineStore.js'
+import type { MarketData } from './extension/analysis-kit/data/interfaces.js'
+import { DecisionTicketStore } from './extension/crypto-trading/decision-ticket.js'
+import { IntentLedger } from './extension/crypto-trading/intent-ledger.js'
+import { TradeIdempotencyStore } from './extension/crypto-trading/idempotency-store.js'
+import { KillSwitch } from './extension/crypto-trading/kill-switch.js'
+import { PnLTracker } from './extension/crypto-trading/pnl-tracker.js'
 import { SessionStore } from './core/session.js'
 import { ConnectorCenter } from './core/connector-center.js'
 import { ToolCenter } from './core/tool-center.js'
@@ -53,6 +60,12 @@ import { createEventLog } from './core/event-log.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
 import { NewsCollectorStore, NewsCollector, wrapNewsToolsForPiggyback, createNewsArchiveTools } from './extension/news-collector/index.js'
+import { LiveGateManager } from './runtime/live_gate_manager.js'
+import { loadRuntimeProofTracking } from './runtime/live_proof_status.js'
+import { writePaperPortfolioTarget } from './runtime/paper_portfolio_target_builder.js'
+import { refreshRuntimeTruthMainline } from './runtime/runtime_truth_mainline.js'
+import type { CryptoHistoricalData } from './openbb/crypto/types/index.js'
+import type { ICryptoTradingEngine } from './extension/crypto-trading/interfaces.js'
 
 const WALLET_FILE = resolve("data/crypto-trading/commit.json");
 const SEC_WALLET_FILE = resolve("data/securities-trading/commit.json");
@@ -61,8 +74,22 @@ const FRONTAL_LOBE_FILE = resolve("data/brain/frontal-lobe.md");
 const EMOTION_LOG_FILE = resolve("data/brain/emotion-log.md");
 const PERSONA_FILE = resolve("data/brain/persona.md");
 const PERSONA_DEFAULT = resolve("data/default/persona.default.md");
+const DEFAULT_RUNTIME_VALIDATION_RUNS = resolve(
+  "data/research/strategy/strategy_validation_runs.json"
+);
+const DEFAULT_RUNTIME_VERDICT = resolve(
+  "data/research/strategy/experiment_verdict.v2.json"
+);
+const DEFAULT_RUNTIME_RELEASE_GATE = resolve("data/runtime/release_gate_status.json");
+const DEFAULT_RUNTIME_REGISTRY = resolve("data/runtime/paper_champion_registry.json");
+const DEFAULT_RUNTIME_PORTFOLIO_TARGET = resolve(
+  "data/runtime/paper_portfolio_target.json"
+);
+const DEFAULT_RUNTIME_SNAPSHOT_DIR = resolve("data/runtime");
+const DEFAULT_RUNTIME_CANDIDATES = resolve("docs/research/strategy_candidates.v1.json");
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const DEFAULT_KLINE_INTERVAL = '1h'
 
 /** Read a file, copying from default if it doesn't exist yet. */
 async function readWithDefault(
@@ -81,6 +108,154 @@ async function readWithDefault(
     return content;
   } catch {
     return "";
+  }
+}
+
+function normalizeOpenbbCryptoSymbol(symbol: string): string {
+  return symbol.replace(/\//g, '').replace(/-/g, '')
+}
+
+function buildKlineStore(
+  cryptoClient: OpenBBCryptoClient,
+  symbols: string[],
+  interval = DEFAULT_KLINE_INTERVAL
+): KlineStore {
+  return {
+    marketDataProvider: {
+      async getMarketData(time: Date, symbol: string): Promise<MarketData> {
+        const rows = await this.getMarketDataRange(time, time, symbol)
+        const latest = rows[rows.length - 1]
+        if (!latest) {
+          throw new Error(`No market data available for ${symbol}`)
+        }
+        return latest
+      },
+      async getMarketDataRange(startTime: Date, endTime: Date, symbol: string): Promise<MarketData[]> {
+        const rows = await cryptoClient.getHistorical({
+          symbol: normalizeOpenbbCryptoSymbol(symbol),
+          start_date: startTime.toISOString().slice(0, 10),
+          end_date: endTime.toISOString().slice(0, 10),
+          interval,
+        }) as CryptoHistoricalData[]
+
+        return rows
+          .map((row) => ({
+            symbol,
+            time: Math.floor(Date.parse(row.date) / 1000),
+            open: row.open,
+            high: row.high,
+            low: row.low,
+            close: row.close,
+            volume: row.volume ?? 0,
+          }))
+          .filter((row) =>
+            Number.isFinite(row.time) &&
+            Number.isFinite(row.open) &&
+            Number.isFinite(row.high) &&
+            Number.isFinite(row.low) &&
+            Number.isFinite(row.close)
+          )
+      },
+      getAvailableSymbols(): string[] {
+        return [...symbols]
+      },
+    },
+    getPlayheadTime(): Date {
+      return new Date()
+    },
+    calculatePreviousTime(lookbackBars: number): Date {
+      const now = new Date()
+      now.setHours(now.getHours() - lookbackBars)
+      return now
+    },
+    getAvailableSymbols(): string[] {
+      return [...symbols]
+    },
+  }
+}
+
+async function createCryptoDispatcherRuntime(params: {
+  engine: ICryptoTradingEngine
+  config: Awaited<ReturnType<typeof loadConfig>>
+  eventLog: Awaited<ReturnType<typeof createEventLog>>
+  klineStore: KlineStore
+  ticketStore: DecisionTicketStore
+  intentLedger: IntentLedger
+  idempotencyStore: TradeIdempotencyStore
+  killSwitch: KillSwitch
+  exchangeId?: string
+}) {
+  const liveGateManager = await LiveGateManager.create({
+    engine: params.engine,
+    klineStore: params.klineStore,
+    riskConfig: params.config.risk,
+    eventLog: params.eventLog,
+    baseDir: "data",
+  })
+
+  const rawDispatcher = createCryptoOperationDispatcher(params.engine, {
+    riskConfig: params.config.risk,
+    getRiskContext: () => liveGateManager.buildRiskContext(),
+    estimateExpectedPrice: ({ request }) =>
+      liveGateManager.estimateExpectedPrice(request),
+    beforePlaceOrderGate: ({ request }) =>
+      liveGateManager.beforePlaceOrder(request),
+    afterPlaceOrder: ({ request, result, expectedPrice }) =>
+      liveGateManager.recordExecution(request, result, expectedPrice),
+    ticketStore: params.ticketStore,
+    intentLedger: params.intentLedger,
+    idempotencyStore: params.idempotencyStore,
+    killSwitch: params.killSwitch,
+    exchangeId: params.exchangeId,
+    slippageConfig: params.config.slippage,
+    eventLog: params.eventLog,
+  })
+
+  return { liveGateManager, rawDispatcher }
+}
+
+async function refreshCryptoRuntimeTruth(params: {
+  engine: ICryptoTradingEngine
+  liveGateManager: LiveGateManager
+  klineStore: KlineStore
+  newsStore: NewsCollectorStore
+  symbols: string[]
+}) {
+  try {
+    const planningState = await params.liveGateManager.buildRuntimePlanningState()
+    const proofTracking = await loadRuntimeProofTracking()
+    await writePaperPortfolioTarget({
+      engine: params.engine,
+      klineStore: params.klineStore,
+      newsProvider: params.newsStore,
+      options: {
+        symbols: params.symbols,
+        releaseGateStatus: planningState.releaseGateStatus,
+        outputPath: DEFAULT_RUNTIME_PORTFOLIO_TARGET,
+        candidateConfigPath: DEFAULT_RUNTIME_CANDIDATES,
+      },
+    })
+
+    const result = await refreshRuntimeTruthMainline(
+      params.engine,
+      params.liveGateManager,
+      {
+        symbols: params.symbols,
+        validationRunsPath: DEFAULT_RUNTIME_VALIDATION_RUNS,
+        verdictPath: DEFAULT_RUNTIME_VERDICT,
+        releaseGateStatusPath: DEFAULT_RUNTIME_RELEASE_GATE,
+        registryPath: DEFAULT_RUNTIME_REGISTRY,
+        portfolioTargetPath: DEFAULT_RUNTIME_PORTFOLIO_TARGET,
+        snapshotBaseDir: DEFAULT_RUNTIME_SNAPSHOT_DIR,
+        proofTracking,
+      },
+    )
+
+    console.log(
+      `runtime-truth: refreshed (${result.truth.executionPlan.kind}, portfolioTarget=${result.portfolioTargetSource}, phases=${JSON.stringify(result.phaseReadiness)})`,
+    )
+  } catch (err) {
+    console.error('runtime-truth: refresh failed:', err)
   }
 }
 
@@ -127,6 +302,16 @@ async function main() {
     required: config.decisionTicket.required,
     ttlMs: config.decisionTicket.ttlMs,
   });
+  const ticketCleanupInterval = setInterval(() => {
+    try {
+      ticketStore.cleanup();
+    } catch (err) {
+      console.warn(
+        "decision-ticket cleanup failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }, Math.max(60_000, Math.min(config.decisionTicket.ttlMs, 300_000)));
 
   const intentLedger = new IntentLedger(
     resolve("data/crypto-trading/intents.jsonl")
@@ -235,16 +420,6 @@ async function main() {
 
   const eventLog = await createEventLog();
 
-  if (cryptoEngine) {
-    liveGateManager = await LiveGateManager.create({
-      engine: cryptoEngine,
-      klineStore,
-      riskConfig: config.risk,
-      eventLog,
-      baseDir: "data",
-    });
-  }
-
   // ==================== Cron ====================
 
   const cronEngine = createCronEngine({ eventLog });
@@ -267,6 +442,7 @@ async function main() {
   const commodityClient = new OpenBBCommodityClient(config.openbb.apiUrl, undefined, providerKeys)
   const economyClient = new OpenBBEconomyClient(config.openbb.apiUrl, undefined, providerKeys)
   const newsClient = new OpenBBNewsClient(config.openbb.apiUrl, undefined, providerKeys)
+  const klineStore = buildKlineStore(cryptoClient, config.engine.pairs)
 
   // ==================== Equity Symbol Index ====================
 
@@ -372,7 +548,20 @@ async function main() {
       }
 
       const bridge = createCryptoWalletStateBridge(newResult.engine)
-      const rawDispatcher = createCryptoOperationDispatcher(newResult.engine)
+      const { liveGateManager, rawDispatcher } = await createCryptoDispatcherRuntime({
+        engine: newResult.engine,
+        config: freshConfig,
+        eventLog,
+        klineStore,
+        ticketStore,
+        intentLedger,
+        idempotencyStore,
+        killSwitch,
+        exchangeId:
+          freshConfig.crypto.provider.type === "ccxt"
+            ? freshConfig.crypto.provider.exchange
+            : undefined,
+      })
       const guards = resolveGuards(freshConfig.crypto.guards)
       const walletConfig = {
         executeOperation: createGuardPipeline(rawDispatcher, newResult.engine, guards),
@@ -385,6 +574,13 @@ async function main() {
       currentCryptoWallet = newWallet
 
       toolCenter.register(createCryptoTradingTools(newResult.engine, newWallet, bridge), 'crypto-trading')
+      await refreshCryptoRuntimeTruth({
+        engine: newResult.engine,
+        liveGateManager,
+        klineStore,
+        newsStore,
+        symbols: freshConfig.engine.pairs,
+      })
       console.log(`reconnect: crypto trading engine online (${toolCenter.list().length} tools)`)
       return { success: true, message: 'Crypto trading engine reconnected' }
     } catch (err) {
@@ -443,19 +639,33 @@ async function main() {
 
   // MCP Server is always active when a port is set — Claude Code provider depends on it for tools
   if (config.connectors.mcp.port) {
-    corePlugins.push(new McpPlugin(toolCenter, config.connectors.mcp.port))
+    corePlugins.push(
+      new McpPlugin(
+        toolCenter,
+        config.connectors.mcp.port,
+        config.connectors.mcp.allowOrigins,
+      ),
+    )
   }
 
   // Web UI is always active (no enabled flag)
   if (config.connectors.web.port) {
-    corePlugins.push(new WebPlugin({ port: config.connectors.web.port }))
+    corePlugins.push(new WebPlugin({
+      port: config.connectors.web.port,
+      allowOrigins: config.connectors.web.allowOrigins,
+      maxSseClients: config.connectors.web.maxSseClients,
+      sseMaxDurationMs: config.connectors.web.sseMaxDurationMs,
+    }))
   }
 
   // Optional plugins — toggleable at runtime via reconnectConnectors()
   const optionalPlugins = new Map<string, Plugin>()
 
   if (config.connectors.mcpAsk.enabled && config.connectors.mcpAsk.port) {
-    optionalPlugins.set('mcp-ask', new McpAskPlugin({ port: config.connectors.mcpAsk.port }))
+    optionalPlugins.set('mcp-ask', new McpAskPlugin({
+      port: config.connectors.mcpAsk.port,
+      allowOrigins: config.connectors.mcpAsk.allowOrigins,
+    }))
   }
 
   if (config.connectors.telegram.enabled && config.connectors.telegram.botToken) {
@@ -483,7 +693,10 @@ async function main() {
         optionalPlugins.delete('mcp-ask')
         changes.push('mcp-ask stopped')
       } else if (!mcpAskRunning && mcpAskWanted) {
-        const p = new McpAskPlugin({ port: fresh.connectors.mcpAsk.port! })
+        const p = new McpAskPlugin({
+          port: fresh.connectors.mcpAsk.port!,
+          allowOrigins: fresh.connectors.mcpAsk.allowOrigins,
+        })
         await p.start(ctx)
         optionalPlugins.set('mcp-ask', p)
         changes.push('mcp-ask started')
@@ -544,19 +757,39 @@ async function main() {
     cryptoResultRef = cryptoResult
     if (!cryptoResult) return
     const bridge = createCryptoWalletStateBridge(cryptoResult.engine)
-    const rawDispatcher = createCryptoOperationDispatcher(cryptoResult.engine)
-    const guards = resolveGuards(config.crypto.guards)
-    const realWalletConfig = {
-      executeOperation: createGuardPipeline(rawDispatcher, cryptoResult.engine, guards),
-      getWalletState: bridge,
-      onCommit: onCryptoCommit,
-    }
-    const realWallet = savedState
-      ? Wallet.restore(savedState, realWalletConfig)
-      : new Wallet(realWalletConfig)
-    currentCryptoWallet = realWallet
-    toolCenter.register(createCryptoTradingTools(cryptoResult.engine, realWallet, bridge), 'crypto-trading')
-    console.log(`ccxt: crypto trading tools online (${toolCenter.list().length} tools total)`)
+    createCryptoDispatcherRuntime({
+      engine: cryptoResult.engine,
+      config,
+      eventLog,
+      klineStore,
+      ticketStore,
+      intentLedger,
+      idempotencyStore,
+      killSwitch,
+      exchangeId,
+    }).then(async ({ liveGateManager, rawDispatcher }) => {
+      const guards = resolveGuards(config.crypto.guards)
+      const realWalletConfig = {
+        executeOperation: createGuardPipeline(rawDispatcher, cryptoResult.engine, guards),
+        getWalletState: bridge,
+        onCommit: onCryptoCommit,
+      }
+      const realWallet = savedState
+        ? Wallet.restore(savedState, realWalletConfig)
+        : new Wallet(realWalletConfig)
+      currentCryptoWallet = realWallet
+      toolCenter.register(createCryptoTradingTools(cryptoResult.engine, realWallet, bridge), 'crypto-trading')
+      await refreshCryptoRuntimeTruth({
+        engine: cryptoResult.engine,
+        liveGateManager,
+        klineStore,
+        newsStore,
+        symbols: config.engine.pairs,
+      })
+      console.log(`ccxt: crypto trading tools online (${toolCenter.list().length} tools total)`)
+    }).catch((err) => {
+      console.error('ccxt: crypto runtime wiring failed:', err)
+    })
   })
 
   // ==================== Shutdown ====================
@@ -566,6 +799,7 @@ async function main() {
 
   const shutdown = async () => {
     stopped = true
+    clearInterval(ticketCleanupInterval)
     newsCollector?.stop()
     heartbeat.stop()
     cronListener.stop()

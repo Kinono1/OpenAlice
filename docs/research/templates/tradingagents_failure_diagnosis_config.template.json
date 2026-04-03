@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "tradingagents_failure_diagnosis_config.v1",
+  "primaryMetrics": [
+    "failedWindowRatio",
+    "averageDegradation",
+    "medianTradesPerWindow",
+    "portfolio.aggregateMetrics.meanPbo",
+    "portfolio.aggregateMetrics.meanDsrProbability"
+  ],
+  "supportingMetrics": [
+    "diagnostics.donorOnlyAggregateMetrics",
+    "candidatePoolDiagnostics.averageAbsoluteCorrelation",
+    "candidatePoolDiagnostics.topCorrelatedPairs",
+    "releaseGate.failedChecks"
+  ],
+  "thresholds": {
+    "significantFailedWindowRatioImprovement": 0.1,
+    "significantAverageDegradationImprovement": 0.2,
+    "usableMedianTradesPerWindow": 4,
+    "acceptableFailedWindowRatio": 0.5,
+    "highFailedWindowRatio": 0.6,
+    "acceptableAverageDegradation": 0.4,
+    "failureClusterRatioThreshold": 0.5,
+    "minimumProfileCountForSufficientEvidence": 3
+  },
+  "decisionPolicy": {
+    "structuralFixAllowedPrimaryCauses": [
+      "horizon_mismatch"
+    ],
+    "structuralFixBlockingSecondaryCauses": [
+      "structural_instability",
+      "selection_path_misalignment"
+    ],
+    "minDecisionConfidenceForStructuralFix": "medium",
+    "requiredEvidenceCompletenessForStructuralFix": "sufficient"
+  },
+  "structuralFixWhitelist": [
+    "oos horizon",
+    "train/oos ratio",
+    "min trades per window"
+  ],
+  "structuralFixBlockedChanges": [
+    "signal construction",
+    "feature set",
+    "ranking logic",
+    "threshold family",
+    "rebalance rules",
+    "exposure constraints",
+    "candidate family definition"
+  ],
+  "salvageTaxonomy": [
+    "signal_component",
+    "state_filter_component",
+    "ranking_component",
+    "risk_overlay_component",
+    "evaluation_pattern_only"
+  ],
+  "stopConditions": [
+    "primaryRootCause is structural_instability with medium/high confidence",
+    "best donor profile still exceeds acceptableFailedWindowRatio",
+    "formal stage snapshot remains below Stage C"
+  ],
+  "continueConditions": [
+    "primaryRootCause is horizon_mismatch",
+    "evidenceCompleteness is sufficient",
+    "decisionConfidence is medium or high",
+    "secondaryContributors do not include structural_instability"
+  ]
+}

@@ -16,10 +16,18 @@ interface ChatDeps {
   ctx: EngineContext
   session: SessionStore
   sseClients: Map<string, SSEClient>
+  maxSseClients: number
+  sseMaxDurationMs: number
 }
 
 /** Chat routes: POST /, GET /history, GET /events (SSE) */
-export function createChatRoutes({ ctx, session, sseClients }: ChatDeps) {
+export function createChatRoutes({
+  ctx,
+  session,
+  sseClients,
+  maxSseClients,
+  sseMaxDurationMs,
+}: ChatDeps) {
   const app = new Hono()
 
   app.post('/', async (c) => {
@@ -57,8 +65,21 @@ export function createChatRoutes({ ctx, session, sseClients }: ChatDeps) {
   })
 
   app.get('/events', (c) => {
+    if (sseClients.size >= maxSseClients) {
+      return c.json({ error: 'too many SSE clients' }, 429)
+    }
+
     return streamSSE(c, async (stream) => {
       const clientId = randomUUID()
+      let finished = false
+      let finish!: () => void
+      const completion = new Promise<void>((resolve) => {
+        finish = () => {
+          if (finished) return
+          finished = true
+          resolve()
+        }
+      })
       sseClients.set(clientId, {
         id: clientId,
         send: (data) => { stream.writeSSE({ data }).catch(() => {}) },
@@ -68,12 +89,21 @@ export function createChatRoutes({ ctx, session, sseClients }: ChatDeps) {
         stream.writeSSE({ event: 'ping', data: '' }).catch(() => {})
       }, 30_000)
 
-      stream.onAbort(() => {
+      const maxDurationTimer = setTimeout(() => {
+        stream.writeSSE({ event: 'closing', data: 'max-duration-reached' }).catch(() => {})
         clearInterval(pingInterval)
         sseClients.delete(clientId)
+        finish()
+      }, sseMaxDurationMs)
+
+      stream.onAbort(() => {
+        clearInterval(pingInterval)
+        clearTimeout(maxDurationTimer)
+        sseClients.delete(clientId)
+        finish()
       })
 
-      await new Promise<void>(() => {})
+      await completion
     })
   })
 

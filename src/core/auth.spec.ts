@@ -80,7 +80,7 @@ describe("auth middleware token resolution", () => {
     expect(res.status).toBe(200);
   });
 
-  it("allows read endpoints with query token for SSE/media clients", async () => {
+  it("rejects read endpoints with query token", async () => {
     process.env.AUTH_TOKEN = "read-token";
 
     const app = new Hono();
@@ -88,7 +88,7 @@ describe("auth middleware token resolution", () => {
     app.get("/read/ping", c => c.json({ ok: true }));
 
     const res = await app.request("/read/ping?token=read-token");
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
   });
 
   it("allows read endpoints with auth cookie for browser resources", async () => {
@@ -102,5 +102,14 @@ describe("auth middleware token resolution", () => {
       headers: withCookie("cookie-token"),
     });
     expect(res.status).toBe(200);
+  });
+
+  it("rejects when enforcement is enabled but no auth tokens are configured", async () => {
+    const app = new Hono();
+    app.use("/read/*", createRequireAuth(true));
+    app.get("/read/ping", c => c.json({ ok: true }));
+
+    const res = await app.request("/read/ping");
+    expect(res.status).toBe(401);
   });
 });

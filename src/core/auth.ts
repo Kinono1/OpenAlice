@@ -38,19 +38,12 @@ function extractCookieToken(
 
 function extractToken(req: {
   header: (name: string) => string | undefined;
-  query: (name: string) => string | undefined;
 }): string | null {
   const headerToken =
     extractBearer(req.header("Authorization")) ??
     extractBearer(req.header("authorization"));
   if (headerToken) {
     return headerToken;
-  }
-
-  const queryToken =
-    req.query("token") ?? req.query("auth_token") ?? req.query("authToken");
-  if (queryToken) {
-    return queryToken;
   }
 
   return (

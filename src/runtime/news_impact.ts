@@ -22,6 +22,32 @@ export interface NewsFlag {
   reason: string;
 }
 
+export type NewsRiskRegime = "normal" | "elevated" | "severe";
+
+export type NewsPreferenceAsset = "BTC" | "ETH";
+
+export interface NewsAssetPreferenceTilt {
+  favoredAsset: NewsPreferenceAsset | null;
+  /**
+   * Signed BTC-vs-ETH tilt in [-0.15, 0.15].
+   * Positive values mildly favor BTC exposure, negative values mildly favor ETH.
+   */
+  btcVsEthTilt: number;
+  reasons: string[];
+}
+
+export interface NewsOverlaySummary {
+  riskRegime: NewsRiskRegime;
+  hardVeto: boolean;
+  /**
+   * Exposure scaler in [0, 1]. Severe news drives this to 0, elevated risk scales down
+   * but does not create or flip direction on its own.
+   */
+  exposureMultiplier: number;
+  assetPreference: NewsAssetPreferenceTilt;
+  reasons: string[];
+}
+
 export interface NewsImpactSummary {
   totalNews: number;
   positiveNews: number;
@@ -32,6 +58,7 @@ export interface NewsImpactSummary {
   riskScore: number;
   topThemes: NewsThemeCount[];
   flags: NewsFlag[];
+  overlay?: NewsOverlaySummary;
 }
 
 export interface AnalyzeNewsImpactOptions {
@@ -146,6 +173,27 @@ const THEME_PATTERNS: Array<{ theme: NewsTheme; patterns: RegExp[] }> = [
   },
 ];
 
+const BTC_PATTERNS = [
+  /\bbitcoin\b/i,
+  /\bbtc\b/i,
+  /\bspot etf\b/i,
+  /\bstrategic reserve\b/i,
+  /\btreasury\b/i,
+];
+
+const ETH_PATTERNS = [
+  /\bethereum\b/i,
+  /\beth\b/i,
+  /\bether\b/i,
+  /\bstaking\b/i,
+  /\blayer 2\b/i,
+  /\brollup(s)?\b/i,
+  /\bdeveloper\b/i,
+];
+
+const ELEVATED_RISK_SCORE = 0.35;
+const MAX_BTC_ETH_TILT = 0.15;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -196,6 +244,61 @@ function resolveFlagReason(text: string): string | null {
   return null;
 }
 
+function resolveOverlay(
+  riskScore: number,
+  severeFlags: number,
+  highRiskNews: number,
+  btcBias: number,
+  ethBias: number,
+): NewsOverlaySummary {
+  const reasons: string[] = [];
+
+  let riskRegime: NewsRiskRegime = "normal";
+  let hardVeto = false;
+  let exposureMultiplier = 1;
+
+  if (severeFlags > 0) {
+    riskRegime = "severe";
+    hardVeto = true;
+    exposureMultiplier = 0;
+    reasons.push("severe_risk_flag");
+  } else if (riskScore >= ELEVATED_RISK_SCORE || highRiskNews > 0) {
+    riskRegime = "elevated";
+    exposureMultiplier = Number(clamp(1 - riskScore * 0.8, 0.35, 0.85).toFixed(4));
+    reasons.push("elevated_risk_scaler");
+  }
+
+  const assetReasons: string[] = [];
+  const assetBiasDenominator = Math.max(1, Math.abs(btcBias) + Math.abs(ethBias));
+  const assetTiltRaw = clamp((btcBias - ethBias) / assetBiasDenominator, -1, 1);
+  const btcVsEthTilt = Number((assetTiltRaw * MAX_BTC_ETH_TILT).toFixed(4));
+
+  let favoredAsset: NewsPreferenceAsset | null = null;
+  if (btcVsEthTilt >= 0.03) {
+    favoredAsset = "BTC";
+    assetReasons.push("btc_relative_news_tailwind");
+  } else if (btcVsEthTilt <= -0.03) {
+    favoredAsset = "ETH";
+    assetReasons.push("eth_relative_news_tailwind");
+  }
+
+  if (favoredAsset) {
+    reasons.push(`asset_preference:${favoredAsset}`);
+  }
+
+  return {
+    riskRegime,
+    hardVeto,
+    exposureMultiplier,
+    assetPreference: {
+      favoredAsset,
+      btcVsEthTilt,
+      reasons: assetReasons,
+    },
+    reasons,
+  };
+}
+
 export function analyzeNewsImpact(
   news: NewsItem[],
   options?: AnalyzeNewsImpactOptions,
@@ -211,6 +314,17 @@ export function analyzeNewsImpact(
       riskScore: 0,
       topThemes: [],
       flags: [],
+      overlay: {
+        riskRegime: "normal",
+        hardVeto: false,
+        exposureMultiplier: 1,
+        assetPreference: {
+          favoredAsset: null,
+          btcVsEthTilt: 0,
+          reasons: [],
+        },
+        reasons: [],
+      },
     };
   }
 
@@ -225,6 +339,9 @@ export function analyzeNewsImpact(
   let weightedSentiment = 0;
   let weightedSentimentDenominator = 0;
   let weightedRisk = 0;
+  let severeFlags = 0;
+  let btcBias = 0;
+  let ethBias = 0;
 
   const themeCounts = new Map<NewsTheme, number>();
   const flags: NewsFlag[] = [];
@@ -265,12 +382,30 @@ export function analyzeNewsImpact(
         });
       }
     }
+    if (severeReason) {
+      severeFlags += 1;
+    }
 
     const riskStrength = riskHits * 0.5 + (severeReason ? 1.0 : 0);
     weightedRisk += riskStrength * itemWeight;
 
     const theme = detectTheme(text);
     themeCounts.set(theme, (themeCounts.get(theme) ?? 0) + 1);
+
+    const btcHits = countMatches(text, BTC_PATTERNS);
+    const ethHits = countMatches(text, ETH_PATTERNS);
+    if (btcHits > 0) {
+      btcBias += signed * itemWeight;
+      if (theme === "institutional_flow") {
+        btcBias += 0.35 * itemWeight;
+      }
+    }
+    if (ethHits > 0) {
+      ethBias += signed * itemWeight;
+      if (theme === "project_updates") {
+        ethBias += 0.35 * itemWeight;
+      }
+    }
   }
 
   const sentimentScore =
@@ -285,6 +420,8 @@ export function analyzeNewsImpact(
     .slice(0, 5)
     .map(([theme, count]) => ({ theme, count }));
 
+  const overlay = resolveOverlay(riskScore, severeFlags, highRiskNews, btcBias, ethBias);
+
   return {
     totalNews: news.length,
     positiveNews,
@@ -295,6 +432,6 @@ export function analyzeNewsImpact(
     riskScore: Number(riskScore.toFixed(4)),
     topThemes,
     flags,
+    overlay,
   };
 }
-

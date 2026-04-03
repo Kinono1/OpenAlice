@@ -19,10 +19,13 @@ import { z } from 'zod'
 import { glob } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import type { Plugin, EngineContext } from '../../core/types.js'
+import { createRequireAuth, createRequireTrade } from '../../core/auth.js'
+import { createMcpAuthMiddleware } from '../../core/mcp-auth-policy.js'
 import { SessionStore, toTextHistory } from '../../core/session.js'
 
 export interface McpAskConfig {
   port: number;
+  allowOrigins?: string[];
 }
 
 const SESSION_PREFIX = "mcp-ask";
@@ -65,36 +68,6 @@ export class McpAskPlugin implements Plugin {
 
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({ text: result.text, sessionId }) }],
-          }
-        },
-        async ({ message, sessionId }) => {
-          const session = await plugin.getSession(sessionId);
-          touchInteraction("mcp-ask", sessionId);
-
-          const trustedCtx = createTrustedContext({
-            channel: "mcp-ask",
-            sessionId: session.id,
-            actor: `mcp-ask-${sessionId}`,
-          });
-
-          try {
-            const result = await runWithContextAsync(trustedCtx, () =>
-              ctx.engine.askWithSession(message, session, {
-                historyPreamble:
-                  "The following is the conversation from an external MCP client. Use it as context if the caller references earlier messages.",
-              })
-            );
-
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({ text: result.text, sessionId }),
-                },
-              ],
-            };
-          } finally {
-            removeContext(trustedCtx.contextId);
           }
         }
       );
@@ -155,26 +128,31 @@ export class McpAskPlugin implements Plugin {
     };
 
     const app = new Hono();
+    const allowedOrigins = new Set(
+      (this.config.allowOrigins ?? []).map(origin => origin.trim()).filter(Boolean),
+    );
 
     const requireAuth = createRequireAuth(ctx.config.auth.enforceAuth);
     const requireTrade = createRequireTrade(ctx.config.auth.enforceAuth);
     const mcpAuth = createMcpAuthMiddleware(requireAuth, requireTrade);
 
-    app.use(
-      "*",
-      cors({
-        origin: "*",
-        allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-        allowHeaders: [
-          "Content-Type",
-          "Authorization",
-          "mcp-session-id",
-          "Last-Event-ID",
-          "mcp-protocol-version",
-        ],
-        exposeHeaders: ["mcp-session-id", "mcp-protocol-version"],
-      })
-    );
+    if (allowedOrigins.size > 0) {
+      app.use(
+        "*",
+        cors({
+          origin: (origin) => (allowedOrigins.has(origin) ? origin : ""),
+          allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+          allowHeaders: [
+            "Content-Type",
+            "Authorization",
+            "mcp-session-id",
+            "Last-Event-ID",
+            "mcp-protocol-version",
+          ],
+          exposeHeaders: ["mcp-session-id", "mcp-protocol-version"],
+        })
+      );
+    }
 
     app.use("/mcp", mcpAuth);
 

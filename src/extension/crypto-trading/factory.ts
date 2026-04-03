@@ -35,6 +35,23 @@ export async function createCryptoTradingEngine(
       return null;
 
     case 'ccxt': {
+      const tradingGuardEnv = {
+        TRADE_TOKEN: process.env.TRADE_TOKEN,
+        AUTH_TOKEN: process.env.AUTH_TOKEN,
+        DISABLE_TRADE_AUTH_TOKEN_ENFORCE:
+          process.env.DISABLE_TRADE_AUTH_TOKEN_ENFORCE,
+        ALLOW_LIVE_TRADING: process.env.ALLOW_LIVE_TRADING,
+      };
+
+      assertTradingInterfaceAuthToken(tradingGuardEnv);
+      assertSafeTradingMode(
+        {
+          sandbox: providerConfig.sandbox,
+          demoTrading: providerConfig.demoTrading,
+        },
+        tradingGuardEnv,
+      );
+
       const apiKey = providerConfig.apiKey;
       const apiSecret = providerConfig.apiSecret;
       const password = providerConfig.password;

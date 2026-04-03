@@ -48,12 +48,22 @@ export interface ExpertDecisionResult {
   blockedBy: string[];
   reasons: string[];
   suggestedExposurePct: number;
+  overlays: {
+    newsHardVeto: boolean;
+    newsRiskRegime: NonNullable<NewsImpactSummary["overlay"]>["riskRegime"];
+    newsExposureMultiplier: number;
+    btcVsEthTilt: number;
+    favoredAsset: NonNullable<NewsImpactSummary["overlay"]>["assetPreference"]["favoredAsset"];
+  };
   components: {
     strategyScore: number;
     mlScore: number;
     newsScore: number;
     newsRiskPenalty: number;
     disagreementPenalty: number;
+    directionalSupportScore: number;
+    baseSuggestedExposurePct: number;
+    symbolTiltMultiplier: number;
     totalScore: number;
   };
   policy: ExpertDecisionPolicy;
@@ -67,6 +77,18 @@ const DEFAULT_POLICY: ExpertDecisionPolicy = {
   minMlConfidence: 0.55,
   minExpectedReturnPct: 0.03,
   riskOffNewsScore: 0.65,
+};
+
+const DEFAULT_NEWS_OVERLAY: NonNullable<NewsImpactSummary["overlay"]> = {
+  riskRegime: "normal",
+  hardVeto: false,
+  exposureMultiplier: 1,
+  assetPreference: {
+    favoredAsset: null,
+    btcVsEthTilt: 0,
+    reasons: [],
+  },
+  reasons: [],
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -169,8 +191,60 @@ function computeSuggestedExposurePct(action: ExpertAction, score: number, minSco
   return Number((normalized * 100).toFixed(2));
 }
 
+function resolveTrendAction(
+  signal: ExpertStrategySignal["signal"],
+  allowShort: boolean,
+  reasons: string[],
+): ExpertAction {
+  if (signal > 0) {
+    return "long";
+  }
+  if (signal < 0) {
+    if (allowShort) {
+      return "short";
+    }
+    reasons.push("Short trend suppressed because allowShort=false.");
+  }
+  return "flat";
+}
+
+function resolveCoreAsset(symbol: string): "BTC" | "ETH" | null {
+  const upper = symbol.toUpperCase();
+  if (upper.includes("BTC") || upper.includes("XBT")) {
+    return "BTC";
+  }
+  if (upper.includes("ETH")) {
+    return "ETH";
+  }
+  return null;
+}
+
+function resolveSymbolTiltMultiplier(
+  symbol: string,
+  btcVsEthTilt: number,
+): {
+  asset: "BTC" | "ETH" | null;
+  multiplier: number;
+} {
+  const asset = resolveCoreAsset(symbol);
+  if (asset === "BTC") {
+    return {
+      asset,
+      multiplier: Number(clamp(1 + btcVsEthTilt, 0.85, 1.15).toFixed(4)),
+    };
+  }
+  if (asset === "ETH") {
+    return {
+      asset,
+      multiplier: Number(clamp(1 - btcVsEthTilt, 0.85, 1.15).toFixed(4)),
+    };
+  }
+  return { asset: null, multiplier: 1 };
+}
+
 export function evaluateExpertDecision(input: ExpertDecisionInput): ExpertDecisionResult {
   const policy = normalizePolicy(input.policy);
+  const newsOverlay = input.news.overlay ?? DEFAULT_NEWS_OVERLAY;
   const reasons = [input.strategy.reason];
   const blockedBy: string[] = [];
 
@@ -185,50 +259,92 @@ export function evaluateExpertDecision(input: ExpertDecisionInput): ExpertDecisi
     blockedBy.push("ml_required_but_unavailable");
   }
 
-  if (input.news.riskScore >= policy.riskOffNewsScore) {
+  const newsHardVeto = newsOverlay.hardVeto || input.news.riskScore >= policy.riskOffNewsScore;
+  if (newsHardVeto) {
     blockedBy.push("news_risk_breaker");
     reasons.push(
-      `News risk score ${input.news.riskScore.toFixed(2)} >= threshold ${policy.riskOffNewsScore.toFixed(2)}.`,
+      newsOverlay.hardVeto
+        ? `News overlay raised a hard veto from severe risk events (${newsOverlay.reasons.join(", ") || "severe_risk_flag"}).`
+        : `News risk score ${input.news.riskScore.toFixed(2)} >= threshold ${policy.riskOffNewsScore.toFixed(2)}.`,
+    );
+  } else if (newsOverlay.riskRegime === "elevated") {
+    reasons.push(
+      `News overlay scales exposure by ${newsOverlay.exposureMultiplier.toFixed(2)} due to elevated risk.`,
     );
   }
 
   const strategyScore = computeStrategyScore(input.strategy);
   const ml = computeMlScore(input.ml, policy);
-  const newsScore = clamp(input.news.sentimentScore, -1, 1) * 0.25;
-  const newsRiskPenalty = input.news.riskScore * 0.45;
+  const newsScore = 0;
+  const newsRiskPenalty = Number((1 - newsOverlay.exposureMultiplier).toFixed(4));
 
   const strategyDirection = input.strategy.signal;
   const disagreementPenalty =
     strategyDirection !== 0 && ml.direction !== 0 && strategyDirection !== ml.direction ? 0.2 : 0;
 
-  const totalScore = Number(
-    (strategyScore + ml.score + newsScore - newsRiskPenalty - disagreementPenalty).toFixed(4),
+  const totalScore = Number((strategyScore + ml.score - disagreementPenalty).toFixed(4));
+  const directionalSupportScore = Number(
+    clamp(strategyDirection === 0 ? 0 : strategyDirection * totalScore, 0, 1).toFixed(4),
   );
 
   reasons.push(
-    `Score breakdown: strategy=${strategyScore.toFixed(3)}, ml=${ml.score.toFixed(3)}, news=${newsScore.toFixed(3)}, riskPenalty=${newsRiskPenalty.toFixed(3)}, disagreementPenalty=${disagreementPenalty.toFixed(3)}.`,
+    `Score breakdown: strategy=${strategyScore.toFixed(3)}, ml=${ml.score.toFixed(3)}, disagreementPenalty=${disagreementPenalty.toFixed(3)}, directionalSupport=${directionalSupportScore.toFixed(3)}.`,
   );
   reasons.push(...ml.notes);
 
+  const trendAction = resolveTrendAction(strategyDirection, policy.allowShort, reasons);
+  const coreAsset = resolveCoreAsset(input.symbol);
   let action: ExpertAction = "flat";
   if (blockedBy.length === 0) {
-    if (totalScore >= policy.minCompositeScore) {
-      action = "long";
-    } else if (totalScore <= -policy.minCompositeScore) {
-      if (policy.allowShort) {
-        action = "short";
-      } else {
-        action = "flat";
-        reasons.push("Short signal suppressed because allowShort=false.");
-      }
+    if (trendAction !== "flat" && directionalSupportScore >= policy.minCompositeScore) {
+      action = trendAction;
+    } else if (trendAction === "flat") {
+      reasons.push("Trend signal is flat, so news/ML overlays cannot create a new position.");
+    } else {
+      reasons.push("Trend direction lacked sufficient composite support after ML confirmation.");
+    }
+
+    if (
+      newsOverlay.assetPreference.favoredAsset &&
+      coreAsset === newsOverlay.assetPreference.favoredAsset
+    ) {
+      reasons.push(
+        `News overlay mildly favors ${newsOverlay.assetPreference.favoredAsset} over the peer asset.`,
+      );
+    } else if (newsOverlay.assetPreference.favoredAsset && coreAsset) {
+      reasons.push(
+        `News overlay mildly disfavors ${input.symbol} versus ${newsOverlay.assetPreference.favoredAsset}.`,
+      );
     }
   } else {
     reasons.push(`Execution blocked by: ${blockedBy.join(", ")}.`);
   }
 
-  const confidence = Number(clamp(Math.abs(totalScore), 0, 1).toFixed(4));
-  const tradeAllowed = blockedBy.length === 0 && action !== "flat";
-  const suggestedExposurePct = computeSuggestedExposurePct(action, totalScore, policy.minCompositeScore);
+  const baseSuggestedExposurePct = computeSuggestedExposurePct(
+    action,
+    directionalSupportScore,
+    policy.minCompositeScore,
+  );
+  const symbolTilt = resolveSymbolTiltMultiplier(
+    input.symbol,
+    newsOverlay.assetPreference.btcVsEthTilt,
+  );
+  const suggestedExposurePct =
+    action === "flat"
+      ? 0
+      : Number(
+          clamp(
+            baseSuggestedExposurePct *
+              newsOverlay.exposureMultiplier *
+              symbolTilt.multiplier,
+            0,
+            100,
+          ).toFixed(2),
+        );
+  const confidence = Number(
+    clamp(directionalSupportScore * newsOverlay.exposureMultiplier, 0, 1).toFixed(4),
+  );
+  const tradeAllowed = blockedBy.length === 0 && action !== "flat" && suggestedExposurePct > 0;
 
   return {
     symbol: input.symbol,
@@ -238,15 +354,24 @@ export function evaluateExpertDecision(input: ExpertDecisionInput): ExpertDecisi
     blockedBy,
     reasons,
     suggestedExposurePct,
+    overlays: {
+      newsHardVeto,
+      newsRiskRegime: newsOverlay.riskRegime,
+      newsExposureMultiplier: newsOverlay.exposureMultiplier,
+      btcVsEthTilt: newsOverlay.assetPreference.btcVsEthTilt,
+      favoredAsset: newsOverlay.assetPreference.favoredAsset,
+    },
     components: {
       strategyScore: Number(strategyScore.toFixed(4)),
       mlScore: Number(ml.score.toFixed(4)),
       newsScore: Number(newsScore.toFixed(4)),
-      newsRiskPenalty: Number(newsRiskPenalty.toFixed(4)),
+      newsRiskPenalty,
       disagreementPenalty: Number(disagreementPenalty.toFixed(4)),
+      directionalSupportScore,
+      baseSuggestedExposurePct: Number(baseSuggestedExposurePct.toFixed(2)),
+      symbolTiltMultiplier: symbolTilt.multiplier,
       totalScore,
     },
     policy,
   };
 }
-

@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-30T09:03:42.605Z",
+  "batchId": "eth_phaseb_r3_trial33_neighborhood_strict_20260330.best_manifest",
+  "batchGoal": "Materialize the strongest shortlisted ETH candidate set from the richer phaseb-r3 upstream search into a route-ready manifest.",
+  "notes": [
+    "source_run_id=phaseb-r3",
+    "source_id=eth_phaseb_r3_trial33",
+    "source_trial=33",
+    "source_template=trend+trend+trend",
+    "multiple_testing_unit=candidate",
+    "neighborhood_sweep_best_manifest=eth_phaseb_r3_trial33_neighborhood_strict_20260330",
+    "recommended_trial=36"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+    "symbol": "ETH/USD",
+    "lookbackBars": 3000
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 2000,
+    "horizonBars": 240,
+    "blockSize": 24,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "PB033_1_28_80_LS",
+      "strategyName": "trend_28_80_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_usd_trend_family_28_80_ls",
+      "correlationBucket": "eth_usd_trend_28_80_ls",
+      "params": {
+        "trendFastPeriod": 28,
+        "trendSlowPeriod": 80,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "PB033_2_22_100_LS",
+      "strategyName": "trend_22_100_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_usd_trend_family_22_100_ls",
+      "correlationBucket": "eth_usd_trend_22_100_ls",
+      "params": {
+        "trendFastPeriod": 22,
+        "trendSlowPeriod": 100,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "PB033_3_18_95_LS",
+      "strategyName": "trend_18_95_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_usd_trend_family_18_95_ls",
+      "correlationBucket": "eth_usd_trend_18_95_ls",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 95,
+        "allowShort": true
+      }
+    }
+  ]
+}

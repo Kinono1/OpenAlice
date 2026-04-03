@@ -42,7 +42,31 @@ export interface SignificanceGateResult {
   dsrMin: number;
 }
 
+export interface SpaLikeInput {
+  candidateReturns: number[][];
+  benchmarkIndex: number;
+  bootstrapSamples?: number;
+  blockSize?: number;
+}
+
+export interface SpaLikeCandidateResult {
+  candidateIndex: number;
+  benchmarkIndex: number;
+  observedMeanExcess: number;
+  pValue: number;
+  bootstrapSamples: number;
+  blockSize: number;
+}
+
+export interface SpaLikeResult {
+  benchmarkIndex: number;
+  bootstrapSamples: number;
+  blockSize: number;
+  items: SpaLikeCandidateResult[];
+}
+
 const EULER_GAMMA = 0.5772156649015329;
+const DEFAULT_SPA_BOOTSTRAP_SAMPLES = 400;
 
 export function estimatePboCscv(input: PboInput): PboResult {
   const candidateReturns = validateCandidateReturns(input.candidateReturns);
@@ -91,10 +115,10 @@ export function estimatePboCscv(input: PboInput): PboResult {
 
 export function computeDeflatedSharpe(input: DeflatedSharpeInput): DeflatedSharpeResult {
   const returns = validateReturns(input.returns, "selectedReturns");
-  const trialCount = Math.max(2, Math.floor(input.trialCount));
-  if (!Number.isFinite(input.trialCount) || input.trialCount < 2) {
-    throw new Error("trialCount must be >= 2.");
+  if (!Number.isFinite(input.trialCount) || input.trialCount <= 0) {
+    throw new Error("trialCount must be > 0.");
   }
+  const trialCount = Math.max(2, Math.floor(input.trialCount));
 
   const observedSharpe = sharpe(returns);
   const skewness = skew(returns);
@@ -131,10 +155,18 @@ export function evaluateSignificanceGate(input: SignificanceGateInput): Signific
   const pboThreshold = clamp(input.pboThreshold ?? 0.2, 0, 1);
   const dsrMin = input.dsrMin ?? 0;
 
-  const pboResult = estimatePboCscv({
-    candidateReturns: input.candidateReturns,
-    partitions: input.partitions,
-  });
+  const pboResult =
+    input.candidateReturns.length < 2
+      ? {
+          pbo: 1,
+          logits: [],
+          splitsEvaluated: 0,
+          partitions: resolvePartitions(input.partitions ?? 8),
+        }
+      : estimatePboCscv({
+          candidateReturns: input.candidateReturns,
+          partitions: input.partitions,
+        });
 
   const dsrResult = computeDeflatedSharpe({
     returns: input.selectedReturns,
@@ -149,6 +181,83 @@ export function evaluateSignificanceGate(input: SignificanceGateInput): Signific
     dsrResult,
     pboThreshold,
     dsrMin,
+  };
+}
+
+export function computeSpaLikePValues(input: SpaLikeInput): SpaLikeResult {
+  const candidateReturns = validateCandidateReturns(input.candidateReturns);
+  const benchmarkIndex = resolveBenchmarkIndex(
+    input.benchmarkIndex,
+    candidateReturns.length,
+  );
+  const bootstrapSamples = resolveSpaBootstrapSamples(
+    input.bootstrapSamples ?? DEFAULT_SPA_BOOTSTRAP_SAMPLES,
+  );
+  const minLen = Math.min(...candidateReturns.map((series) => series.length));
+  const normalizedReturns = candidateReturns.map((series) =>
+    series.slice(series.length - minLen),
+  );
+  const blockSize = resolveSpaBlockSize(
+    input.blockSize ?? Math.max(4, Math.round(Math.sqrt(minLen))),
+    minLen,
+  );
+  const benchmarkReturns = normalizedReturns[benchmarkIndex];
+
+  return {
+    benchmarkIndex,
+    bootstrapSamples,
+    blockSize,
+    items: normalizedReturns.map((returns, candidateIndex) => {
+      if (candidateIndex === benchmarkIndex) {
+        return {
+          candidateIndex,
+          benchmarkIndex,
+          observedMeanExcess: 0,
+          pValue: 1,
+          bootstrapSamples,
+          blockSize,
+        };
+      }
+
+      const excessReturns = returns.map(
+        (value, index) => value - benchmarkReturns[index],
+      );
+      const observedMeanExcess = mean(excessReturns);
+      if (observedMeanExcess <= 0) {
+        return {
+          candidateIndex,
+          benchmarkIndex,
+          observedMeanExcess,
+          pValue: 1,
+          bootstrapSamples,
+          blockSize,
+        };
+      }
+
+      const centeredExcess = excessReturns.map(
+        (value) => value - observedMeanExcess,
+      );
+      let exceedCount = 0;
+      for (
+        let sampleIndex = 0;
+        sampleIndex < bootstrapSamples;
+        sampleIndex += 1
+      ) {
+        const sampled = sampleMovingBlocks(centeredExcess, blockSize, sampleIndex);
+        if (mean(sampled) >= observedMeanExcess) {
+          exceedCount += 1;
+        }
+      }
+
+      return {
+        candidateIndex,
+        benchmarkIndex,
+        observedMeanExcess,
+        pValue: (exceedCount + 1) / (bootstrapSamples + 1),
+        bootstrapSamples,
+        blockSize,
+      };
+    }),
   };
 }
 
@@ -169,6 +278,27 @@ function validateReturns(values: number[], label: string): number[] {
     }
   }
   return values;
+}
+
+function resolveBenchmarkIndex(value: number, candidateCount: number): number {
+  if (!Number.isInteger(value) || value < 0 || value >= candidateCount) {
+    throw new Error("benchmarkIndex must reference a valid candidate.");
+  }
+  return value;
+}
+
+function resolveSpaBootstrapSamples(value: number): number {
+  if (!Number.isInteger(value) || value < 50) {
+    throw new Error("spaBootstrapSamples must be an integer >= 50.");
+  }
+  return value;
+}
+
+function resolveSpaBlockSize(value: number, seriesLength: number): number {
+  if (!Number.isInteger(value) || value < 2) {
+    throw new Error("spaBlockSize must be an integer >= 2.");
+  }
+  return Math.min(value, Math.max(2, seriesLength));
 }
 
 function resolvePartitions(value: number): number {
@@ -220,6 +350,45 @@ function sharpe(returns: number[]): number {
     return 0;
   }
   return mean / Math.sqrt(variance);
+}
+
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function sampleMovingBlocks(
+  values: number[],
+  blockSize: number,
+  seed: number,
+): number[] {
+  const out: number[] = [];
+  const targetLength = values.length;
+  let state = mixSeed(seed, targetLength, blockSize);
+  while (out.length < targetLength) {
+    state = nextSeed(state);
+    const start = Math.floor((state / 0xffffffff) * values.length) % values.length;
+    for (
+      let offset = 0;
+      offset < blockSize && out.length < targetLength;
+      offset += 1
+    ) {
+      out.push(values[(start + offset) % values.length]);
+    }
+  }
+  return out;
+}
+
+function mixSeed(seed: number, targetLength: number, blockSize: number): number {
+  return (
+    ((seed + 1) * 2654435761 +
+      targetLength * 2246822519 +
+      blockSize * 3266489917) >>>
+    0
+  );
+}
+
+function nextSeed(state: number): number {
+  return (1664525 * state + 1013904223) >>> 0;
 }
 
 function skew(returns: number[]): number {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createCryptoOperationDispatcher } from './operation-dispatcher.js';
+import { createCryptoOperationDispatcher, executeCommit } from './operation-dispatcher.js';
 import type { ICryptoTradingEngine, CryptoPosition } from './interfaces.js';
 import type { Operation } from './wallet/types.js';
 
@@ -307,6 +307,81 @@ describe('createCryptoOperationDispatcher', () => {
       await expect(
         dispatch({ action: 'syncOrders', params: {} }),
       ).rejects.toThrow('Unknown operation action: syncOrders');
+    });
+  });
+
+  describe('push', () => {
+    it('stops after first failure and marks remaining operations as skipped', async () => {
+      const dispatcher = createCryptoOperationDispatcher(engine);
+
+      const result = await dispatcher.push('commit-1', [
+        { action: 'cancelOrder', params: { orderId: 'ord-001' } },
+        { action: 'closePosition', params: { symbol: 'BTC/USD' } },
+        { action: 'adjustLeverage', params: { symbol: 'BTC/USD', newLeverage: 3 } },
+      ]);
+
+      expect(engine.cancelOrder).toHaveBeenCalledWith('ord-001');
+      expect(engine.getPositions).toHaveBeenCalledTimes(1);
+      expect(engine.adjustLeverage).not.toHaveBeenCalled();
+      expect(result.operations.map((entry) => entry.status)).toEqual([
+        'success',
+        'failed',
+        'skipped',
+      ]);
+      expect(result.summary).toEqual({
+        succeeded: 1,
+        failed: 1,
+        skipped: 1,
+      });
+    });
+  });
+
+  describe('executeCommit', () => {
+    it('passes idempotency store through to the place-order pipeline', async () => {
+      const idempotencyStore = {
+        reserve: vi.fn().mockResolvedValue({
+          acquired: true,
+          retriedFromFailed: false,
+        }),
+        finalize: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const result = await executeCommit(
+        [
+          {
+            action: 'placeOrder',
+            ticketId: 'ticket-1',
+            params: {
+              symbol: 'BTC/USD',
+              side: 'buy',
+              type: 'market',
+            },
+          },
+        ],
+        {
+          engine,
+          idempotencyStore: idempotencyStore as any,
+        },
+      );
+
+      expect(idempotencyStore.reserve).toHaveBeenCalledWith({
+        key: 'ticket:ticket-1',
+        symbol: 'BTC/USD',
+        ticketId: 'ticket-1',
+        allowRetryOnFailed: false,
+      });
+      expect(idempotencyStore.finalize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: 'ticket:ticket-1',
+          status: 'succeeded',
+          orderId: 'ord-001',
+        }),
+      );
+      expect(result.summary).toEqual({
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+      });
     });
   });
 });

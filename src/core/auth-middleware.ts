@@ -24,7 +24,7 @@ function extractToken(c: { req: { header: (n: string) => string | undefined; que
   if (authHeader?.startsWith("Bearer ")) {
     return authHeader.slice(7);
   }
-  return c.req.query("token") ?? undefined;
+  return undefined;
 }
 
 /**

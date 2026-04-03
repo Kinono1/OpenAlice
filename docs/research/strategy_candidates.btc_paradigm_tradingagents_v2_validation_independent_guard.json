@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-04-01T17:29:25.307Z",
+  "batchId": "btc_paradigm_tradingagents_v2_validation_independent_guard",
+  "batchGoal": "Materialize a TradingAgents donor-signal BTC validation pool with preregistered baseline plus fixed independent guard.",
+  "notes": [
+    "source_run_id=20260303T113824Z",
+    "source_trial=0",
+    "source_template=baseline+baseline+baseline",
+    "source_id=btc_phaseb_baseline_neighborhood",
+    "neighborhood_seed_manifest=docs/research/strategy_candidates.route_batch8_btc_phaseb_baseline.v1.json",
+    "neighborhood_best_trial=34",
+    "mutation=HC001:34_65_ls->34_70_ls",
+    "mutation=HC002:34_75_ls->34_80_ls",
+    "multiple_testing_unit=candidate",
+    "source_paradigm=tradingagents_research_sidecar_v2_validation_independent_guard",
+    "source_id=tradingagents_research_sidecar_v2_validation_pool_independent_guard",
+    "input_artifact=/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/data/research/strategy/paradigms/tradingagents/btc_research_decision.latest.json",
+    "donor_action=bearish",
+    "donor_signal=-1",
+    "compiler_mode=single_donor_plus_controls",
+    "validation_pool_size=3",
+    "benchmark_strategy_id=BASELINE_CONTROL",
+    "donor_strategy_id=TA_DONOR_SHORT_SIGNAL",
+    "validation_pool_profile=baseline_independent_guard_v1",
+    "baseline_control_profile=trend_50_100_long_only",
+    "baseline_control_window_compat_adjustment=true",
+    "independent_guard_source=route_batch35_btc_20260303T034851Z_trial0_base.HC001_REG_48_16_lo",
+    "neutral_guard_replaced_with_fixed_independent_guard=true"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate",
+    "benchmarkStrategyIdBySymbol": {
+      "BTC/USD": "BASELINE_CONTROL"
+    },
+    "spaBootstrapSamples": 400,
+    "spaBlockSize": 12
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "TA_DONOR_SHORT_SIGNAL",
+      "strategyName": "ta_donor_short_signal",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_tradingagents_donor_signal_family",
+      "correlationBucket": "btc_usd_ta_donor_short_signal",
+      "role": "donor",
+      "params": {
+        "trendFastPeriod": 21,
+        "trendSlowPeriod": 70,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0.005,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "BASELINE_CONTROL",
+      "strategyName": "baseline_control_trend",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_baseline_control_family",
+      "correlationBucket": "btc_usd_baseline_control_bucket",
+      "role": "benchmark_control",
+      "params": {
+        "trendFastPeriod": 50,
+        "trendSlowPeriod": 100,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0,
+        "allowShort": false
+      }
+    },
+    {
+      "strategyId": "INDEPENDENT_GUARD",
+      "strategyName": "independent_guard_breakout",
+      "strategy": "breakout",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_independent_guard_breakout_family",
+      "correlationBucket": "btc_usd_independent_guard_breakout_bucket",
+      "role": "independent_guard",
+      "params": {
+        "breakoutPeriod": 48,
+        "breakoutExitPeriod": 16,
+        "allowShort": false
+      }
+    }
+  ]
+}

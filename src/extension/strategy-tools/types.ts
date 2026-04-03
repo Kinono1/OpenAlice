@@ -1,7 +1,17 @@
 import type { MarketData } from "../analysis-kit/data/interfaces.js";
 
-export type StrategyName = "trend" | "meanReversion" | "breakout" | "ensemble";
+export type StrategyName =
+  | "trend"
+  | "regimeTrend"
+  | "meanReversion"
+  | "breakout"
+  | "ensemble";
 export type PositionSignal = -1 | 0 | 1;
+export type StrategyRegimeLabel =
+  | "HighVolTrend"
+  | "HighVolMeanRevert"
+  | "LowVolTrend"
+  | "LowVolCarry";
 
 export interface StrategyEnsembleWeights {
   trend?: number;
@@ -14,6 +24,14 @@ export interface StrategyParams {
 
   trendFastPeriod?: number;
   trendSlowPeriod?: number;
+  trendConfirmBars?: number;
+  trendMinDiffPct?: number;
+  regimeVolWindow?: number;
+  regimeAtrPeriod?: number;
+  regimeFastPeriod?: number;
+  regimeSlowPeriod?: number;
+  allowedEntryRegimes?: StrategyRegimeLabel[];
+  exitOnRegimeMismatch?: boolean;
 
   rsiPeriod?: number;
   rsiOversold?: number;
@@ -46,6 +64,14 @@ export interface ResolvedStrategyParams {
   allowShort: boolean;
   trendFastPeriod: number;
   trendSlowPeriod: number;
+  trendConfirmBars: number;
+  trendMinDiffPct: number;
+  regimeVolWindow: number;
+  regimeAtrPeriod: number;
+  regimeFastPeriod: number;
+  regimeSlowPeriod: number;
+  allowedEntryRegimes: StrategyRegimeLabel[];
+  exitOnRegimeMismatch: boolean;
   rsiPeriod: number;
   rsiOversold: number;
   rsiOverbought: number;
@@ -65,6 +91,14 @@ export const DEFAULT_STRATEGY_PARAMS: ResolvedStrategyParams = {
   allowShort: true,
   trendFastPeriod: 20,
   trendSlowPeriod: 50,
+  trendConfirmBars: 1,
+  trendMinDiffPct: 0,
+  regimeVolWindow: 20,
+  regimeAtrPeriod: 14,
+  regimeFastPeriod: 12,
+  regimeSlowPeriod: 48,
+  allowedEntryRegimes: ["HighVolTrend", "LowVolTrend"],
+  exitOnRegimeMismatch: true,
   rsiPeriod: 14,
   rsiOversold: 30,
   rsiOverbought: 70,

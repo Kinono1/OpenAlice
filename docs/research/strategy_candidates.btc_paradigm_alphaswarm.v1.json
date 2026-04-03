@@ -1,0 +1,111 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-31T04:50:44.144Z",
+  "batchId": "btc_paradigm_alphaswarm_20260331",
+  "batchGoal": "Materialize alphaswarm_execution_context BTC candidate family for fixed-policy route comparison.",
+  "notes": [
+    "source_run_id=20260303T113824Z",
+    "source_trial=0",
+    "source_template=baseline+baseline+baseline",
+    "source_id=btc_phaseb_baseline_neighborhood",
+    "neighborhood_seed_manifest=docs/research/strategy_candidates.route_batch8_btc_phaseb_baseline.v1.json",
+    "neighborhood_best_trial=34",
+    "mutation=HC001:34_65_ls->34_70_ls",
+    "mutation=HC002:34_75_ls->34_80_ls",
+    "multiple_testing_unit=candidate",
+    "source_paradigm=alphaswarm_execution_context",
+    "source_id=alphaswarm_execution_context",
+    "input_artifact=/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/data/research/strategy/paradigms/alphaswarm/btc_execution_context.latest.json",
+    "candidate_cap=3"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "AS_DISPERSION_CORE",
+      "strategyName": "as_venue_dispersion_core",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_alphaswarm_dispersion_family",
+      "correlationBucket": "btc_usd_as_dispersion_core",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 70,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "AS_LIQUIDITY_REGIME",
+      "strategyName": "as_liquidity_regime_guard",
+      "strategy": "regimeTrend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_alphaswarm_liquidity_regime_family",
+      "correlationBucket": "btc_usd_as_liquidity_regime",
+      "params": {
+        "regimeFastPeriod": 21,
+        "regimeSlowPeriod": 84,
+        "allowShort": true,
+        "allowedEntryRegimes": [
+          "HighVolTrend",
+          "LowVolTrend"
+        ],
+        "exitOnRegimeMismatch": true
+      }
+    },
+    {
+      "strategyId": "AS_ROUTING_BREAKOUT",
+      "strategyName": "as_routing_breakout",
+      "strategy": "breakout",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_alphaswarm_routing_breakout_family",
+      "correlationBucket": "btc_usd_as_routing_breakout",
+      "params": {
+        "breakoutPeriod": 34,
+        "breakoutExitPeriod": 13,
+        "allowShort": true
+      }
+    }
+  ]
+}
