@@ -8,6 +8,7 @@ import type { AgentCenter } from './agent-center.js'
 import type { EventLog } from './event-log.js'
 import type { ToolCallLog } from './tool-call-log.js'
 import type { ToolCenter } from './tool-center.js'
+import type { CryptoClientLike } from '../domain/market-data/client/types.js'
 
 export type { Config, WebChannel }
 
@@ -32,6 +33,7 @@ export interface EngineContext {
   heartbeat: Heartbeat
   cronEngine: CronEngine
   toolCenter: ToolCenter
+  cryptoClient: CryptoClientLike
 
   // Trading (unified account model)
   accountManager: AccountManager

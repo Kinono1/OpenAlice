@@ -8,14 +8,17 @@
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './brokers/types.js'
 import { CcxtBroker } from './brokers/ccxt/CcxtBroker.js'
+import type { CcxtExecutionRuntime } from './brokers/ccxt/CcxtTradingEngineAdapter.js'
+import { createCcxtExecutionBridge } from './brokers/ccxt/CcxtTradingEngineAdapter.js'
 import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { loadGitState, createGitPersister } from './git-persistence.js'
-import { readAccountsConfig, type AccountConfig } from '../../core/config.js'
+import { readAccountsConfig, type AccountConfig, type StrategyConfig } from '../../core/config.js'
 import type { EventLog } from '../../core/event-log.js'
 import type { ToolCenter } from '../../core/tool-center.js'
 import type { ReconnectResult } from '../../core/types.js'
+import type { CryptoClientLike } from '../market-data/client/types.js'
 import './contract-ext.js'
 
 // ==================== Account summary ====================
@@ -61,18 +64,30 @@ export interface SnapshotHooks {
 export class AccountManager {
   private entries = new Map<string, UnifiedTradingAccount>()
   private reconnecting = new Set<string>()
+  private ccxtExecutionRuntime = new Map<string, CcxtExecutionRuntime>()
+  private strategyConfig?: StrategyConfig
+  private cryptoClient?: CryptoClientLike
 
   private eventLog?: EventLog
   private toolCenter?: ToolCenter
   private _snapshotHooks?: SnapshotHooks
 
-  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter }) {
+  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter; cryptoClient?: CryptoClientLike }) {
     this.eventLog = deps?.eventLog
     this.toolCenter = deps?.toolCenter
+    this.cryptoClient = deps?.cryptoClient
   }
 
   setSnapshotHooks(hooks: SnapshotHooks): void {
     this._snapshotHooks = hooks
+  }
+
+  setStrategyConfig(config: StrategyConfig): void {
+    this.strategyConfig = config
+  }
+
+  setCryptoClient(client: CryptoClientLike): void {
+    this.cryptoClient = client
   }
 
   // ==================== Lifecycle ====================
@@ -81,6 +96,17 @@ export class AccountManager {
   async initAccount(accCfg: AccountConfig): Promise<UnifiedTradingAccount> {
     const broker = createBroker(accCfg)
     const savedState = await loadGitState(accCfg.id)
+    const ccxtExecutionBridge = broker instanceof CcxtBroker
+      ? await createCcxtExecutionBridge({
+          accountId: accCfg.id,
+          broker,
+          accountManager: this,
+          cryptoClient: this.cryptoClient,
+          eventLog: this.eventLog,
+          cryptoExecution: accCfg.cryptoExecution,
+          strategyConfig: this.strategyConfig,
+        })
+      : undefined
     const uta = new UnifiedTradingAccount(broker, {
       guards: accCfg.guards,
       savedState,
@@ -90,8 +116,15 @@ export class AccountManager {
       },
       onPostPush: this._snapshotHooks?.onPostPush,
       onPostReject: this._snapshotHooks?.onPostReject,
+      buildExecuteOperation: ccxtExecutionBridge?.wrapExecuteOperation,
+      onClose: ccxtExecutionBridge?.close,
     })
     this.add(uta)
+    if (ccxtExecutionBridge) {
+      this.ccxtExecutionRuntime.set(accCfg.id, ccxtExecutionBridge.runtime())
+    } else {
+      this.ccxtExecutionRuntime.delete(accCfg.id)
+    }
     return uta
   }
 
@@ -143,6 +176,7 @@ export class AccountManager {
     const uta = this.entries.get(accountId)
     if (!uta) return
     this.entries.delete(accountId)
+    this.ccxtExecutionRuntime.delete(accountId)
     try { await uta.close() } catch { /* best effort */ }
   }
 
@@ -189,6 +223,14 @@ export class AccountManager {
 
   get size(): number {
     return this.entries.size
+  }
+
+  getExecutionRuntime(accountId: string): CcxtExecutionRuntime | undefined {
+    return this.ccxtExecutionRuntime.get(accountId)
+  }
+
+  listExecutionRuntime(): Record<string, CcxtExecutionRuntime> {
+    return Object.fromEntries(this.ccxtExecutionRuntime.entries())
   }
 
   // ==================== Source routing ====================
@@ -303,5 +345,6 @@ export class AccountManager {
       Array.from(this.entries.values()).map((uta) => uta.close()),
     )
     this.entries.clear()
+    this.ccxtExecutionRuntime.clear()
   }
 }

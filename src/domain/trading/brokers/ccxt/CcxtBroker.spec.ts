@@ -21,6 +21,7 @@ vi.mock('ccxt', () => {
     this.fetchTicker = vi.fn()
     this.fetchBalance = vi.fn()
     this.fetchPositions = vi.fn()
+    this.fetchMyTrades = vi.fn()
     this.fetchOpenOrders = vi.fn()
     this.fetchClosedOrders = vi.fn()
     this.createOrder = vi.fn()
@@ -755,21 +756,46 @@ describe('CcxtBroker — getAccount', () => {
       total: { USDT: 10000 },
       free: { USDT: 8000 },
       used: { USDT: 2000 },
+      info: { totalRealizedPnl: '150' },
     })
     // Positions must include contracts/contractSize/markPrice so the broker
-    // can reconstruct netLiquidation from fresh position market values.
+    // can reconstruct unrealized PnL and fallback equity if needed.
     ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
-      { contracts: 1, contractSize: 1, markPrice: 1500, unrealizedPnl: 500, realizedPnl: 100, side: 'long' },
-      { contracts: 1, contractSize: 1, markPrice: 500, unrealizedPnl: -200, realizedPnl: 50, side: 'long' },
+      { contracts: 1, contractSize: 1, markPrice: 1500, unrealizedPnl: 500, side: 'long' },
+      { contracts: 1, contractSize: 1, markPrice: 500, unrealizedPnl: -200, side: 'long' },
     ])
 
     const info = await acc.getAccount()
-    // netLiq = free (8000) + position market values (1500 + 500 = 2000) = 10000
+    // netLiq prefers balance total when available.
     expect(info.netLiquidation).toBe(10000)
     expect(info.totalCashValue).toBe(8000)
     expect(info.initMarginReq).toBe(2000)
     expect(info.unrealizedPnL).toBe(300)
     expect(info.realizedPnL).toBe(150)
+  })
+
+  it('falls back to the closed-trades ledger when realized PnL is absent from balance payload', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, {})
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      total: { USDT: 10000 },
+      free: { USDT: 8000 },
+      used: { USDT: 2000 },
+      info: {},
+    })
+    ;(acc as any).exchange.has = { fetchMyTrades: true }
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      { contracts: 1, contractSize: 1, markPrice: 1500, unrealizedPnl: 500, side: 'long' },
+    ])
+    ;(acc as any).exchange.fetchMyTrades = vi.fn().mockResolvedValue([
+      { id: 't1', info: { realizedPnl: '-5.5' } },
+      { id: 't2', pnl: '2.25' },
+    ])
+
+    const info = await acc.getAccount()
+    expect(info.realizedPnL).toBeCloseTo(-3.25)
+    expect((acc as any).exchange.fetchMyTrades).toHaveBeenCalledTimes(1)
   })
 
   it('throws BrokerError when no API credentials', async () => {
@@ -938,6 +964,62 @@ describe('CcxtBroker — getQuote', () => {
     contract.localSymbol = 'NONEXISTENT/USDT'
 
     await expect(acc.getQuote(contract)).rejects.toThrow('Cannot resolve contract')
+  })
+})
+
+// ==================== derivatives data ====================
+
+describe('CcxtBroker — derivatives data', () => {
+  it('normalizes open interest payloads with fallback numeric keys', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
+    setInitialized(acc, { 'BTC/USDT:USDT': market })
+
+    ;(acc as any).exchange.fetchOpenInterest = vi.fn().mockResolvedValue({
+      openInterestAmount: '12.5',
+      notionalValue: '750000',
+      timestamp: 1710000000000,
+    })
+
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+
+    const result = await acc.getOpenInterest(contract)
+    expect(result.openInterest).toBe(12.5)
+    expect(result.openInterestValue).toBe(750000)
+    expect(result.timestamp).toEqual(new Date(1710000000000))
+  })
+
+  it('aggregates liquidation payloads with fallback numeric keys', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
+    setInitialized(acc, { 'BTC/USDT:USDT': market })
+
+    ;(acc as any).exchange.fetchLiquidations = vi.fn().mockResolvedValue([
+      {
+        amount: '2',
+        average: '60000',
+        timestamp: 1710000000000,
+      },
+      {
+        contracts: 1,
+        price: 61000,
+        timestamp: 1710000100000,
+      },
+    ])
+
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+
+    const result = await acc.getLiquidationSummary(
+      contract,
+      1710000000000,
+      50,
+    )
+    expect(result.count).toBe(2)
+    expect(result.totalContracts).toBe(3)
+    expect(result.totalNotional).toBe(181000)
+    expect(result.timestamp).toEqual(new Date(1710000100000))
   })
 })
 

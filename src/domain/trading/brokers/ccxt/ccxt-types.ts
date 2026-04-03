@@ -44,6 +44,23 @@ export interface FundingRate {
   timestamp: Date
 }
 
+export interface OpenInterestSnapshot {
+  contract: Contract
+  openInterest: number
+  openInterestValue?: number
+  timestamp: Date
+}
+
+export interface LiquidationSummary {
+  contract: Contract
+  count: number
+  totalContracts: number
+  totalNotional?: number
+  sinceMs?: number
+  limit?: number
+  timestamp: Date
+}
+
 /** [price, amount] */
 export type OrderBookLevel = [price: number, amount: number]
 

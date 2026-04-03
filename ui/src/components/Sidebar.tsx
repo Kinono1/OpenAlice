@@ -146,6 +146,20 @@ const NAV_SECTIONS: NavSection[] = [
         ),
       },
       {
+        page: 'strategy' as const,
+        label: 'Strategy',
+        icon: (active: boolean) => (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 19h16" />
+            <path d="M6 15l4-4 3 3 5-7" />
+            <circle cx="6" cy="15" r="1" fill="currentColor" stroke="none" />
+            <circle cx="10" cy="11" r="1" fill="currentColor" stroke="none" />
+            <circle cx="13" cy="14" r="1" fill="currentColor" stroke="none" />
+            <circle cx="18" cy="7" r="1" fill="currentColor" stroke="none" />
+          </svg>
+        ),
+      },
+      {
         page: 'ai-provider',
         label: 'AI Provider',
         icon: (active) => (

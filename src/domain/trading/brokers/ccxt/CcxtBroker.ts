@@ -25,8 +25,20 @@ import {
   type TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
-import type { CcxtBrokerConfig, CcxtMarket, FundingRate, OrderBook, OrderBookLevel } from './ccxt-types.js'
+import type {
+  CcxtBrokerConfig,
+  CcxtMarket,
+  FundingRate,
+  LiquidationSummary,
+  OpenInterestSnapshot,
+  OrderBook,
+  OrderBookLevel,
+} from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
+import {
+  extractRealizedPnlDetailsFromBalancePayload,
+  extractRealizedPnlDetailsFromClosedTradesLedger,
+} from './ccxt-pnl.js'
 import {
   ccxtTypeToSecType,
   mapOrderStatus,
@@ -47,6 +59,70 @@ function ibkrOrderTypeToCcxt(orderType: string): string {
     case 'MKT': return 'market'
     case 'LMT': return 'limit'
     default: return orderType.toLowerCase()
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readFirstFiniteNumber(
+  payload: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = Number(payload[key])
+    if (Number.isFinite(value)) {
+      return value
+    }
+  }
+  return undefined
+}
+
+function normalizeOpenInterestPayload(payload: unknown): {
+  openInterest: number
+  openInterestValue?: number
+  timestamp?: number
+} {
+  const record = asRecord(payload)
+  const info = asRecord(record.info)
+  return {
+    openInterest:
+      readFirstFiniteNumber(record, ['openInterest', 'openInterestAmount'])
+      ?? readFirstFiniteNumber(info, ['openInterest', 'openInterestAmount', 'amount'])
+      ?? 0,
+    openInterestValue:
+      readFirstFiniteNumber(record, ['openInterestValue', 'notionalValue'])
+      ?? readFirstFiniteNumber(info, ['openInterestValue', 'notionalValue']),
+    timestamp:
+      readFirstFiniteNumber(record, ['timestamp'])
+      ?? readFirstFiniteNumber(info, ['timestamp']),
+  }
+}
+
+function normalizeLiquidationPayload(
+  payload: unknown,
+): {
+  contracts: number
+  price: number
+  timestamp?: number
+} {
+  const record = asRecord(payload)
+  const info = asRecord(record.info)
+  return {
+    contracts:
+      readFirstFiniteNumber(record, ['contracts', 'amount', 'filled'])
+      ?? readFirstFiniteNumber(info, ['contracts', 'amount', 'filled'])
+      ?? 0,
+    price:
+      readFirstFiniteNumber(record, ['price', 'average'])
+      ?? readFirstFiniteNumber(info, ['price', 'average'])
+      ?? 0,
+    timestamp:
+      readFirstFiniteNumber(record, ['timestamp'])
+      ?? readFirstFiniteNumber(info, ['timestamp']),
   }
 }
 
@@ -438,19 +514,23 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       ])
 
       const bal = balance as unknown as Record<string, Record<string, unknown>>
-      const free = parseFloat(String(bal['free']?.['USDT'] ?? bal['free']?.['USD'] ?? 0))
-      const used = parseFloat(String(bal['used']?.['USDT'] ?? bal['used']?.['USD'] ?? 0))
+      const balanceInfo = balance as unknown as { info?: Record<string, unknown> }
+      const free = parseFloat(String(bal['free']?.['USDT'] ?? bal['free']?.['USD'] ?? bal['free']?.['USDC'] ?? 0))
+      const used = parseFloat(String(bal['used']?.['USDT'] ?? bal['used']?.['USD'] ?? bal['used']?.['USDC'] ?? 0))
+      const totalCandidate =
+        bal['total']?.['USDT'] ??
+        bal['total']?.['USD'] ??
+        bal['total']?.['USDC'] ??
+        balanceInfo.info?.['equity'] ??
+        balanceInfo.info?.['totalEquity']
 
-      // Aggregate P&L and market value from positions.
+      // Aggregate unrealized PnL and market value from positions.
       // We use position-level markPrice (which is fresh from the exchange's
-      // websocket feed) rather than balance.total (which is a cached wallet
-      // snapshot that may not update between funding/settlement cycles).
+      // websocket feed) for the fallback net liquidation path.
       let unrealizedPnL = 0
-      let realizedPnL = 0
       let totalPositionValue = 0
       for (const p of rawPositions) {
         unrealizedPnL += parseFloat(String(p.unrealizedPnl ?? 0))
-        realizedPnL += parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0))
 
         // Compute position market value from fresh markPrice
         const contracts = new Decimal(String(p.contracts ?? 0)).abs()
@@ -460,11 +540,17 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         totalPositionValue += quantity.toNumber() * markPrice
       }
 
-      // Reconstruct netLiquidation from fresh components:
-      //   netLiq = available cash + total position market value
-      // This gives a real-time equity figure that tracks markPrice movements,
-      // unlike balance.total which only updates on exchange settlement.
-      const netLiquidation = free + totalPositionValue
+      // Prefer the exchange's own equity / wallet total when available.
+      // Fall back to a reconstructed value only when CCXT does not expose it.
+      const netLiquidation = totalCandidate != null
+        ? parseFloat(String(totalCandidate))
+        : free + totalPositionValue
+
+      const realizedPnlDetails = extractRealizedPnlDetailsFromBalancePayload(balance)
+      let realizedPnL = realizedPnlDetails.realizedPnl
+      if (!realizedPnlDetails.found) {
+        realizedPnL = await this.extractRealizedPnlFromClosedTrades()
+      }
 
       return {
         netLiquidation,
@@ -664,6 +750,96 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     }
   }
 
+  async getOpenInterest(contract: Contract): Promise<OpenInterestSnapshot> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
+    if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
+
+    const exchangeAny = this.exchange as Exchange & {
+      fetchOpenInterest?: (symbol: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+    }
+    if (typeof exchangeAny.fetchOpenInterest !== 'function') {
+      throw new BrokerError('EXCHANGE', `${this.exchangeName} does not support fetchOpenInterest`)
+    }
+
+    try {
+      const payload = normalizeOpenInterestPayload(
+        await exchangeAny.fetchOpenInterest(ccxtSymbol, {}),
+      )
+      const market = this.markets[ccxtSymbol]
+      const openInterestValue = payload.openInterestValue
+      return {
+        contract: market
+          ? marketToContract(market, this.exchangeName)
+          : contract,
+        openInterest: payload.openInterest,
+        openInterestValue: openInterestValue != null && Number.isFinite(openInterestValue) && openInterestValue > 0
+          ? openInterestValue
+          : undefined,
+        timestamp: new Date(typeof payload.timestamp === 'number' ? payload.timestamp : Date.now()),
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
+  }
+
+  async getLiquidationSummary(
+    contract: Contract,
+    sinceMs?: number,
+    limit = 50,
+  ): Promise<LiquidationSummary> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
+    if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
+
+    const exchangeAny = this.exchange as Exchange & {
+      fetchLiquidations?: (
+        symbol: string,
+        since?: number,
+        limit?: number,
+        params?: Record<string, unknown>,
+      ) => Promise<Array<Record<string, unknown>>>
+    }
+    if (typeof exchangeAny.fetchLiquidations !== 'function') {
+      throw new BrokerError('EXCHANGE', `${this.exchangeName} does not support fetchLiquidations`)
+    }
+
+    try {
+      const rows = await exchangeAny.fetchLiquidations(ccxtSymbol, sinceMs, limit, {})
+      const market = this.markets[ccxtSymbol]
+      let totalContracts = 0
+      let totalNotional = 0
+      let latestTs = 0
+      for (const row of rows ?? []) {
+        const normalized = normalizeLiquidationPayload(row)
+        const contracts = normalized.contracts
+        const price = normalized.price
+        if (Number.isFinite(contracts)) totalContracts += contracts
+        if (Number.isFinite(contracts) && Number.isFinite(price)) {
+          totalNotional += contracts * price
+        }
+        const ts = normalized.timestamp ?? 0
+        if (Number.isFinite(ts) && ts > latestTs) latestTs = ts
+      }
+
+      return {
+        contract: market
+          ? marketToContract(market, this.exchangeName)
+          : contract,
+        count: rows?.length ?? 0,
+        totalContracts,
+        totalNotional: totalNotional > 0 ? totalNotional : undefined,
+        sinceMs,
+        limit,
+        timestamp: new Date(latestTs || Date.now()),
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
+  }
+
   async getOrderBook(contract: Contract, limit?: number): Promise<OrderBook> {
     this.ensureInit()
 
@@ -685,5 +861,79 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     } catch (err) {
       throw BrokerError.from(err)
     }
+  }
+
+  private async extractRealizedPnlFromClosedTrades(): Promise<number> {
+    const hasMyTrades = (this.exchange as unknown as { has?: Record<string, unknown> })
+      .has?.fetchMyTrades
+    if (!hasMyTrades) {
+      return 0
+    }
+
+    const utcStart = new Date()
+    utcStart.setUTCHours(0, 0, 0, 0)
+    let sinceMs = utcStart.getTime()
+    const pageLimit = 500
+    const maxPages = 3
+
+    try {
+      const aggregatedTrades: unknown[] = []
+      for (let page = 0; page < maxPages; page++) {
+        const trades = await this.exchange.fetchMyTrades(undefined, sinceMs, pageLimit)
+        if (!Array.isArray(trades) || trades.length === 0) {
+          break
+        }
+        aggregatedTrades.push(...trades)
+        if (trades.length < pageLimit) {
+          break
+        }
+
+        const nextSince = this.computeNextSinceMs(trades, sinceMs)
+        if (nextSince == null) {
+          break
+        }
+        sinceMs = nextSince
+      }
+
+      const extracted = extractRealizedPnlDetailsFromClosedTradesLedger(aggregatedTrades)
+      return extracted.found ? extracted.realizedPnl : 0
+    } catch {
+      return 0
+    }
+  }
+
+  private computeNextSinceMs(trades: unknown[], currentSinceMs: number): number | null {
+    let maxTradeTs = Number.NEGATIVE_INFINITY
+    for (const trade of trades) {
+      if (!trade || typeof trade !== 'object') {
+        continue
+      }
+      const ts = this.parseTradeTimestamp((trade as Record<string, unknown>).timestamp)
+      if (typeof ts === 'number' && Number.isFinite(ts) && ts > maxTradeTs) {
+        maxTradeTs = ts
+      }
+    }
+
+    if (!Number.isFinite(maxTradeTs)) {
+      return null
+    }
+    const nextSince = maxTradeTs + 1
+    if (!Number.isFinite(nextSince) || nextSince <= currentSinceMs) {
+      return null
+    }
+    return nextSince
+  }
+
+  private parseTradeTimestamp(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value.trim())
+      if (Number.isFinite(parsed)) {
+        return parsed
+      }
+    }
+    return undefined
   }
 }

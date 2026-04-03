@@ -73,6 +73,7 @@ export interface AppConfig {
   engine: Record<string, unknown>
   agent: { evolutionMode: boolean; claudeCode: Record<string, unknown> }
   compaction: { maxContextTokens: number; maxOutputTokens: number }
+  strategy?: StrategyConfig
   heartbeat: {
     enabled: boolean
     every: string
@@ -222,6 +223,290 @@ export interface ReconnectResult {
   message?: string
 }
 
+export type CryptoExecutionMode = 'paper_only'
+export type KillSwitchDefaultPolicy = 'block_new_only' | 'block_all'
+
+export interface CryptoExecutionConfig {
+  mode: CryptoExecutionMode
+  enableCryptoDispatcher: boolean
+  requireDecisionTicket: boolean
+  ticketTtlMs: number
+  idempotencyTtlMs: number
+  killSwitchDefaultPolicy: KillSwitchDefaultPolicy
+}
+
+export interface CryptoExecutionRuntime {
+  enabled: boolean
+  mode: CryptoExecutionMode
+  requireDecisionTicket: boolean
+  ticketTtlMs: number
+  idempotencyTtlMs: number
+  killSwitchDefaultPolicy: KillSwitchDefaultPolicy
+  exchangeId: string
+  bridgeActive: boolean
+  intentLedgerPath: string
+  idempotencyStorePath: string
+}
+
+export interface ProcessHealthSummary {
+  status: 'ok'
+  uptime: number
+}
+
+export interface WebReadinessSummary {
+  status: 'ready' | 'not-ready'
+  ready: boolean
+  checks: Record<string, { ok: boolean; detail?: string }>
+}
+
+export interface SignalReadinessSummary {
+  status: 'ready' | 'not-ready'
+  ready: boolean
+  mode: 'paper_only'
+  authEnforced: boolean
+  authConfigured: boolean
+  supportedSymbols: string[]
+  tradingReady: boolean
+  reasons: string[]
+}
+
+export interface TradingRuntimeAccount {
+  id: string
+  label: string
+  type: string
+  enabled: boolean
+  health?: BrokerHealthInfo
+  cryptoExecution?: CryptoExecutionConfig
+  cryptoExecutionRuntime?: CryptoExecutionRuntime
+}
+
+export interface TradingRuntimeSummary {
+  process: ProcessHealthSummary
+  webReadiness: WebReadinessSummary
+  signalReadiness: SignalReadinessSummary
+  accounts: TradingRuntimeAccount[]
+}
+
+export interface StrategyMacroEvent {
+  name: string
+  releaseTimeUtc: number
+  severity: 'high' | 'medium' | 'low'
+  marketScope: Array<'crypto' | 'a-share'>
+  freezeRule: {
+    preFreezeHours: number
+    postFreezeHours: number
+    maxActionDuringFreeze: 'reduce' | 'exit' | 'no-trade' | 'hold'
+  }
+}
+
+export interface StrategyConfig {
+  enabled: boolean
+  governance: {
+    useGovernanceGate: boolean
+    staleDataCapsExecution: boolean
+    preferReduceOnWeakSignal: boolean
+  }
+  runtime: {
+    marketScope: 'crypto' | 'a-share'
+    runtimeIntegrationEnabled: boolean
+  }
+  eventCalendar: {
+    enabled: boolean
+    events: StrategyMacroEvent[]
+  }
+  factors: {
+    fundingRate: { enabled: boolean; weight: number }
+    basis: { enabled: boolean; weight: number }
+    volumeSurge: { enabled: boolean; weight: number }
+    momentumComposite: { enabled: boolean; weight: number }
+  }
+  positionSizing: {
+    enabled: boolean
+    method: 'fixed' | 'kelly' | 'volTarget'
+    defaultAssetLayer: 'core' | 'extended' | 'watch-only'
+    targetVolPct: number
+    maxPctOfEquity: number
+    kellyFraction: number
+    layerConfigs: Array<{
+      layer: 'core' | 'extended' | 'watch-only'
+      maxPositions: number
+      maxPositionPctOfEquity: number
+      minActionStatusToTrade: 'attack' | 'attack-lite' | 'probe' | 'hold' | 'reduce' | 'exit' | 'no-trade'
+      requiresCoreNotRiskOff: boolean
+    }>
+  }
+}
+
+export interface StrategyRuntimeSummary {
+  enabled: boolean
+  governance: StrategyConfig['governance']
+  runtime: StrategyConfig['runtime']
+  eventCalendar: {
+    enabled: boolean
+    configuredEventCount: number
+    active: {
+      active: boolean
+      marketScope: 'crypto' | 'a-share'
+      maxActionDuringFreeze?: 'reduce' | 'exit' | 'no-trade' | 'hold'
+      activeWindows: Array<{
+        startsAtUtc: number
+        endsAtUtc: number
+        event: StrategyMacroEvent
+      }>
+    }
+  }
+  factors: Array<{
+    name: string
+    enabled: boolean
+    weight: number
+  }>
+  positionSizing: StrategyConfig['positionSizing']
+  readiness: {
+    governanceReady: boolean
+    factorLayerReady: boolean
+    dataIntegrationReady: boolean
+    runtimeIntegrationReady: boolean
+    notes: string[]
+  }
+}
+
+export interface StrategyEvaluationSnapshot {
+  symbol: string
+  factorSignals: Array<{
+    name: string
+    value: number
+    confidence: number
+    sourceTier: 'L1' | 'L2' | 'L3' | 'L4' | 'L5'
+    decisionStrength: 'D1' | 'D2' | 'D3' | 'D4' | 'D5'
+    metadata: Record<string, number>
+  }>
+  governance: {
+    actionStatus: string
+    baseActionStatus: string
+    cappedByEventWindow: boolean
+    breakdown: {
+      totalScore: number
+      sourceQualityScore: number
+      marketStructureScore: number
+      eventSafetyScore: number
+      sentimentAlignmentScore: number
+      executionClarityScore: number
+    }
+  }
+  ensemble: {
+    weights: Record<string, number>
+    aggregateValue: number
+    aggregateConfidence: number
+    consensusScore: number
+    decisionStrength: string
+  }
+  freeze: {
+    active: boolean
+    marketScope: 'crypto' | 'a-share'
+    maxActionDuringFreeze?: string
+    activeWindows: Array<{
+      startsAtUtc: number
+      endsAtUtc: number
+      event: StrategyMacroEvent
+    }>
+  }
+  derivedMetrics: {
+    return1hPct: number
+    return6hPct: number
+    return24hPct: number
+    return7dPct: number
+    currentPrice: number
+    currentVolume: number
+    averageVolume: number
+    realizedVolPct: number
+    openInterest: number | null
+    openInterestValue: number | null
+    liquidationCount24h: number | null
+    liquidationNotional24h: number | null
+  }
+  dataProvenance?: {
+    candles: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    fundingRate: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    basis: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    openInterest: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    liquidation: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    equity: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    referencePrice: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    completeness: 'full' | 'partial' | 'minimal'
+  }
+  executionPreview?: {
+    mode: 'applied' | 'pass-through' | 'blocked' | 'fallback'
+    actionStatus: string
+    requestedNotionalUsd: number | null
+    recommendedNotionalUsd: number | null
+    effectiveSize: number | null
+    effectiveUsdSize: number | null
+    effectiveNotionalUsd: number | null
+    assetLayer: 'core' | 'extended' | 'watch-only'
+    fallbackReason?: string
+    blockReason?: string
+    reasons: string[]
+    freeze: {
+      active: boolean
+      maxActionDuringFreeze?: string
+      activeEvents: string[]
+    }
+  }
+  positionSizing: {
+    allowed: boolean
+    maxPositionPctOfEquity: number
+    recommendedPctOfEquity: number
+    requestedPctOfEquity: number
+    recommendedNotionalUsd: number | null
+    assetLayer: 'core' | 'extended' | 'watch-only'
+    equity: number | null
+    method: 'fixed' | 'kelly' | 'volTarget'
+    reasons: string[]
+  }
+}
+
 // ==================== Wallet Status / Push ====================
 
 export interface WalletOperation {
@@ -277,6 +562,7 @@ export interface AccountConfig {
   enabled: boolean
   guards: GuardEntry[]
   brokerConfig: Record<string, unknown>
+  cryptoExecution?: CryptoExecutionConfig
 }
 
 // ==================== Broker Type Metadata (from /broker-types endpoint) ====================
