@@ -343,6 +343,31 @@ export class Wallet implements IWallet {
 
   // ==================== Sync ====================
 
+  private getLatestOrderStatuses(): Map<string, string> {
+    const orderStatus = new Map<string, string>();
+
+    for (let i = this.commits.length - 1; i >= 0; i--) {
+      for (const result of this.commits[i].results) {
+        if (result.orderId && !orderStatus.has(result.orderId)) {
+          orderStatus.set(result.orderId, result.status);
+        }
+      }
+    }
+
+    return orderStatus;
+  }
+
+  private normalizeSyncUpdates(updates: OrderStatusUpdate[]): OrderStatusUpdate[] {
+    const latestByOrderId = new Map<string, OrderStatusUpdate>();
+
+    for (const update of updates) {
+      latestByOrderId.delete(update.orderId);
+      latestByOrderId.set(update.orderId, update);
+    }
+
+    return [...latestByOrderId.values()];
+  }
+
   /**
    * Fetch latest order statuses from exchange and record changes (similar to git pull)
    *
@@ -353,8 +378,18 @@ export class Wallet implements IWallet {
       return { hash: this.head ?? '', updatedCount: 0, updates: [] };
     }
 
+    const normalizedUpdates = this.normalizeSyncUpdates(updates);
+    const latestStatuses = this.getLatestOrderStatuses();
+    const novelUpdates = normalizedUpdates.filter(
+      update => latestStatuses.get(update.orderId) !== update.currentStatus,
+    );
+
+    if (novelUpdates.length === 0) {
+      return { hash: this.head ?? '', updatedCount: 0, updates: [] };
+    }
+
     const hash = generateCommitHash({
-      updates,
+      updates: novelUpdates,
       timestamp: new Date().toISOString(),
       parentHash: this.head,
     });
@@ -362,9 +397,9 @@ export class Wallet implements IWallet {
     const commit: WalletCommit = {
       hash,
       parentHash: this.head,
-      message: `[sync] ${updates.length} order(s) updated`,
-      operations: [{ action: 'syncOrders', params: { orderIds: updates.map(u => u.orderId) } }],
-      results: updates.map(u => ({
+      message: `[sync] ${novelUpdates.length} order(s) updated`,
+      operations: [{ action: 'syncOrders', params: { orderIds: novelUpdates.map(u => u.orderId) } }],
+      results: novelUpdates.map(u => ({
         action: 'syncOrders' as const,
         success: true,
         orderId: u.orderId,
@@ -383,7 +418,7 @@ export class Wallet implements IWallet {
     // Persist
     await this.config.onCommit?.(this.exportState());
 
-    return { hash, updatedCount: updates.length, updates };
+    return { hash, updatedCount: novelUpdates.length, updates: novelUpdates };
   }
 
   /**
@@ -392,16 +427,7 @@ export class Wallet implements IWallet {
    * Scans commit history from newest to oldest, finding pending orders not updated by subsequent syncs
    */
   getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
-    // Scan from newest to oldest, recording the latest known status of each orderId
-    const orderStatus = new Map<string, string>();
-
-    for (let i = this.commits.length - 1; i >= 0; i--) {
-      for (const result of this.commits[i].results) {
-        if (result.orderId && !orderStatus.has(result.orderId)) {
-          orderStatus.set(result.orderId, result.status);
-        }
-      }
-    }
+    const orderStatus = this.getLatestOrderStatuses();
 
     // Find orders that are still pending
     const pending: Array<{ orderId: string; symbol: string }> = [];

@@ -287,6 +287,49 @@ describe('SecWallet', () => {
       expect(result.updatedCount).toBe(0);
       expect(wallet.status().commitCount).toBe(0);
     });
+
+    it('skips a repeat sync when the latest persisted status is unchanged', async () => {
+      const state: WalletState = {
+        cash: 50000, equity: 51500, portfolioValue: 1500,
+        unrealizedPnL: 0, realizedPnL: 0, holdings: [], pendingOrders: [],
+      };
+
+      const first = await wallet.sync(
+        [{ orderId: 'sec-001', symbol: 'AAPL', previousStatus: 'pending', currentStatus: 'filled', filledPrice: 150, filledQty: 10 }],
+        state,
+      );
+
+      expect(first.updatedCount).toBe(1);
+
+      const second = await wallet.sync(
+        [{ orderId: 'sec-001', symbol: 'AAPL', previousStatus: 'pending', currentStatus: 'filled', filledPrice: 150, filledQty: 10 }],
+        state,
+      );
+
+      expect(second.updatedCount).toBe(0);
+      expect(second.hash).toBe(first.hash);
+      expect(second.updates).toEqual([]);
+      expect(wallet.status().commitCount).toBe(1);
+    });
+
+    it('collapses duplicate orderIds within a single sync batch', async () => {
+      const state: WalletState = {
+        cash: 50000, equity: 51500, portfolioValue: 1500,
+        unrealizedPnL: 0, realizedPnL: 0, holdings: [], pendingOrders: [],
+      };
+
+      const result = await wallet.sync(
+        [
+          { orderId: 'sec-001', symbol: 'AAPL', previousStatus: 'pending', currentStatus: 'cancelled' },
+          { orderId: 'sec-001', symbol: 'AAPL', previousStatus: 'pending', currentStatus: 'filled', filledPrice: 150, filledQty: 10 },
+        ],
+        state,
+      );
+
+      expect(result.updatedCount).toBe(1);
+      expect(result.updates).toHaveLength(1);
+      expect(result.updates[0].currentStatus).toBe('filled');
+    });
   });
 
   // ==================== getPendingOrderIds ====================

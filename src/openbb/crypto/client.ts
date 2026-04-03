@@ -22,7 +22,29 @@ export class OpenBBCryptoClient {
   // ==================== Price ====================
 
   async getHistorical(params: Record<string, unknown>) {
-    return this.request('/price/historical', params)
+    const symbol = typeof params.symbol === 'string' ? params.symbol : undefined
+    const candidates = buildHistoricalSymbolCandidates(symbol)
+    let lastError: unknown
+
+    for (const candidate of candidates) {
+      try {
+        const result = await this.request('/price/historical', {
+          ...params,
+          ...(candidate ? { symbol: candidate } : {}),
+        })
+        if (result.length > 0) {
+          return result
+        }
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    if (lastError) {
+      throw lastError
+    }
+
+    return []
   }
 
   // ==================== Search ====================
@@ -69,4 +91,21 @@ export class OpenBBCryptoClient {
     const envelope = (await res.json()) as OBBjectResponse<T>
     return envelope.results ?? []
   }
+}
+
+function buildHistoricalSymbolCandidates(symbol?: string): string[] {
+  if (!symbol) {
+    return ['']
+  }
+
+  const candidates = [symbol]
+  if (symbol.includes('/')) {
+    const withoutSuffix = symbol.replace(/:.+$/, '')
+    candidates.push(
+      withoutSuffix.replace('/', '-'),
+      withoutSuffix.replace('/', ''),
+    )
+  }
+
+  return Array.from(new Set(candidates.filter(Boolean)))
 }

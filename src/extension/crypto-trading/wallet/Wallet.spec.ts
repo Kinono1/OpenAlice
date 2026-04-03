@@ -340,6 +340,49 @@ describe('Wallet', () => {
       expect(result.updatedCount).toBe(0);
       expect(wallet.status().commitCount).toBe(0);
     });
+
+    it('skips a repeat sync when the latest persisted status is unchanged', async () => {
+      const state: WalletState = {
+        balance: 10000, equity: 10000, unrealizedPnL: 0,
+        realizedPnL: 0, positions: [], pendingOrders: [],
+      };
+
+      const first = await wallet.sync(
+        [{ orderId: 'ord-001', symbol: 'BTC/USD', previousStatus: 'pending', currentStatus: 'filled', filledPrice: 95000, filledSize: 0.1 }],
+        state,
+      );
+
+      expect(first.updatedCount).toBe(1);
+
+      const second = await wallet.sync(
+        [{ orderId: 'ord-001', symbol: 'BTC/USD', previousStatus: 'pending', currentStatus: 'filled', filledPrice: 95000, filledSize: 0.1 }],
+        state,
+      );
+
+      expect(second.updatedCount).toBe(0);
+      expect(second.hash).toBe(first.hash);
+      expect(second.updates).toEqual([]);
+      expect(wallet.status().commitCount).toBe(1);
+    });
+
+    it('collapses duplicate orderIds within a single sync batch', async () => {
+      const state: WalletState = {
+        balance: 10000, equity: 10000, unrealizedPnL: 0,
+        realizedPnL: 0, positions: [], pendingOrders: [],
+      };
+
+      const result = await wallet.sync(
+        [
+          { orderId: 'ord-001', symbol: 'BTC/USD', previousStatus: 'pending', currentStatus: 'cancelled' },
+          { orderId: 'ord-001', symbol: 'BTC/USD', previousStatus: 'pending', currentStatus: 'filled', filledPrice: 95000, filledSize: 0.1 },
+        ],
+        state,
+      );
+
+      expect(result.updatedCount).toBe(1);
+      expect(result.updates).toHaveLength(1);
+      expect(result.updates[0].currentStatus).toBe('filled');
+    });
   });
 
   // ==================== getPendingOrderIds ====================

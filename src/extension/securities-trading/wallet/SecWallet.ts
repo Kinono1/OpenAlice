@@ -259,13 +259,48 @@ export class SecWallet implements ISecWallet {
 
   // ==================== Sync ====================
 
+  private getLatestOrderStatuses(): Map<string, string> {
+    const orderStatus = new Map<string, string>();
+
+    for (let i = this.commits.length - 1; i >= 0; i--) {
+      for (const result of this.commits[i].results) {
+        if (result.orderId && !orderStatus.has(result.orderId)) {
+          orderStatus.set(result.orderId, result.status);
+        }
+      }
+    }
+
+    return orderStatus;
+  }
+
+  private normalizeSyncUpdates(updates: OrderStatusUpdate[]): OrderStatusUpdate[] {
+    const latestByOrderId = new Map<string, OrderStatusUpdate>();
+
+    for (const update of updates) {
+      latestByOrderId.delete(update.orderId);
+      latestByOrderId.set(update.orderId, update);
+    }
+
+    return [...latestByOrderId.values()];
+  }
+
   async sync(updates: OrderStatusUpdate[], currentState: WalletState): Promise<SyncResult> {
     if (updates.length === 0) {
       return { hash: this.head ?? '', updatedCount: 0, updates: [] };
     }
 
+    const normalizedUpdates = this.normalizeSyncUpdates(updates);
+    const latestStatuses = this.getLatestOrderStatuses();
+    const novelUpdates = normalizedUpdates.filter(
+      update => latestStatuses.get(update.orderId) !== update.currentStatus,
+    );
+
+    if (novelUpdates.length === 0) {
+      return { hash: this.head ?? '', updatedCount: 0, updates: [] };
+    }
+
     const hash = generateCommitHash({
-      updates,
+      updates: novelUpdates,
       timestamp: new Date().toISOString(),
       parentHash: this.head,
     });
@@ -273,9 +308,9 @@ export class SecWallet implements ISecWallet {
     const commit: WalletCommit = {
       hash,
       parentHash: this.head,
-      message: `[sync] ${updates.length} order(s) updated`,
-      operations: [{ action: 'syncOrders', params: { orderIds: updates.map(u => u.orderId) } }],
-      results: updates.map(u => ({
+      message: `[sync] ${novelUpdates.length} order(s) updated`,
+      operations: [{ action: 'syncOrders', params: { orderIds: novelUpdates.map(u => u.orderId) } }],
+      results: novelUpdates.map(u => ({
         action: 'syncOrders' as const,
         success: true,
         orderId: u.orderId,
@@ -293,19 +328,11 @@ export class SecWallet implements ISecWallet {
 
     await this.config.onCommit?.(this.exportState());
 
-    return { hash, updatedCount: updates.length, updates };
+    return { hash, updatedCount: novelUpdates.length, updates: novelUpdates };
   }
 
   getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
-    const orderStatus = new Map<string, string>();
-
-    for (let i = this.commits.length - 1; i >= 0; i--) {
-      for (const result of this.commits[i].results) {
-        if (result.orderId && !orderStatus.has(result.orderId)) {
-          orderStatus.set(result.orderId, result.status);
-        }
-      }
-    }
+    const orderStatus = this.getLatestOrderStatuses();
 
     const pending: Array<{ orderId: string; symbol: string }> = [];
     const seen = new Set<string>();
