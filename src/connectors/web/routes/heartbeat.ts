@@ -1,13 +1,20 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { EngineContext } from '../../../core/types.js'
 
 const PROMPT_FILE = 'data/brain/heartbeat.md'
 
+interface HeartbeatRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
 /** Heartbeat routes: GET /status, POST /trigger, PUT /enabled, GET/PUT /prompt-file */
-export function createHeartbeatRoutes(ctx: EngineContext) {
+export function createHeartbeatRoutes(ctx: EngineContext, opts?: HeartbeatRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.get('/status', (c) => {
     return c.json({ enabled: ctx.heartbeat.isEnabled() })

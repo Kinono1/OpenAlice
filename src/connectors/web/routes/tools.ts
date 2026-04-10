@@ -1,10 +1,17 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import type { ToolCenter } from '../../../core/tool-center.js'
 import { readToolsConfig, writeConfigSection } from '../../../core/config.js'
 
+interface ToolsRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
 /** Tools routes: GET / (inventory + disabled), PUT / (update disabled list) */
-export function createToolsRoutes(toolCenter: ToolCenter) {
+export function createToolsRoutes(toolCenter: ToolCenter, opts?: ToolsRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.get('/', async (c) => {
     try {

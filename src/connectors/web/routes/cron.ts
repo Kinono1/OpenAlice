@@ -1,10 +1,17 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import type { EngineContext } from '../../../core/types.js'
 import type { CronSchedule } from '../../../task/cron/engine.js'
 
+interface CronRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
 /** Cron routes: GET /jobs, POST /jobs, PUT /jobs/:id, DELETE /jobs/:id, POST /jobs/:id/run */
-export function createCronRoutes(ctx: EngineContext) {
+export function createCronRoutes(ctx: EngineContext, opts?: CronRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.get('/jobs', (c) => {
     return c.json({ jobs: ctx.cronEngine.list() })

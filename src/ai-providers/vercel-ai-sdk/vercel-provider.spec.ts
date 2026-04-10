@@ -112,11 +112,19 @@ describe('VercelAIProvider — per-request overrides', () => {
     mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
     mockCreateAgent.mockReturnValue(makeAgent() as any)
 
-    for await (const _ of provider.generate([], 'test', { vercelAiSdk: { modelId: 'claude-3-7' } as any })) {
+    const override = {
+      provider: 'openai-compatible',
+      model: 'claude-3-7',
+      baseUrl: 'https://example.invalid',
+      apiKey: 'sk-test',
+    }
+
+    for await (const _ of provider.generate([], 'test', { vercelAiSdk: override as any })) {
       // drain
     }
 
     expect(mockCreateAgent).toHaveBeenCalledOnce()
+    expect(mockCreateModelFromConfig).toHaveBeenCalledWith(override)
   })
 })
 

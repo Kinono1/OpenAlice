@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import type { EngineContext } from '../../../core/types.js'
 import {
   readAccountsConfig, writeAccountsConfig,
@@ -6,50 +6,20 @@ import {
 } from '../../../core/config.js'
 import { createBroker } from '../../../domain/trading/brokers/factory.js'
 import { BROKER_REGISTRY } from '../../../domain/trading/brokers/registry.js'
-
-// ==================== Credential helpers ====================
-
-/** Mask a secret string: show last 4 chars, prefix with "****" */
-function mask(value: string): string {
-  if (value.length <= 4) return '****'
-  return '****' + value.slice(-4)
-}
-
-/** Field names that contain sensitive values. Convention-based, not hardcoded per broker. */
-const SENSITIVE = /key|secret|password|token/i
-
-/** Mask all sensitive string fields in a config object (recurses into nested objects). */
-function maskSecrets<T extends Record<string, unknown>>(obj: T): T {
-  const result = { ...obj }
-  for (const [k, v] of Object.entries(result)) {
-    if (typeof v === 'string' && v.length > 0 && SENSITIVE.test(k)) {
-      ;(result as Record<string, unknown>)[k] = mask(v)
-    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
-      ;(result as Record<string, unknown>)[k] = maskSecrets(v as Record<string, unknown>)
-    }
-  }
-  return result
-}
-
-/** Restore masked values (****...) from existing config (recurses into nested objects). */
-function unmaskSecrets(
-  body: Record<string, unknown>,
-  existing: Record<string, unknown>,
-): void {
-  for (const [k, v] of Object.entries(body)) {
-    if (typeof v === 'string' && v.startsWith('****') && typeof existing[k] === 'string') {
-      body[k] = existing[k]
-    } else if (v && typeof v === 'object' && !Array.isArray(v) && existing[k] && typeof existing[k] === 'object') {
-      unmaskSecrets(v as Record<string, unknown>, existing[k] as Record<string, unknown>)
-    }
-  }
-}
+import { createRequireAuth, sanitizeSecretsSection, unmaskSecrets } from './security.js'
+import { getProcessHealthSnapshot, getWebReadinessSnapshot } from './health.js'
+import { getSignalReadinessSnapshot } from './signals.js'
 
 // ==================== Routes ====================
 
 /** Trading config CRUD routes: accounts */
-export function createTradingConfigRoutes(ctx: EngineContext) {
+interface TradingConfigRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
+export function createTradingConfigRoutes(ctx: EngineContext, opts?: TradingConfigRouteOpts) {
   const app = new Hono()
+  app.use('*', opts?.requireAuth ?? createRequireAuth())
 
   // ==================== Broker types (for dynamic UI rendering) ====================
 
@@ -72,8 +42,35 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
   app.get('/', async (c) => {
     try {
       const accounts = await readAccountsConfig()
-      const maskedAccounts = accounts.map((a) => maskSecrets({ ...a }))
+      const maskedAccounts = accounts.map((a) => sanitizeSecretsSection({ ...a }))
       return c.json({ accounts: maskedAccounts })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.get('/runtime', async (c) => {
+    try {
+      const accounts = await readAccountsConfig()
+      const accountSummaries = ctx.accountManager.listAccounts()
+      const summaryById = new Map(accountSummaries.map((account) => [account.id, account]))
+
+      const runtimeAccounts = accounts.map((account) => ({
+        id: account.id,
+        label: account.label ?? account.id,
+        type: account.type,
+        enabled: account.enabled !== false,
+        health: summaryById.get(account.id)?.health,
+        cryptoExecution: account.cryptoExecution,
+        cryptoExecutionRuntime: ctx.accountManager.getExecutionRuntime(account.id),
+      }))
+
+      return c.json({
+        process: getProcessHealthSnapshot(),
+        webReadiness: getWebReadinessSnapshot(ctx),
+        signalReadiness: getSignalReadinessSnapshot(ctx),
+        accounts: runtimeAccounts,
+      })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -93,7 +90,7 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       const accounts = await readAccountsConfig()
       const existing = accounts.find((a) => a.id === id)
       if (existing) {
-        unmaskSecrets(body, existing as unknown as Record<string, unknown>)
+        unmaskSecrets(body as Record<string, unknown>, existing as unknown as Record<string, unknown>)
       }
 
       const validated = accountConfigSchema.parse(body)
@@ -117,7 +114,7 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
         ctx.accountManager.reconnectAccount(id).catch(() => {})
       }
 
-      return c.json(validated)
+      return c.json(sanitizeSecretsSection(validated))
     } catch (err) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)

@@ -1,8 +1,14 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import type { Context } from 'hono'
 import type { EngineContext } from '../../../core/types.js'
 import { BrokerError } from '../../../domain/trading/brokers/types.js'
 import type { UnifiedTradingAccount } from '../../../domain/trading/UnifiedTradingAccount.js'
+import { createRequireAuth, createRequireTrade } from './security.js'
+
+interface TradingRouteOpts {
+  requireAuth?: MiddlewareHandler
+  requireTrade?: MiddlewareHandler
+}
 
 /** Resolve account by :id param, return 404 if not found. */
 function resolveAccount(ctx: EngineContext, c: Context): UnifiedTradingAccount | null {
@@ -42,18 +48,32 @@ async function queryAccount<T>(
 }
 
 /** Unified trading routes — works with all account types via AccountManager */
-export function createTradingRoutes(ctx: EngineContext) {
+export function createTradingRoutes(ctx: EngineContext, opts?: TradingRouteOpts) {
   const app = new Hono()
+  const requireAuth = opts?.requireAuth ?? createRequireAuth()
+  const requireTrade = opts?.requireTrade ?? createRequireTrade()
+
+  async function enforce(c: Context, middleware: MiddlewareHandler): Promise<Response | null> {
+    let passed = false
+    const maybeResponse = await middleware(c, async () => {
+      passed = true
+    })
+    return passed ? null : (maybeResponse as Response | null) ?? c.json({ error: 'unauthorized' }, 401)
+  }
 
   // ==================== Accounts listing ====================
 
-  app.get('/accounts', (c) => {
+  app.get('/accounts', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     return c.json({ accounts: ctx.accountManager.listAccounts() })
   })
 
   // ==================== Aggregated equity ====================
 
   app.get('/equity', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const equity = await ctx.accountManager.getAggregatedEquity()
     return c.json(equity)
   })
@@ -62,6 +82,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Reconnect
   app.post('/accounts/:id/reconnect', async (c) => {
+    const denied = await enforce(c, requireTrade)
+    if (denied) return denied
     const id = c.req.param('id')
     const result = await ctx.accountManager.reconnectAccount(id)
     return c.json(result, result.success ? 200 : 500)
@@ -69,6 +91,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Account info
   app.get('/accounts/:id/account', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const account = resolveAccount(ctx, c)
     if (!account) return c.json({ error: 'Account not found' }, 404)
     return queryAccount(c, account, () => account.getAccount())
@@ -76,6 +100,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Positions
   app.get('/accounts/:id/positions', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const account = resolveAccount(ctx, c)
     if (!account) return c.json({ error: 'Account not found' }, 404)
     return queryAccount(c, account, async () => ({ positions: await account.getPositions() }))
@@ -83,6 +109,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Orders
   app.get('/accounts/:id/orders', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const account = resolveAccount(ctx, c)
     if (!account) return c.json({ error: 'Account not found' }, 404)
     return queryAccount(c, account, async () => {
@@ -95,6 +123,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Market clock
   app.get('/accounts/:id/market-clock', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const account = resolveAccount(ctx, c)
     if (!account) return c.json({ error: 'Account not found' }, 404)
     return queryAccount(c, account, () => account.getMarketClock())
@@ -102,6 +132,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Quote
   app.get('/accounts/:id/quote/:symbol', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const account = resolveAccount(ctx, c)
     if (!account) return c.json({ error: 'Account not found' }, 404)
     return queryAccount(c, account, async () => {
@@ -114,7 +146,9 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // ==================== Per-account wallet/git routes ====================
 
-  app.get('/accounts/:id/wallet/log', (c) => {
+  app.get('/accounts/:id/wallet/log', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const uta = ctx.accountManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     const limit = Number(c.req.query('limit')) || 20
@@ -122,7 +156,9 @@ export function createTradingRoutes(ctx: EngineContext) {
     return c.json({ commits: uta.log({ limit, symbol }) })
   })
 
-  app.get('/accounts/:id/wallet/show/:hash', (c) => {
+  app.get('/accounts/:id/wallet/show/:hash', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const uta = ctx.accountManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     const commit = uta.show(c.req.param('hash'))
@@ -130,7 +166,9 @@ export function createTradingRoutes(ctx: EngineContext) {
     return c.json(commit)
   })
 
-  app.get('/accounts/:id/wallet/status', (c) => {
+  app.get('/accounts/:id/wallet/status', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     const uta = ctx.accountManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     return c.json(uta.status())
@@ -138,6 +176,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Reject (records a user-rejected commit, clears staging)
   app.post('/accounts/:id/wallet/reject', async (c) => {
+    const denied = await enforce(c, requireTrade)
+    if (denied) return denied
     const uta = ctx.accountManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     if (!uta.status().pendingMessage) return c.json({ error: 'Nothing to reject' }, 400)
@@ -153,6 +193,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Push (manual approval — the AI tool is hollowed out, only humans can push)
   app.post('/accounts/:id/wallet/push', async (c) => {
+    const denied = await enforce(c, requireTrade)
+    if (denied) return denied
     const uta = ctx.accountManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     if (!uta.status().pendingMessage) return c.json({ error: 'Nothing to push' }, 400)
@@ -168,6 +210,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Per-account snapshots
   app.get('/accounts/:id/snapshots', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     if (!ctx.snapshotService) return c.json({ snapshots: [] })
     const id = c.req.param('id')
     const limit = Number(c.req.query('limit')) || 100
@@ -181,6 +225,8 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Aggregated equity curve across all accounts
   app.get('/snapshots/equity-curve', async (c) => {
+    const denied = await enforce(c, requireAuth)
+    if (denied) return denied
     if (!ctx.snapshotService) return c.json({ points: [] })
     const limit = Number(c.req.query('limit')) || 200
 

@@ -19,11 +19,13 @@ import { z } from 'zod'
 import { glob } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import type { Plugin, EngineContext } from '../../core/types.js'
+import { createCorsOriginResolver } from '../../core/cors.js'
 import { SessionStore, toTextHistory } from '../../core/session.js'
 import { McpAskConnector } from './mcp-ask-connector.js'
 
 export interface McpAskConfig {
   port: number
+  allowOrigins?: string[]
 }
 
 const SESSION_PREFIX = 'mcp-ask'
@@ -113,7 +115,7 @@ export class McpAskPlugin implements Plugin {
     const app = new Hono()
 
     app.use('*', cors({
-      origin: '*',
+      origin: createCorsOriginResolver(this.config.allowOrigins),
       allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
       exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],

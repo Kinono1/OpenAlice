@@ -5,29 +5,12 @@ import { ConfigSection, Field, inputClass } from '../components/form'
 import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave'
 import { PageHeader } from '../components/PageHeader'
 import { PageLoading } from '../components/StateViews'
+import { PROVIDER_MODELS, UI_PROVIDER_DEFAULTS } from '../generated/approvedModelRegistry'
 
 const LOGIN_METHODS: { value: LoginMethod; label: string; subtitle: string; hint: string }[] = [
   { value: 'claudeai', label: 'Claude Pro/Max', subtitle: 'Use your Claude subscription', hint: 'Requires local Claude Code login (run claude login in terminal). No API key needed.' },
   { value: 'api-key', label: 'API Key', subtitle: 'Pay per token', hint: 'Enter your Anthropic API key below. Billed per token to your API account.' },
 ]
-
-const PROVIDER_MODELS: Record<string, { label: string; value: string }[]> = {
-  anthropic: [
-    { label: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
-    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
-    { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5' },
-  ],
-  openai: [
-    { label: 'GPT-5.2 Pro', value: 'gpt-5.2-pro' },
-    { label: 'GPT-5.2', value: 'gpt-5.2' },
-    { label: 'GPT-5 Mini', value: 'gpt-5-mini' },
-  ],
-  google: [
-    { label: 'Gemini 3.1 Pro', value: 'gemini-3.1-pro-preview' },
-    { label: 'Gemini 3 Flash', value: 'gemini-3-flash-preview' },
-    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
-  ],
-}
 
 const PROVIDERS = [
   { value: 'anthropic', label: 'Anthropic' },
@@ -54,9 +37,9 @@ type UIBackend = 'agent-sdk' | 'openai' | 'vercel-ai-sdk'
 
 /** Default provider/model per UI backend — applied on every switch to avoid stale config. */
 const BACKEND_DEFAULTS: Record<UIBackend, { backend: string; provider: string; model: string }> = {
-  'agent-sdk':    { backend: 'agent-sdk',    provider: 'anthropic', model: 'claude-sonnet-4-6' },
-  'openai':       { backend: 'vercel-ai-sdk', provider: 'openai',   model: PROVIDER_MODELS.openai[0].value },
-  'vercel-ai-sdk': { backend: 'vercel-ai-sdk', provider: 'anthropic', model: PROVIDER_MODELS.anthropic[0].value },
+  'agent-sdk':    { backend: 'agent-sdk',    provider: 'anthropic', model: UI_PROVIDER_DEFAULTS.anthropic },
+  'openai':       { backend: 'vercel-ai-sdk', provider: 'openai',   model: UI_PROVIDER_DEFAULTS.openai },
+  'vercel-ai-sdk': { backend: 'vercel-ai-sdk', provider: 'anthropic', model: UI_PROVIDER_DEFAULTS.anthropic },
 }
 
 /** Derive initial UI backend from config. */
@@ -182,7 +165,7 @@ export function AIProviderPage() {
 
 function OpenAIForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
   const presets = PROVIDER_MODELS.openai
-  const initModel = aiProvider.provider === 'openai' && aiProvider.model ? aiProvider.model : presets[0].value
+  const initModel = aiProvider.provider === 'openai' && aiProvider.model ? aiProvider.model : UI_PROVIDER_DEFAULTS.openai
   const isPreset = presets.some((p) => p.value === initModel)
 
   const [model, setModel] = useState(isPreset ? initModel : '')
@@ -375,7 +358,7 @@ function ModelForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
       setSdkProvider(newUiProvider)
       const defaults = PROVIDER_MODELS[newUiProvider]
       if (defaults?.length) {
-        setModel(defaults[0].value)
+        setModel(UI_PROVIDER_DEFAULTS[newUiProvider] ?? defaults[0].value)
         setCustomModel('')
       } else {
         setModel('')

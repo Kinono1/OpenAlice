@@ -3,7 +3,7 @@ import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import type { Tool } from 'ai'
+import { createCorsOriginResolver } from '../core/cors.js'
 import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
 
@@ -47,6 +47,18 @@ function toMcpContent(result: unknown): McpContent[] {
   return [{ type: 'text', text: JSON.stringify(result) }]
 }
 
+type McpToolRegistrationInput = {
+  description?: string
+  inputSchema?: unknown
+}
+
+export function buildMcpToolRegistration(name: string, tool: McpToolRegistrationInput) {
+  return {
+    description: tool.description ?? name,
+    inputSchema: (tool.inputSchema as any)?.shape ?? {},
+  }
+}
+
 /**
  * MCP Plugin — exposes tools via Streamable HTTP.
  *
@@ -60,6 +72,7 @@ export class McpPlugin implements Plugin {
   constructor(
     private toolCenter: ToolCenter,
     private port: number,
+    private allowOrigins: string[] = [],
   ) {}
 
   async start(_ctx: EngineContext) {
@@ -72,12 +85,11 @@ export class McpPlugin implements Plugin {
       for (const [name, t] of Object.entries(tools)) {
         if (!t.execute) continue
 
-        // Extract raw shape from z.object() for MCP's inputSchema
-        const shape = (t.inputSchema as any)?.shape ?? {}
+        const { description, inputSchema } = buildMcpToolRegistration(name, t)
 
         mcp.registerTool(name, {
-          description: t.description,
-          inputSchema: shape,
+          description,
+          inputSchema,
         }, async (args: any) => {
           try {
             const result = await t.execute!(args, {
@@ -100,7 +112,7 @@ export class McpPlugin implements Plugin {
     const app = new Hono()
 
     app.use('*', cors({
-      origin: '*',
+      origin: createCorsOriginResolver(this.allowOrigins),
       allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
       exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],

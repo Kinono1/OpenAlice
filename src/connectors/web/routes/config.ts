@@ -1,18 +1,31 @@
-import { Hono } from 'hono'
-import { loadConfig, writeConfigSection, readAIProviderConfig, readMarketDataConfig, validSections, writeAIBackend, type ConfigSection, type AIBackend } from '../../../core/config.js'
+import { Hono, type MiddlewareHandler } from 'hono'
+import {
+  loadConfig,
+  writeConfigSection,
+  readAIProviderConfig,
+  readMarketDataConfig,
+  validSections,
+  writeAIBackend,
+  type ConfigSection,
+  type AIBackend,
+} from '../../../core/config.js'
+import { createRequireAuth, sanitizeSecrets, unmaskSecrets } from './security.js'
 
 interface ConfigRouteOpts {
   onConnectorsChange?: () => Promise<void>
+  requireAuth?: MiddlewareHandler
 }
 
 /** Config routes: GET /, PUT /ai-provider, PUT /:section, GET /api-keys/status */
 export function createConfigRoutes(opts?: ConfigRouteOpts) {
   const app = new Hono()
 
+  app.use('*', opts?.requireAuth ?? createRequireAuth())
+
   app.get('/', async (c) => {
     try {
       const config = await loadConfig()
-      return c.json(config)
+      return c.json(sanitizeSecrets(config))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -39,12 +52,17 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
         return c.json({ error: `Invalid section "${section}". Valid: ${validSections.join(', ')}` }, 400)
       }
       const body = await c.req.json()
+      const current = await loadConfig()
+      const existingSection = (current as Record<string, unknown>)[section]
+      if (body && typeof body === 'object' && existingSection && typeof existingSection === 'object') {
+        unmaskSecrets(body as Record<string, unknown>, existingSection)
+      }
       const validated = await writeConfigSection(section, body)
       // Hot-reload connectors / OpenBB server when their config changes
       if (section === 'connectors' || section === 'marketData') {
         await opts?.onConnectorsChange?.()
       }
-      return c.json(validated)
+      return c.json(sanitizeSecrets(validated))
     } catch (err) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
@@ -70,7 +88,7 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
 }
 
 /** Market data routes: POST /test-provider */
-export function createMarketDataRoutes() {
+export function createMarketDataRoutes(opts?: ConfigRouteOpts) {
   const TEST_ENDPOINTS: Record<string, { credField: string; path: string }> = {
     fred:             { credField: 'fred_api_key',             path: '/api/v1/economy/fred_search?query=GDP&provider=fred' },
     bls:              { credField: 'bls_api_key',              path: '/api/v1/economy/survey/bls_search?query=unemployment&provider=bls' },
@@ -83,6 +101,9 @@ export function createMarketDataRoutes() {
   }
 
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.post('/test-provider', async (c) => {
     try {

@@ -135,6 +135,9 @@ export interface AskOptions {
 
 /** Reads runtime AI config and resolves to the correct AIProvider. */
 export class GenerateRouter {
+  private configCache: { backend: string; ts: number } | null = null
+  private static CONFIG_TTL_MS = 5_000
+
   constructor(
     private vercel: AIProvider,
     private agentSdk: AIProvider | null = null,
@@ -146,8 +149,12 @@ export class GenerateRouter {
     if ((override === 'agent-sdk' || override === 'claude-code') && this.agentSdk) return this.agentSdk
     if (override === 'vercel-ai-sdk') return this.vercel
 
-    const config = await readAIProviderConfig()
-    if ((config.backend === 'agent-sdk' || config.backend === 'claude-code') && this.agentSdk) return this.agentSdk
+    const now = Date.now()
+    if (!this.configCache || (now - this.configCache.ts) > GenerateRouter.CONFIG_TTL_MS) {
+      const config = await readAIProviderConfig()
+      this.configCache = { backend: config.backend, ts: now }
+    }
+    if ((this.configCache.backend === 'agent-sdk' || this.configCache.backend === 'claude-code') && this.agentSdk) return this.agentSdk
     return this.vercel
   }
 
