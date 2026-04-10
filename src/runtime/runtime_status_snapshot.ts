@@ -20,6 +20,34 @@ export interface RuntimeStatusSnapshotInput {
     pass: boolean;
     blockingReasons: string[];
     warnings?: string[];
+    diagnostics?: {
+      verdictResult?: string | null;
+      verdictReasonCodes?: string[];
+      portfolioReasonCodes?: string[];
+      validationReasons?: string[];
+      portfolioCandidateFailures?: Array<{
+        strategyId: string;
+        strategyName: string | null;
+        failureReasons: string[];
+      }>;
+      symbolDiagnostics?: Array<{
+        symbol: string;
+        result: string | null;
+        reasonCodes: string[];
+        candidateFailures: Array<{
+          strategyId: string;
+          strategyName: string | null;
+          failureReasons: string[];
+        }>;
+      }>;
+      releaseGate?: {
+        source?: string;
+        allowPaperTrading?: boolean | null;
+        allowLiveTrading?: boolean | null;
+        failedChecks?: string[];
+        warningChecks?: string[];
+      };
+    };
   };
   paperGate: {
     allowPaperTrading: boolean;
@@ -97,6 +125,7 @@ export function buildRuntimeStatusSnapshot(
     proofTracking: input.proofTracking,
     hasNonFlatTarget,
   });
+  const promotionDiagnostics = buildPromotionDiagnosticsSummary(input);
 
   const paperPromotionStatus: Record<string, unknown> = {
     generatedAt,
@@ -107,6 +136,7 @@ export function buildRuntimeStatusSnapshot(
     canPromote: input.promotionGate.pass,
     blockingReasons: [...input.promotionGate.blockingReasons],
     warnings: [...(input.promotionGate.warnings ?? [])],
+    diagnostics: promotionDiagnostics,
     readiness: phaseReadiness.research,
   };
 
@@ -125,6 +155,7 @@ export function buildRuntimeStatusSnapshot(
     finalAllowPaperTrading: input.paperGate.allowPaperTrading,
     blockingReasons: [...input.paperGate.blockingReasons],
     warnings: [...(input.paperGate.warnings ?? [])],
+    promotionDiagnostics,
     readiness: phaseReadiness.paper,
   };
 
@@ -137,6 +168,7 @@ export function buildRuntimeStatusSnapshot(
     blockingReasons: combinedBlockingReasons,
     executionPlanKind: input.executionPlan.kind,
     portfolioPlan,
+    promotionDiagnostics,
     phaseReadinessSummary: {
       researchStatus: phaseReadiness.research.status,
       paperStatus: phaseReadiness.paper.status,
@@ -185,6 +217,7 @@ export function buildRuntimeStatusSnapshot(
       blockingReasons: input.executionPlan.kind === "blocked"
         ? combinedBlockingReasons
         : [],
+      promotionDiagnostics,
     },
     paperGate: paperGateStatus,
     phaseReadiness,
@@ -390,6 +423,55 @@ function buildPhaseReadiness(input: {
     paper,
     liveTinyCapital,
     proofTracking,
+  };
+}
+
+function buildPromotionDiagnosticsSummary(
+  input: RuntimeStatusSnapshotInput,
+): Record<string, unknown> {
+  return {
+    verdictResult: input.promotionGate.diagnostics?.verdictResult ?? null,
+    verdictReasonCodes: [
+      ...(input.promotionGate.diagnostics?.verdictReasonCodes ?? []),
+    ],
+    portfolioReasonCodes: [
+      ...(input.promotionGate.diagnostics?.portfolioReasonCodes ?? []),
+    ],
+    validationReasons: [
+      ...(input.promotionGate.diagnostics?.validationReasons ?? []),
+    ],
+    portfolioCandidateFailures: (
+      input.promotionGate.diagnostics?.portfolioCandidateFailures ?? []
+    ).map(candidate => ({
+      strategyId: candidate.strategyId,
+      strategyName: candidate.strategyName,
+      failureReasons: [...candidate.failureReasons],
+    })),
+    symbolDiagnostics: (input.promotionGate.diagnostics?.symbolDiagnostics ?? []).map(
+      symbol => ({
+        symbol: symbol.symbol,
+        result: symbol.result,
+        reasonCodes: [...symbol.reasonCodes],
+        candidateFailures: symbol.candidateFailures.map(candidate => ({
+          strategyId: candidate.strategyId,
+          strategyName: candidate.strategyName,
+          failureReasons: [...candidate.failureReasons],
+        })),
+      }),
+    ),
+    releaseGate: {
+      source: input.promotionGate.diagnostics?.releaseGate?.source ?? "missing",
+      allowPaperTrading:
+        input.promotionGate.diagnostics?.releaseGate?.allowPaperTrading ?? null,
+      allowLiveTrading:
+        input.promotionGate.diagnostics?.releaseGate?.allowLiveTrading ?? null,
+      failedChecks: [
+        ...(input.promotionGate.diagnostics?.releaseGate?.failedChecks ?? []),
+      ],
+      warningChecks: [
+        ...(input.promotionGate.diagnostics?.releaseGate?.warningChecks ?? []),
+      ],
+    },
   };
 }
 

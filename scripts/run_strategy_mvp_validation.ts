@@ -378,6 +378,8 @@ async function main(): Promise<void> {
   await writeReleaseGateStatus(portfolioReleaseGate, {
     filePath: args.releaseGateStatusPath,
     sourceReportPath: resolve(args.output),
+    result: aggregatePass ? 'GO' : 'NO_GO',
+    reasonCodes,
   })
 
   const verdictPayload = {
@@ -1167,6 +1169,8 @@ function buildChampionPayload(symbol: string, run: EnrichedRun) {
 }
 
 function buildDetailedCandidatePayload(symbol: string, run: EnrichedRun) {
+  const failedWindowRatio =
+    run.wfo.windows.length > 0 ? run.wfo.failedWindows / run.wfo.windows.length : 0
   return {
     symbol,
     strategyId: run.candidate.strategyId,
@@ -1181,6 +1185,7 @@ function buildDetailedCandidatePayload(symbol: string, run: EnrichedRun) {
     applicableSymbols: run.candidate.applicableSymbols,
     status: run.candidatePass ? 'pass' : 'fail',
     failureReasons: run.failureReasons,
+    blockerSummary: buildCandidateBlockerSummary(run, failedWindowRatio),
     backtestMetrics: run.backtest.metrics,
     significance: {
       pbo: run.admissionSignificance.pboResult.pbo,
@@ -1199,9 +1204,58 @@ function buildDetailedCandidatePayload(symbol: string, run: EnrichedRun) {
       overallPassed: run.wfo.overallPassed,
       failedWindows: run.wfo.failedWindows,
       windowCount: run.wfo.windows.length,
+      failedWindowRatio,
     },
     sampleSplit: run.sampleSplit,
   }
+}
+
+function buildCandidateBlockerSummary(run: EnrichedRun, failedWindowRatio: number) {
+  const releaseGateFailedChecks = [...run.releaseGate.failedChecks]
+  return {
+    primaryBlocker: resolvePrimaryBlocker(run, releaseGateFailedChecks),
+    admission: {
+      passed: run.candidatePass,
+      failureReasons: [...run.failureReasons],
+    },
+    fdr: {
+      passed: run.fdr.passed,
+      qValue: run.fdr.qValue,
+      threshold: run.fdr.threshold,
+    },
+    candidateLevelFdr: {
+      passed: run.candidateLevelFdr.passed,
+      qValue: run.candidateLevelFdr.qValue,
+      threshold: run.candidateLevelFdr.threshold,
+    },
+    releaseGate: {
+      allowPaperTrading: run.releaseGate.allowPaperTrading,
+      allowLiveTrading: run.releaseGate.allowLiveTrading,
+      failedChecks: releaseGateFailedChecks,
+    },
+    wfo: {
+      passed: run.wfo.overallPassed,
+      failedWindows: run.wfo.failedWindows,
+      windowCount: run.wfo.windows.length,
+      failedWindowRatio,
+    },
+  }
+}
+
+function resolvePrimaryBlocker(
+  run: EnrichedRun,
+  releaseGateFailedChecks: ReleaseGateCheck['name'][],
+): 'fdr' | 'release_gate' | 'wfo' | 'candidate_pass' {
+  if (!run.fdr.passed) {
+    return 'fdr'
+  }
+  if (releaseGateFailedChecks.includes('wfo')) {
+    return 'wfo'
+  }
+  if (!run.releaseGate.allowPaperTrading) {
+    return 'release_gate'
+  }
+  return 'candidate_pass'
 }
 
 function buildDatasetConfigPayload(datasetSymbols: DatasetSymbolTarget[]) {

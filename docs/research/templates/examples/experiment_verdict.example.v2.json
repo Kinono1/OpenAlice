@@ -2,38 +2,113 @@
   "schemaVersion": "experiment_verdict.v2",
   "generatedAt": "2026-03-02T16:15:00Z",
   "result": "NO_GO",
-  "reasonCodes": ["HARD_FDR_THRESHOLD_FAIL"],
+  "reasonCodes": [
+    "HARD_FDR_THRESHOLD_FAIL",
+    "HARD_NO_CANDIDATE_PASS",
+    "HARD_PORTFOLIO_CHAMPION_SET_INCOMPLETE",
+    "HARD_RELEASE_GATE_BLOCKED",
+    "HARD_SYMBOL_NO_GO:BTC/USD"
+  ],
   "thresholds": {
     "meanPboMax": 0.2,
     "meanDsrProbabilityMin": 0.5,
     "fdrQMax": 0.1
   },
   "aggregateMetrics": {
-    "meanPbo": 0.18,
-    "meanDsrProbability": 0.54,
-    "fdrQ": 0.13
+    "meanPbo": 0.11428571428571428,
+    "meanDsrProbability": 0.6494559480195061,
+    "fdrQ": 1
   },
-  "candidates": [
+  "championSet": [],
+  "portfolio": {
+    "requiredSymbols": ["BTC/USD"],
+    "championSet": [],
+    "releaseGate": {
+      "allowPaperTrading": false,
+      "allowLiveTrading": false,
+      "failedChecks": []
+    },
+    "result": "NO_GO",
+    "reasonCodes": [
+      "HARD_FDR_THRESHOLD_FAIL",
+      "HARD_NO_CANDIDATE_PASS",
+      "HARD_PORTFOLIO_CHAMPION_SET_INCOMPLETE",
+      "HARD_RELEASE_GATE_BLOCKED",
+      "HARD_SYMBOL_NO_GO:BTC/USD"
+    ]
+  },
+  "symbols": [
     {
-      "strategyId": "S1",
-      "strategyName": "trend_baseline",
-      "status": "fail",
-      "metrics": {
-        "pbo": 0.19,
-        "dsrProbability": 0.58,
-        "fdrQ": 0.13
+      "symbol": "BTC/USD",
+      "result": "NO_GO",
+      "reasonCodes": [
+        "HARD_FDR_THRESHOLD_FAIL",
+        "HARD_NO_CANDIDATE_PASS"
+      ],
+      "aggregateMetrics": {
+        "meanPbo": 0.11428571428571428,
+        "meanDsrProbability": 0.6494559480195061,
+        "fdrQ": 1,
+        "fdrMethod": "bh",
+        "fdrDiagnostics": {
+          "method": "bh",
+          "alpha": 0.1,
+          "candidateCount": 3,
+          "harmonicFactorCm": null,
+          "storeyPi0": null,
+          "storeyLambda": null,
+          "cvAggQuantile": null,
+          "candidateWindowCounts": null,
+          "approximation": null,
+          "orderedPValues": null,
+          "stepcCombinedPValues": null,
+          "selectionCutoff": null,
+          "benchmarkStrategyId": null,
+          "benchmarkStrategyIndex": null
+        },
+        "wfoProfile": "stable"
       },
-      "releaseGate": {
-        "allowPaperTrading": true,
-        "allowLiveTrading": false,
-        "failedChecks": ["significance"]
+      "champion": null,
+      "leader": {
+        "symbol": "BTC/USD",
+        "strategyId": "T42_21_70_LS_C1_D0",
+        "strategyName": "trend_21_70_ls_c1_d0",
+        "strategy": "trend",
+        "role": null,
+        "sharpe": 2.3914357183964943,
+        "releaseGateAllowPaper": false,
+        "releaseGateAllowLive": false,
+        "fdrQ": 0.36501188055431033,
+        "familyKey": "btc_usd_trend_family_21_70_c1_d0_ls",
+        "correlationBucket": "btc_usd_trend_21_70_c1_d0_ls",
+        "applicableSymbols": ["BTC/USD"]
       },
-      "failureReasonCode": "HARD_FDR_THRESHOLD_FAIL"
+      "candidates": [
+        {
+          "strategyId": "T42_21_70_LS_C1_D0",
+          "strategyName": "trend_21_70_ls_c1_d0",
+          "strategy": "trend",
+          "role": null,
+          "familyKey": "btc_usd_trend_family_21_70_c1_d0_ls",
+          "correlationBucket": "btc_usd_trend_21_70_c1_d0_ls",
+          "familyRepresentative": true,
+          "status": "fail",
+          "metrics": {
+            "pbo": 0.11428571428571428,
+            "dsrProbability": 0.6698227986749962,
+            "fdrQ": 0.36501188055431033
+          },
+          "failureReasons": [
+            "HARD_FDR_THRESHOLD_FAIL",
+            "HARD_RELEASE_GATE_BLOCKED"
+          ]
+        }
+      ]
     }
   ],
   "outputPaths": {
     "validationRuns": "data/research/strategy/strategy_validation_runs.json",
     "releaseGateStatus": "data/runtime/release_gate_status.json"
   },
-  "notes": "Example NO_GO verdict due FDR threshold breach."
+  "notes": "Example NO_GO verdict where FDR blocks admission and no champion clears release gating."
 }

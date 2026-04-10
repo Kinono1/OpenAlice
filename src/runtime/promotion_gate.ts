@@ -3,12 +3,44 @@ import {
   type PersistedReleaseGateStatus,
 } from "./release_gate_status.js";
 
+export interface PromotionGateCandidateFailureDiagnostics {
+  strategyId: string;
+  strategyName: string | null;
+  failureReasons: string[];
+}
+
+export interface PromotionGateSymbolDiagnostics {
+  symbol: string;
+  result: string | null;
+  reasonCodes: string[];
+  candidateFailures: PromotionGateCandidateFailureDiagnostics[];
+}
+
+export interface PromotionGateArchiveReleaseGateDiagnostics {
+  source: "experiment_verdict" | "release_gate_status" | "missing";
+  allowPaperTrading: boolean | null;
+  allowLiveTrading: boolean | null;
+  failedChecks: string[];
+  warningChecks: string[];
+}
+
+export interface PromotionGateDiagnostics {
+  verdictResult: string | null;
+  verdictReasonCodes: string[];
+  portfolioReasonCodes: string[];
+  validationReasons: string[];
+  portfolioCandidateFailures: PromotionGateCandidateFailureDiagnostics[];
+  symbolDiagnostics: PromotionGateSymbolDiagnostics[];
+  releaseGate: PromotionGateArchiveReleaseGateDiagnostics;
+}
+
 export interface PromotionGateVerdict {
   pass: boolean;
   blockingReasons: string[];
   warnings: string[];
   evidenceRefs: string[];
   decidedAt: string;
+  diagnostics: PromotionGateDiagnostics;
 }
 
 export interface PromotionGateInput {
@@ -102,7 +134,15 @@ export function evaluatePromotionGate(
     }
   }
 
-  const releaseGateDecision = isReleaseGateStatusBlocking(input.releaseGateStatus);
+  const archiveReleaseGate = resolveArchiveReleaseGateDiagnostics(
+    input.experimentVerdict,
+    input.releaseGateStatus,
+  );
+  const releaseGateDecision = isReleaseGateStatusBlocking(
+    input.releaseGateStatus,
+    "paper",
+    input.now,
+  );
   if (releaseGateDecision.blocking) {
     if (releaseGateDecision.reason === "release_gate_status_missing") {
       blockingReasons.push("release_gate_status_missing");
@@ -128,6 +168,22 @@ export function evaluatePromotionGate(
     warnings: unique(warnings),
     evidenceRefs: unique(evidenceRefs),
     decidedAt,
+    diagnostics: {
+      verdictResult: verdict?.result ?? null,
+      verdictReasonCodes: extractStringArray(
+        input.experimentVerdict,
+        "reasonCodes",
+      ),
+      portfolioReasonCodes: extractNestedStringArray(
+        input.experimentVerdict,
+        "portfolio",
+        "reasonCodes",
+      ),
+      validationReasons: [...validationRuns.reasons],
+      portfolioCandidateFailures: extractCandidateFailures(input.experimentVerdict),
+      symbolDiagnostics: extractSymbolDiagnostics(input.experimentVerdict),
+      releaseGate: archiveReleaseGate,
+    },
   };
 }
 
@@ -168,15 +224,21 @@ function normalizeValidationRuns(
     championSet?: ValidationRunsChampionSetEntry[];
     championsBySymbol?: Record<string, ValidationRunsChampionSetEntry | string>;
     candidates?: ValidationRunsCandidate[];
+    portfolio?: {
+      championSet?: ValidationRunsChampionSetEntry[];
+    };
   };
+  const championSetSource = Array.isArray(value.championSet)
+    ? value.championSet
+    : Array.isArray(value.portfolio?.championSet)
+      ? value.portfolio.championSet
+      : [];
   return {
     champion:
       value.champion && typeof value.champion === "object"
         ? value.champion
         : null,
-    championSet: Array.isArray(value.championSet)
-      ? value.championSet.filter(entry => entry && typeof entry === "object")
-      : [],
+    championSet: championSetSource.filter(entry => entry && typeof entry === "object"),
     championsBySymbol:
       value.championsBySymbol && typeof value.championsBySymbol === "object"
         ? value.championsBySymbol
@@ -398,6 +460,212 @@ function collectEvidenceRefs(input: PromotionGateInput): string[] {
   }
   pushStringRef(refs, input.releaseGateStatus?.sourceReportPath);
   return refs;
+}
+
+function resolveArchiveReleaseGateDiagnostics(
+  experimentVerdict: unknown,
+  releaseGateStatus: PersistedReleaseGateStatus | null,
+): PromotionGateArchiveReleaseGateDiagnostics {
+  const verdictReleaseGate = extractVerdictReleaseGate(experimentVerdict);
+  if (verdictReleaseGate) {
+    return {
+      source: "experiment_verdict",
+      allowPaperTrading: verdictReleaseGate.allowPaperTrading,
+      allowLiveTrading: verdictReleaseGate.allowLiveTrading,
+      failedChecks: verdictReleaseGate.failedChecks,
+      warningChecks: [],
+    };
+  }
+  if (releaseGateStatus) {
+    return {
+      source: "release_gate_status",
+      allowPaperTrading: releaseGateStatus.allowPaperTrading,
+      allowLiveTrading: releaseGateStatus.allowLiveTrading,
+      failedChecks: [...releaseGateStatus.failedChecks],
+      warningChecks: [...releaseGateStatus.warningChecks],
+    };
+  }
+  return {
+    source: "missing",
+    allowPaperTrading: null,
+    allowLiveTrading: null,
+    failedChecks: [],
+    warningChecks: [],
+  };
+}
+
+function extractVerdictReleaseGate(raw: unknown): {
+  allowPaperTrading: boolean;
+  allowLiveTrading: boolean;
+  failedChecks: string[];
+} | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const releaseGate = (raw as { portfolio?: { releaseGate?: unknown } }).portfolio
+    ?.releaseGate;
+  if (!releaseGate || typeof releaseGate !== "object") {
+    return null;
+  }
+  const value = releaseGate as {
+    allowPaperTrading?: unknown;
+    allowLiveTrading?: unknown;
+    failedChecks?: unknown;
+  };
+  if (
+    typeof value.allowPaperTrading !== "boolean" ||
+    typeof value.allowLiveTrading !== "boolean" ||
+    !Array.isArray(value.failedChecks)
+  ) {
+    return null;
+  }
+  return {
+    allowPaperTrading: value.allowPaperTrading,
+    allowLiveTrading: value.allowLiveTrading,
+    failedChecks: value.failedChecks.filter(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    ),
+  };
+}
+
+function extractCandidateFailures(
+  raw: unknown,
+): PromotionGateCandidateFailureDiagnostics[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const candidates = (raw as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) {
+    return [];
+  }
+  return candidates.flatMap(candidate => {
+    if (!candidate || typeof candidate !== "object") {
+      return [];
+    }
+    const value = candidate as {
+      strategyId?: unknown;
+      strategyName?: unknown;
+      failureReasons?: unknown;
+    };
+    const strategyId =
+      typeof value.strategyId === "string" && value.strategyId.trim()
+        ? value.strategyId.trim()
+        : null;
+    if (!strategyId) {
+      return [];
+    }
+    const failureReasons = toStringArray(value.failureReasons);
+    if (failureReasons.length < 1) {
+      return [];
+    }
+    return [{
+      strategyId,
+      strategyName:
+        typeof value.strategyName === "string" && value.strategyName.trim()
+          ? value.strategyName.trim()
+          : null,
+      failureReasons,
+    }];
+  });
+}
+
+function extractSymbolDiagnostics(raw: unknown): PromotionGateSymbolDiagnostics[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const symbols = (raw as { symbols?: unknown }).symbols;
+  if (!Array.isArray(symbols)) {
+    return [];
+  }
+  return symbols.flatMap(symbolEntry => {
+    if (!symbolEntry || typeof symbolEntry !== "object") {
+      return [];
+    }
+    const value = symbolEntry as {
+      symbol?: unknown;
+      result?: unknown;
+      reasonCodes?: unknown;
+      candidates?: unknown;
+    };
+    const symbol =
+      typeof value.symbol === "string" && value.symbol.trim()
+        ? value.symbol.trim()
+        : null;
+    if (!symbol) {
+      return [];
+    }
+    const candidates = Array.isArray(value.candidates) ? value.candidates : [];
+    return [{
+      symbol,
+      result:
+        typeof value.result === "string" && value.result.trim()
+          ? value.result.trim()
+          : null,
+      reasonCodes: toStringArray(value.reasonCodes),
+      candidateFailures: candidates.flatMap(candidate => {
+        if (!candidate || typeof candidate !== "object") {
+          return [];
+        }
+        const candidateValue = candidate as {
+          strategyId?: unknown;
+          strategyName?: unknown;
+          failureReasons?: unknown;
+        };
+        const strategyId =
+          typeof candidateValue.strategyId === "string" &&
+          candidateValue.strategyId.trim()
+            ? candidateValue.strategyId.trim()
+            : null;
+        if (!strategyId) {
+          return [];
+        }
+        const failureReasons = toStringArray(candidateValue.failureReasons);
+        if (failureReasons.length < 1) {
+          return [];
+        }
+        return [{
+          strategyId,
+          strategyName:
+            typeof candidateValue.strategyName === "string" &&
+            candidateValue.strategyName.trim()
+              ? candidateValue.strategyName.trim()
+              : null,
+          failureReasons,
+        }];
+      }),
+    }];
+  });
+}
+
+function extractStringArray(raw: unknown, key: string): string[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  return toStringArray((raw as Record<string, unknown>)[key]);
+}
+
+function extractNestedStringArray(
+  raw: unknown,
+  parentKey: string,
+  key: string,
+): string[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const parent = (raw as Record<string, unknown>)[parentKey];
+  if (!parent || typeof parent !== "object") {
+    return [];
+  }
+  return toStringArray((parent as Record<string, unknown>)[key]);
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
 }
 
 function pushStringRef(target: string[], value: unknown): void {

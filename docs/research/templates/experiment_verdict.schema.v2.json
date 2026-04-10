@@ -11,7 +11,9 @@
     "reasonCodes",
     "thresholds",
     "aggregateMetrics",
-    "candidates",
+    "championSet",
+    "portfolio",
+    "symbols",
     "outputPaths"
   ],
   "properties": {
@@ -52,48 +54,55 @@
         "fdrQ": { "type": "number" }
       }
     },
-    "candidates": {
+    "championSet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/champion"
+      }
+    },
+    "portfolio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredSymbols", "championSet", "releaseGate", "result", "reasonCodes"],
+      "properties": {
+        "requiredSymbols": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "championSet": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/champion" }
+        },
+        "releaseGate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowPaperTrading", "allowLiveTrading", "failedChecks"],
+          "properties": {
+            "allowPaperTrading": { "type": "boolean" },
+            "allowLiveTrading": { "type": "boolean" },
+            "failedChecks": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "result": {
+          "type": "string",
+          "enum": ["GO", "NO_GO", "GO_WITH_CONSTRAINTS"]
+        },
+        "reasonCodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "symbols": {
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "strategyId",
-          "strategyName",
-          "status",
-          "metrics",
-          "releaseGate"
-        ],
-        "properties": {
-          "strategyId": { "type": "string", "minLength": 1 },
-          "strategyName": { "type": "string", "minLength": 1 },
-          "status": { "type": "string", "enum": ["pass", "fail"] },
-          "metrics": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["pbo", "dsrProbability", "fdrQ"],
-            "properties": {
-              "pbo": { "type": "number" },
-              "dsrProbability": { "type": "number" },
-              "fdrQ": { "type": "number" }
-            }
-          },
-          "releaseGate": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["allowPaperTrading", "allowLiveTrading", "failedChecks"],
-            "properties": {
-              "allowPaperTrading": { "type": "boolean" },
-              "allowLiveTrading": { "type": "boolean" },
-              "failedChecks": {
-                "type": "array",
-                "items": { "type": "string" }
-              }
-            }
-          },
-          "failureReasonCode": { "type": "string" }
-        }
+        "$ref": "#/$defs/symbolVerdict"
       }
     },
     "outputPaths": {
@@ -107,6 +116,141 @@
     },
     "notes": {
       "type": "string"
+    }
+  },
+  "$defs": {
+    "champion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "strategyId",
+        "strategyName",
+        "strategy",
+        "role",
+        "sharpe",
+        "releaseGateAllowPaper",
+        "releaseGateAllowLive",
+        "fdrQ",
+        "familyKey",
+        "correlationBucket",
+        "applicableSymbols"
+      ],
+      "properties": {
+        "symbol": { "type": "string", "minLength": 1 },
+        "strategyId": { "type": "string", "minLength": 1 },
+        "strategyName": { "type": "string", "minLength": 1 },
+        "strategy": { "type": "string", "minLength": 1 },
+        "role": { "type": ["string", "null"] },
+        "sharpe": { "type": "number" },
+        "releaseGateAllowPaper": { "type": "boolean" },
+        "releaseGateAllowLive": { "type": "boolean" },
+        "fdrQ": { "type": "number" },
+        "familyKey": { "type": "string", "minLength": 1 },
+        "correlationBucket": { "type": "string", "minLength": 1 },
+        "applicableSymbols": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "candidateVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategyId",
+        "strategyName",
+        "strategy",
+        "role",
+        "familyKey",
+        "correlationBucket",
+        "familyRepresentative",
+        "status",
+        "metrics",
+        "failureReasons"
+      ],
+      "properties": {
+        "strategyId": { "type": "string", "minLength": 1 },
+        "strategyName": { "type": "string", "minLength": 1 },
+        "strategy": { "type": "string", "minLength": 1 },
+        "role": { "type": ["string", "null"] },
+        "familyKey": { "type": "string", "minLength": 1 },
+        "correlationBucket": { "type": "string", "minLength": 1 },
+        "familyRepresentative": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pass", "fail"] },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pbo", "dsrProbability", "fdrQ"],
+          "properties": {
+            "pbo": { "type": "number" },
+            "dsrProbability": { "type": "number" },
+            "fdrQ": { "type": "number" }
+          }
+        },
+        "failureReasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "symbolAggregateMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meanPbo", "meanDsrProbability", "fdrQ", "fdrMethod", "fdrDiagnostics", "wfoProfile"],
+      "properties": {
+        "meanPbo": { "type": "number" },
+        "meanDsrProbability": { "type": "number" },
+        "fdrQ": { "type": "number" },
+        "fdrMethod": { "type": "string", "minLength": 1 },
+        "fdrDiagnostics": {
+          "type": "object"
+        },
+        "wfoProfile": { "type": "string", "minLength": 1 }
+      }
+    },
+    "symbolVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "result",
+        "reasonCodes",
+        "aggregateMetrics",
+        "champion",
+        "leader",
+        "candidates"
+      ],
+      "properties": {
+        "symbol": { "type": "string", "minLength": 1 },
+        "result": {
+          "type": "string",
+          "enum": ["GO", "NO_GO", "GO_WITH_CONSTRAINTS"]
+        },
+        "reasonCodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "aggregateMetrics": {
+          "$ref": "#/$defs/symbolAggregateMetrics"
+        },
+        "champion": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/champion" }
+          ]
+        },
+        "leader": {
+          "$ref": "#/$defs/champion"
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/candidateVerdict" }
+        }
+      }
     }
   }
 }

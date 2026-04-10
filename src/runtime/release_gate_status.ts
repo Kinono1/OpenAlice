@@ -9,6 +9,9 @@ export interface PersistedReleaseGateStatus {
   allowLiveTrading: boolean
   failedChecks: ReleaseGateCheck['name'][]
   warningChecks: ReleaseGateCheck['name'][]
+  result?: 'GO' | 'NO_GO'
+  reasonCodes?: string[]
+  checks?: ReleaseGateCheck[]
   sourceReportPath?: string
   expiresAt?: string
 }
@@ -33,6 +36,9 @@ export async function writeReleaseGateStatus(
     filePath?: string
     sourceReportPath?: string
     expiresAt?: string
+    result?: 'GO' | 'NO_GO'
+    reasonCodes?: string[]
+    checks?: ReleaseGateCheck[]
   },
 ): Promise<PersistedReleaseGateStatus> {
   const payload: PersistedReleaseGateStatus = {
@@ -40,8 +46,11 @@ export async function writeReleaseGateStatus(
     generatedAt: new Date().toISOString(),
     allowPaperTrading: gate.allowPaperTrading,
     allowLiveTrading: gate.allowLiveTrading,
-    failedChecks: gate.failedChecks,
-    warningChecks: gate.warningChecks,
+    failedChecks: [...gate.failedChecks],
+    warningChecks: [...gate.warningChecks],
+    result: opts?.result,
+    reasonCodes: opts?.reasonCodes ? [...opts.reasonCodes] : undefined,
+    checks: cloneReleaseGateChecks(opts?.checks ?? gate.checks),
     sourceReportPath: opts?.sourceReportPath,
     expiresAt: opts?.expiresAt,
   }
@@ -98,6 +107,11 @@ export function normalizeReleaseGateStatus(raw: unknown): PersistedReleaseGateSt
   ) {
     throw new Error('Malformed release gate status.')
   }
+
+  const result = normalizeReleaseGateResult(value.result)
+  const reasonCodes = normalizeOptionalStringArray(value.reasonCodes, 'reasonCodes')
+  const checks = normalizeOptionalReleaseGateChecks(value.checks)
+
   return {
     version: 1,
     generatedAt: value.generatedAt,
@@ -105,9 +119,101 @@ export function normalizeReleaseGateStatus(raw: unknown): PersistedReleaseGateSt
     allowLiveTrading: value.allowLiveTrading,
     failedChecks: value.failedChecks,
     warningChecks: value.warningChecks,
+    result,
+    reasonCodes,
+    checks,
     sourceReportPath: value.sourceReportPath,
     expiresAt: value.expiresAt,
   }
+}
+
+function cloneReleaseGateChecks(checks: ReleaseGateCheck[]): ReleaseGateCheck[] {
+  return checks.map((check) => ({
+    ...check,
+    metrics: { ...check.metrics },
+  }))
+}
+
+function normalizeReleaseGateResult(
+  value: PersistedReleaseGateStatus['result'],
+): PersistedReleaseGateStatus['result'] {
+  if (value === undefined || value === 'GO' || value === 'NO_GO') {
+    return value
+  }
+  throw new Error('Malformed release gate status.')
+}
+
+function normalizeOptionalStringArray(
+  value: unknown,
+  fieldName: string,
+): string[] | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`Malformed release gate status ${fieldName}.`)
+  }
+  return [...value]
+}
+
+function normalizeOptionalReleaseGateChecks(value: unknown): ReleaseGateCheck[] | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('Malformed release gate status checks.')
+  }
+
+  return value.map((item) => normalizeReleaseGateCheck(item))
+}
+
+function normalizeReleaseGateCheck(raw: unknown): ReleaseGateCheck {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Malformed release gate status checks.')
+  }
+
+  const value = raw as Partial<ReleaseGateCheck>
+  if (
+    !isReleaseGateCheckName(value.name) ||
+    !isReleaseGateCheckStatus(value.status) ||
+    typeof value.summary !== 'string' ||
+    !value.metrics ||
+    typeof value.metrics !== 'object' ||
+    Array.isArray(value.metrics)
+  ) {
+    throw new Error('Malformed release gate status checks.')
+  }
+
+  const metrics = Object.fromEntries(
+    Object.entries(value.metrics).filter(([, metricValue]) =>
+      metricValue === null ||
+      typeof metricValue === 'string' ||
+      typeof metricValue === 'number' ||
+      typeof metricValue === 'boolean',
+    ),
+  )
+
+  return {
+    name: value.name,
+    status: value.status,
+    summary: value.summary,
+    metrics,
+  }
+}
+
+function isReleaseGateCheckName(value: unknown): value is ReleaseGateCheck['name'] {
+  return (
+    value === 'wfo' ||
+    value === 'significance' ||
+    value === 'risk_simulation' ||
+    value === 'execution_quality' ||
+    value === 'ramp_up' ||
+    value === 'regime_shift'
+  )
+}
+
+function isReleaseGateCheckStatus(value: unknown): value is ReleaseGateCheck['status'] {
+  return value === 'pass' || value === 'warn' || value === 'fail' || value === 'skipped'
 }
 
 function isEnoent(err: unknown): boolean {

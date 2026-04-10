@@ -57,6 +57,40 @@ describe("runtime_status_snapshot", () => {
       promotionGate: {
         pass: false,
         blockingReasons: ["promotion_requires_go_verdict"],
+        diagnostics: {
+          verdictResult: "NO_GO",
+          verdictReasonCodes: ["HARD_FDR_THRESHOLD_FAIL"],
+          portfolioReasonCodes: ["HARD_RELEASE_GATE_BLOCKED"],
+          validationReasons: ["validation_symbol_missing:ETH/USD"],
+          portfolioCandidateFailures: [
+            {
+              strategyId: "BTC_TREND",
+              strategyName: "BTC Trend",
+              failureReasons: ["HARD_FDR_THRESHOLD_FAIL"],
+            },
+          ],
+          symbolDiagnostics: [
+            {
+              symbol: "BTC/USD",
+              result: "NO_GO",
+              reasonCodes: ["HARD_FDR_THRESHOLD_FAIL"],
+              candidateFailures: [
+                {
+                  strategyId: "BTC_TREND",
+                  strategyName: "BTC Trend",
+                  failureReasons: ["HARD_FDR_THRESHOLD_FAIL"],
+                },
+              ],
+            },
+          ],
+          releaseGate: {
+            source: "experiment_verdict",
+            allowPaperTrading: false,
+            allowLiveTrading: false,
+            failedChecks: ["wfo"],
+            warningChecks: [],
+          },
+        },
       },
       paperGate: {
         allowPaperTrading: false,
@@ -72,6 +106,44 @@ describe("runtime_status_snapshot", () => {
     });
 
     expect(snapshot.paperPromotionStatus.canPromote).toBe(false);
+    expect(snapshot.paperPromotionStatus.diagnostics).toMatchObject({
+      verdictResult: "NO_GO",
+      verdictReasonCodes: ["HARD_FDR_THRESHOLD_FAIL"],
+      portfolioReasonCodes: ["HARD_RELEASE_GATE_BLOCKED"],
+      validationReasons: ["validation_symbol_missing:ETH/USD"],
+      portfolioCandidateFailures: [
+        {
+          strategyId: "BTC_TREND",
+          strategyName: "BTC Trend",
+          failureReasons: ["HARD_FDR_THRESHOLD_FAIL"],
+        },
+      ],
+      symbolDiagnostics: [
+        {
+          symbol: "BTC/USD",
+          result: "NO_GO",
+          reasonCodes: ["HARD_FDR_THRESHOLD_FAIL"],
+          candidateFailures: [
+            {
+              strategyId: "BTC_TREND",
+              strategyName: "BTC Trend",
+              failureReasons: ["HARD_FDR_THRESHOLD_FAIL"],
+            },
+          ],
+        },
+      ],
+      releaseGate: {
+        source: "experiment_verdict",
+        allowPaperTrading: false,
+        allowLiveTrading: false,
+        failedChecks: ["wfo"],
+        warningChecks: [],
+      },
+    });
+    expect(snapshot.paperGateStatus.promotionDiagnostics).toMatchObject({
+      verdictResult: "NO_GO",
+      validationReasons: ["validation_symbol_missing:ETH/USD"],
+    });
     expect(snapshot.paperGateStatus.finalAllowPaperTrading).toBe(false);
     expect(snapshot.phaseReadiness.research).toMatchObject({
       status: "blocked",
