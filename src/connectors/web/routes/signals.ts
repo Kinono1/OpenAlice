@@ -1,75 +1,137 @@
-import { Hono } from "hono";
-import type { MiddlewareHandler } from "hono";
-import type { EngineContext } from "../../../core/types.js";
-import { isAuthEnabled } from "../../../core/auth.js";
-import { runSidecarSignalPaperIntake } from "../../../runtime/sidecar_signal.js";
+import { Hono, type MiddlewareHandler } from 'hono'
+import type { EngineContext } from '../../../core/types.js'
+import { getWebAuthStatus, isAuthEnabled } from './security.js'
+import { evaluateFreezeWindows } from '../../../domain/strategy/event-calendar/index.js'
 
-export function createSignalRoutes(opts: {
-  ctx: EngineContext;
-  requireTrade: MiddlewareHandler;
-}) {
-  const app = new Hono();
+interface SignalRouteOpts {
+  requireAuth?: MiddlewareHandler
+  requireTrade?: MiddlewareHandler
+}
 
-  app.use("/intake", opts.requireTrade);
+function getTradingReadiness(ctx: EngineContext): {
+  tradingReady: boolean
+  reasons: string[]
+} {
+  const reasons: string[] = []
+  const accounts = ctx.accountManager.listAccounts()
+  const hasHealthyAccount = accounts.some((account) => account.health.status !== 'offline' && !account.health.disabled)
+  if (!hasHealthyAccount) {
+    reasons.push('trading_accounts_unavailable')
+  }
 
-  app.get("/health", (c) => {
+  return {
+    tradingReady: hasHealthyAccount,
+    reasons,
+  }
+}
+
+function getSignalAuthState() {
+  const { authConfigured, tradeConfigured, devBypass } = getWebAuthStatus()
+  const authEnforced = isAuthEnabled()
+  const authReady = !authEnforced || tradeConfigured || devBypass
+  const authReasons = authReady ? [] : ['trade_tokens_missing']
+  return {
+    authEnforced,
+    authConfigured,
+    tradeConfigured,
+    authReady,
+    authReasons,
+  }
+}
+
+export function getSignalReadinessSnapshot(ctx: EngineContext) {
+  const auth = getSignalAuthState()
+  const { tradingReady, reasons } = getTradingReadiness(ctx)
+  const allReasons = [...reasons, ...auth.authReasons]
+
+  const freeze = ctx.config.strategy?.eventCalendar.enabled
+    ? evaluateFreezeWindows(
+        Date.now(),
+        ctx.config.strategy.runtime.marketScope,
+        ctx.config.strategy.eventCalendar.events,
+      )
+    : null
+  const freezeReady =
+    !ctx.config.strategy?.enabled ||
+    !ctx.config.strategy.runtime.runtimeIntegrationEnabled ||
+    !freeze?.active
+  if (!freezeReady) {
+    allReasons.push('strategy_event_freeze_active')
+  }
+
+  const ready = tradingReady && auth.authReady && freezeReady
+  return {
+    status: ready ? 'ready' : 'not-ready',
+    ready,
+    mode: 'paper_only' as const,
+    authEnforced: auth.authEnforced,
+    authConfigured: auth.authConfigured,
+    tradeConfigured: auth.tradeConfigured,
+    supportedSymbols: ctx.config.engine.pairs,
+    tradingReady,
+    strategyFreezeActive: freeze?.active ?? false,
+    reasons: allReasons,
+  }
+}
+
+/**
+ * Paper-signal intake routes for the current master web stack.
+ * - GET /api/signals/health
+ * - GET /api/signals/readiness
+ * - POST /api/signals/intake
+ */
+export function createSignalRoutes(ctx: EngineContext, opts?: SignalRouteOpts) {
+  const app = new Hono()
+
+  if (opts?.requireAuth) {
+    app.use('/readiness', opts.requireAuth)
+  }
+  if (opts?.requireTrade) {
+    app.use('/intake', opts.requireTrade)
+  }
+
+  app.get('/health', (c) => {
     return c.json({
-      status: "ok",
-      mode: "paper_only",
-      service: "sidecar_signal_intake",
-    });
-  });
+      status: 'ok',
+      mode: 'paper_only',
+      service: 'sidecar_signal_intake',
+    })
+  })
 
-  app.get("/readiness", (c) => {
-    const cryptoEngineConnected = !!opts.ctx.getCryptoEngine?.();
-    const authEnforced = opts.ctx.config.auth.enforceAuth;
-    const authConfigured = isAuthEnabled();
-    const devBypass = process.env.DEV_AUTH_BYPASS === "true";
-    const authReady = !authEnforced || authConfigured || devBypass;
-    const reasons: string[] = [];
-    if (!cryptoEngineConnected) {
-      reasons.push("crypto_engine_unavailable");
-    }
-    if (!authReady) {
-      reasons.push("auth_tokens_missing");
+  app.get('/readiness', (c) => {
+    const snapshot = getSignalReadinessSnapshot(ctx)
+    return c.json(snapshot, snapshot.ready ? 200 : 503)
+  })
+
+  app.post('/intake', async (c) => {
+    const auth = getSignalAuthState()
+    const { tradingReady, reasons } = getTradingReadiness(ctx)
+    const allReasons = [...reasons, ...auth.authReasons]
+
+    if (!auth.authReady || !tradingReady) {
+      return c.json({
+        accepted: false,
+        ready: false,
+        mode: 'paper_only',
+        reasons: allReasons,
+      }, 503)
     }
 
-    const ready = cryptoEngineConnected && authReady;
+    const payload = await c.req.json()
+    const record = await ctx.eventLog.append('signal.received', {
+      mode: 'paper_only',
+      supportedSymbols: ctx.config.engine.pairs,
+      payload,
+    })
 
     return c.json({
-      ready,
-      cryptoEngineConnected,
-      supportedSymbols: opts.ctx.config.engine.pairs,
-      authEnforced,
-      authConfigured,
-      mode: "paper_only",
-      reasons,
-    }, ready ? 200 : 503);
-  });
+      accepted: true,
+      ready: true,
+      mode: 'paper_only',
+      supportedSymbols: ctx.config.engine.pairs,
+      record,
+    })
+  })
 
-  app.post("/intake", async (c) => {
-    const engine = opts.ctx.getCryptoEngine?.();
-    if (!engine) {
-      return c.json(
-        {
-          error: "Crypto engine not connected",
-          ready: false,
-          mode: "paper_only",
-        },
-        503,
-      );
-    }
-
-    const payload = await c.req.json();
-    const result = await runSidecarSignalPaperIntake({
-      signal: payload,
-      engine,
-      eventLog: opts.ctx.eventLog,
-      supportedSymbols: opts.ctx.config.engine.pairs,
-    });
-
-    return c.json(result, result.accepted ? 200 : 400);
-  });
-
-  return app;
+  return app
 }

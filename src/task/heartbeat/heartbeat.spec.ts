@@ -85,7 +85,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
 
@@ -101,7 +101,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ every: '30m' }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
 
@@ -112,7 +112,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ every: '1h' }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
 
@@ -127,7 +127,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
 
@@ -154,7 +154,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -183,7 +183,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -216,7 +216,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -236,7 +236,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -266,7 +266,7 @@ describe('heartbeat', () => {
           activeHours: { start: '09:00', end: '22:00', timezone: 'local' },
         }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
         now: () => fakeNow,
       })
@@ -299,17 +299,19 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
 
       const jobId = cronEngine.list()[0].id
 
-      // First fire — should deliver
+      // First fire — should deliver. Wait for heartbeat.done to ensure
+      // the full handleFire cycle (including dedup.record) has completed
+      // before triggering the second fire.
       await cronEngine.runNow(jobId)
       await vi.waitFor(() => {
-        expect(delivered).toHaveLength(1)
+        expect(eventLog.recent({ type: 'heartbeat.done' })).toHaveLength(1)
       })
 
       // Second fire (same response) — should be suppressed
@@ -332,7 +334,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -358,7 +360,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -382,7 +384,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -402,7 +404,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -420,7 +422,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: true }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -439,7 +441,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()
@@ -459,7 +461,7 @@ describe('heartbeat', () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
         connectorCenter, cronEngine, eventLog,
-        engine: mockEngine as any,
+        agentCenter: mockEngine as any,
         session,
       })
       await heartbeat.start()

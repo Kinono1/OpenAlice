@@ -1,6 +1,15 @@
 import { Hono, type MiddlewareHandler } from 'hono'
-import { loadConfig, writeConfigSection, readAIProviderConfig, readOpenbbConfig, sanitizeConfigForClient, sanitizeConfigSectionForClient, validSections, type ConfigSection } from '../../../core/config.js'
-import { readAIConfig, writeAIConfig, type AIBackend } from '../../../core/ai-config.js'
+import {
+  loadConfig,
+  writeConfigSection,
+  readAIProviderConfig,
+  readMarketDataConfig,
+  validSections,
+  writeAIBackend,
+  type ConfigSection,
+  type AIBackend,
+} from '../../../core/config.js'
+import { createRequireAuth, sanitizeSecrets, unmaskSecrets } from './security.js'
 
 interface ConfigRouteOpts {
   onConnectorsChange?: () => Promise<void>
@@ -11,14 +20,12 @@ interface ConfigRouteOpts {
 export function createConfigRoutes(opts?: ConfigRouteOpts) {
   const app = new Hono()
 
-  if (opts?.requireAuth) {
-    app.use('*', opts.requireAuth)
-  }
+  app.use('*', opts?.requireAuth ?? createRequireAuth())
 
   app.get('/', async (c) => {
     try {
       const config = await loadConfig()
-      return c.json(sanitizeConfigForClient(config))
+      return c.json(sanitizeSecrets(config))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -28,11 +35,11 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
     try {
       const body = await c.req.json<{ backend?: string }>()
       const backend = body.backend
-      if (backend !== 'claude-code' && backend !== 'vercel-ai-sdk') {
-        return c.json({ error: 'Invalid backend. Must be "claude-code" or "vercel-ai-sdk".' }, 400)
+      if (backend !== 'claude-code' && backend !== 'vercel-ai-sdk' && backend !== 'agent-sdk') {
+        return c.json({ error: 'Invalid backend. Must be "claude-code", "vercel-ai-sdk", or "agent-sdk".' }, 400)
       }
-      await writeAIConfig(backend as AIBackend)
-      return c.json(sanitizeConfigSectionForClient({ backend }))
+      await writeAIBackend(backend as AIBackend)
+      return c.json({ backend })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -45,12 +52,17 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
         return c.json({ error: `Invalid section "${section}". Valid: ${validSections.join(', ')}` }, 400)
       }
       const body = await c.req.json()
+      const current = await loadConfig()
+      const existingSection = (current as Record<string, unknown>)[section]
+      if (body && typeof body === 'object' && existingSection && typeof existingSection === 'object') {
+        unmaskSecrets(body as Record<string, unknown>, existingSection)
+      }
       const validated = await writeConfigSection(section, body)
-      // Hot-reload connectors when their config changes
-      if (section === 'connectors') {
+      // Hot-reload connectors / OpenBB server when their config changes
+      if (section === 'connectors' || section === 'marketData') {
         await opts?.onConnectorsChange?.()
       }
-      return c.json(sanitizeConfigSectionForClient(validated))
+      return c.json(sanitizeSecrets(validated))
     } catch (err) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
@@ -75,8 +87,8 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
   return app
 }
 
-/** OpenBB routes: POST /test-provider */
-export function createOpenbbRoutes() {
+/** Market data routes: POST /test-provider */
+export function createMarketDataRoutes(opts?: ConfigRouteOpts) {
   const TEST_ENDPOINTS: Record<string, { credField: string; path: string }> = {
     fred:             { credField: 'fred_api_key',             path: '/api/v1/economy/fred_search?query=GDP&provider=fred' },
     bls:              { credField: 'bls_api_key',              path: '/api/v1/economy/survey/bls_search?query=unemployment&provider=bls' },
@@ -89,6 +101,9 @@ export function createOpenbbRoutes() {
   }
 
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.post('/test-provider', async (c) => {
     try {
@@ -97,9 +112,9 @@ export function createOpenbbRoutes() {
       if (!endpoint) return c.json({ ok: false, error: `Unknown provider: ${provider}` }, 400)
       if (!key) return c.json({ ok: false, error: 'No API key provided' }, 400)
 
-      const openbbConfig = await readOpenbbConfig()
+      const marketDataConfig = await readMarketDataConfig()
       const credHeader = JSON.stringify({ [endpoint.credField]: key })
-      const url = `${openbbConfig.apiUrl}${endpoint.path}`
+      const url = `${marketDataConfig.apiUrl}${endpoint.path}`
 
       const res = await fetch(url, {
         signal: AbortSignal.timeout(15_000),

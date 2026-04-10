@@ -11,12 +11,20 @@
  * and cron: connectorCenter.notify(text, opts).
  */
 import { Hono } from 'hono'
+import type { MiddlewareHandler } from 'hono'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ConnectorCenter } from '../../../core/connector-center.js'
 
-export function createDevRoutes(connectorCenter: ConnectorCenter) {
+interface DevRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
+export function createDevRoutes(connectorCenter: ConnectorCenter, opts?: DevRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   /** List all registered connectors + last interaction info. */
   app.get('/registry', (c) => {

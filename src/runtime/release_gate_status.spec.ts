@@ -1,66 +1,48 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest'
 import {
   isReleaseGateStatusBlocking,
-  loadReleaseGateStatus,
-  writeReleaseGateStatus,
-} from "./release_gate_status.js";
+  type PersistedReleaseGateStatus,
+} from './release_gate_status.js'
 
-describe("release_gate_status", () => {
-  it("persists and reloads release gate status", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "release-gate-status-"));
-    const path = join(tempDir, "release_gate_status.json");
+function makeStatus(overrides?: Partial<PersistedReleaseGateStatus>): PersistedReleaseGateStatus {
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    allowPaperTrading: true,
+    allowLiveTrading: true,
+    failedChecks: [],
+    warningChecks: [],
+    ...overrides,
+  }
+}
 
-    await writeReleaseGateStatus(
-      {
-        checks: [],
-        failedChecks: ["wfo"],
-        warningChecks: [],
-        hardFail: true,
-        allowPaperTrading: false,
-        allowLiveTrading: false,
-      },
-      {
-        filePath: path,
-        sourceReportPath: "/tmp/report.json",
-      },
-    );
+describe('release_gate_status', () => {
+  it('blocks paper mode when allowPaperTrading is false', () => {
+    const result = isReleaseGateStatusBlocking(
+      makeStatus({ allowPaperTrading: false, allowLiveTrading: true, failedChecks: ['significance'] }),
+      'paper',
+    )
 
-    const loaded = await loadReleaseGateStatus(path);
-    expect(loaded).not.toBeNull();
-    expect(loaded?.allowLiveTrading).toBe(false);
-    expect(loaded?.failedChecks).toEqual(["wfo"]);
-    expect(loaded?.sourceReportPath).toBe("/tmp/report.json");
-  });
+    expect(result).toEqual({
+      blocking: true,
+      reason: 'paper_release_gate_failed:significance',
+    })
+  })
 
-  it("blocks when status is missing, expired, or failed", () => {
-    expect(isReleaseGateStatusBlocking(null).blocking).toBe(true);
+  it('allows paper mode when allowPaperTrading is true even if live remains blocked', () => {
+    const paper = isReleaseGateStatusBlocking(
+      makeStatus({ allowPaperTrading: true, allowLiveTrading: false, failedChecks: ['execution_quality'] }),
+      'paper',
+    )
+    const live = isReleaseGateStatusBlocking(
+      makeStatus({ allowPaperTrading: true, allowLiveTrading: false, failedChecks: ['execution_quality'] }),
+      'live',
+    )
 
-    const failed = isReleaseGateStatusBlocking({
-      version: 1,
-      generatedAt: "2026-02-22T00:00:00.000Z",
-      allowPaperTrading: true,
-      allowLiveTrading: false,
-      failedChecks: ["risk_simulation"],
-      warningChecks: [],
-    });
-    expect(failed.blocking).toBe(true);
-    expect(String(failed.reason)).toContain("risk_simulation");
-
-    const expired = isReleaseGateStatusBlocking(
-      {
-        version: 1,
-        generatedAt: "2026-02-22T00:00:00.000Z",
-        allowPaperTrading: true,
-        allowLiveTrading: true,
-        failedChecks: [],
-        warningChecks: [],
-        expiresAt: "2026-02-01T00:00:00.000Z",
-      },
-      new Date("2026-02-22T00:00:00.000Z"),
-    );
-    expect(expired.blocking).toBe(true);
-  });
-});
+    expect(paper).toEqual({ blocking: false })
+    expect(live).toEqual({
+      blocking: true,
+      reason: 'live_release_gate_failed:execution_quality',
+    })
+  })
+})

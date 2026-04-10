@@ -1,23 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Section } from '../components/form'
+import { PageHeader } from '../components/PageHeader'
+import { Spinner, EmptyState } from '../components/StateViews'
+import { useToast } from '../components/Toast'
 import {
   devApi,
   type RegistryResponse,
-  type SendResponse,
   type SessionInfo,
 } from '../api/dev'
 
 export function DevPage() {
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="shrink-0 border-b border-border">
-        <div className="px-4 md:px-6 py-4">
-          <h2 className="text-base font-semibold text-text">Dev</h2>
-        </div>
-      </div>
+      <PageHeader title="Dev" />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
-        <div className="max-w-[640px] space-y-8">
+        <div className="max-w-[640px] space-y-5">
           <RegistrySection />
           <SendSection />
           <SessionsSection />
@@ -65,7 +63,7 @@ function RegistrySection() {
               </thead>
               <tbody>
                 {data.connectors.map((cn) => (
-                  <tr key={cn.channel} className="text-text">
+                  <tr key={cn.channel} className="text-text hover:bg-bg-tertiary/30 transition-colors">
                     <td className="py-0.5 pr-3 font-mono text-xs">{cn.channel}</td>
                     <td className="py-0.5 pr-3 font-mono text-xs">{cn.to}</td>
                     <td className="py-0.5 pr-3">{cn.capabilities.push ? 'yes' : 'no'}</td>
@@ -102,8 +100,7 @@ function SendSection() {
   const [text, setText] = useState('')
   const [source, setSource] = useState<'manual' | 'heartbeat' | 'cron'>('manual')
   const [sending, setSending] = useState(false)
-  const [result, setResult] = useState<SendResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const toast = useToast()
 
   useEffect(() => {
     devApi.registry().then((r) => {
@@ -114,8 +111,6 @@ function SendSection() {
   const handleSend = useCallback(async () => {
     if (!text.trim()) return
     setSending(true)
-    setResult(null)
-    setError(null)
     try {
       const res = await devApi.send({
         channel: channel || undefined,
@@ -123,13 +118,13 @@ function SendSection() {
         text: text.trim(),
         source,
       })
-      setResult(res)
+      toast.success(`Sent to ${res.channel}:${res.to}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setSending(false)
     }
-  }, [channel, kind, text, source])
+  }, [channel, kind, text, source, toast])
 
   const selectClass = 'px-2.5 py-2 bg-bg text-text border border-border rounded-md text-sm outline-none focus:border-accent'
 
@@ -189,21 +184,11 @@ function SendSection() {
         <button
           onClick={handleSend}
           disabled={sending || !text.trim()}
-          className="px-4 py-1.5 text-sm bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-40 transition-opacity"
+          className="btn-primary-sm"
         >
           {sending ? 'Sending...' : 'Send'}
         </button>
 
-        {result && (
-          <pre className="p-2.5 bg-bg-tertiary rounded-md text-xs text-green font-mono overflow-x-auto">
-            {JSON.stringify(result, null, 2)}
-          </pre>
-        )}
-        {error && (
-          <pre className="p-2.5 bg-bg-tertiary rounded-md text-xs text-red font-mono overflow-x-auto">
-            {error}
-          </pre>
-        )}
       </div>
     </Section>
   )
@@ -227,9 +212,9 @@ function SessionsSection() {
   return (
     <Section title="Sessions" description="Active session files on disk.">
       {sessions === null ? (
-        <p className="text-sm text-text-muted">Loading...</p>
+        <div className="flex justify-center py-6"><Spinner size="sm" /></div>
       ) : sessions.length === 0 ? (
-        <p className="text-sm text-text-muted">No sessions found.</p>
+        <EmptyState title="No sessions found." />
       ) : (
         <table className="w-full text-sm">
           <thead>
@@ -240,7 +225,7 @@ function SessionsSection() {
           </thead>
           <tbody>
             {sessions.map((s) => (
-              <tr key={s.id} className="text-text">
+              <tr key={s.id} className="text-text hover:bg-bg-tertiary/30 transition-colors">
                 <td className="py-0.5 pr-3 font-mono text-xs">{s.id}</td>
                 <td className="py-0.5 text-right text-xs text-text-muted">{formatSize(s.sizeBytes)}</td>
               </tr>

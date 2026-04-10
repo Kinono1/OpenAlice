@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, type AppConfig, type EventLogEntry } from '../api'
 import { Toggle } from '../components/Toggle'
 import { SaveIndicator } from '../components/SaveIndicator'
-import { Section, Field, inputClass } from '../components/form'
+import { ConfigSection, Section, Field, inputClass } from '../components/form'
 import { useAutoSave } from '../hooks/useAutoSave'
+import { PageHeader } from '../components/PageHeader'
 
 // ==================== Helpers ====================
 
@@ -83,7 +84,7 @@ function StatusBar() {
           <button
             onClick={handleTrigger}
             disabled={triggering}
-            className="px-3 py-1.5 text-xs rounded-md bg-purple-dim text-purple border border-purple/30 hover:bg-purple/30 transition-colors disabled:opacity-50"
+            className="btn-secondary-sm"
           >
             {triggering ? 'Triggering...' : 'Trigger Now'}
           </button>
@@ -97,9 +98,9 @@ function StatusBar() {
   )
 }
 
-// ==================== Config Section ====================
+// ==================== Config Form ====================
 
-function ConfigSection({ config }: { config: AppConfig }) {
+function HeartbeatConfigForm({ config }: { config: AppConfig }) {
   const [every, setEvery] = useState(config.heartbeat?.every || '30m')
   const [ahEnabled, setAhEnabled] = useState(config.heartbeat?.activeHours != null)
   const [ahStart, setAhStart] = useState(config.heartbeat?.activeHours?.start || '09:00')
@@ -119,7 +120,7 @@ function ConfigSection({ config }: { config: AppConfig }) {
   const { status, retry } = useAutoSave({ data: configData, save })
 
   return (
-    <Section title="Configuration">
+    <ConfigSection title="Configuration" description="Set how often the heartbeat runs and optionally restrict it to active hours.">
       <Field label="Interval">
         <input
           className={inputClass}
@@ -131,7 +132,7 @@ function ConfigSection({ config }: { config: AppConfig }) {
 
       <div className="mb-3">
         <div className="flex items-center justify-between mb-2">
-          <label className="text-[13px] text-text-muted">Active Hours</label>
+          <label className="text-[13px] text-text font-medium">Active Hours</label>
           <Toggle checked={ahEnabled} onChange={setAhEnabled} />
         </div>
         {ahEnabled && (
@@ -179,7 +180,7 @@ function ConfigSection({ config }: { config: AppConfig }) {
       </div>
 
       <SaveIndicator status={status} onRetry={retry} />
-    </Section>
+    </ConfigSection>
   )
 }
 
@@ -221,7 +222,7 @@ function PromptEditor() {
   }
 
   return (
-    <Section title="Prompt File" description={filePath || undefined}>
+    <ConfigSection title="Prompt File" description={filePath || 'The prompt template used for each heartbeat cycle.'}>
       {loading ? (
         <div className="text-sm text-text-muted">Loading...</div>
       ) : (
@@ -235,7 +236,7 @@ function PromptEditor() {
             <button
               onClick={handleSave}
               disabled={saving || !dirty}
-              className="px-3 py-1.5 text-xs rounded-md bg-accent text-bg font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+              className="btn-primary-sm"
             >
               {saving ? 'Saving...' : 'Save'}
             </button>
@@ -257,7 +258,7 @@ function PromptEditor() {
           </div>
         </>
       )}
-    </Section>
+    </ConfigSection>
   )
 }
 
@@ -282,7 +283,7 @@ function RecentEvents() {
 
   return (
     <Section title="Recent Events">
-      <div className="bg-bg rounded-lg border border-border overflow-hidden font-mono text-xs">
+      <div className="bg-bg rounded-lg border border-border overflow-x-auto font-mono text-xs">
         {loading ? (
           <div className="px-4 py-6 text-center text-text-muted">Loading...</div>
         ) : entries.length === 0 ? (
@@ -301,7 +302,7 @@ function RecentEvents() {
               {entries.map((entry) => {
                 const payloadStr = JSON.stringify(entry.payload)
                 return (
-                  <tr key={entry.seq} className="border-t border-border/50">
+                  <tr key={entry.seq} className="border-t border-border/50 hover:bg-bg-tertiary/30 transition-colors">
                     <td className="px-3 py-1.5 text-text-muted">{entry.seq}</td>
                     <td className="px-3 py-1.5 text-text-muted whitespace-nowrap">{formatDateTime(entry.ts)}</td>
                     <td className={`px-3 py-1.5 ${eventTypeColor(entry.type)}`}>
@@ -332,16 +333,12 @@ export function HeartbeatPage() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="shrink-0 border-b border-border">
-        <div className="px-4 md:px-6 py-4">
-          <h2 className="text-base font-semibold text-text">Heartbeat</h2>
-        </div>
-      </div>
+      <PageHeader title="Heartbeat" />
 
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
-        <div className="max-w-[720px] space-y-6">
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-5">
+        <div className="max-w-[880px] mx-auto space-y-6">
           <StatusBar />
-          {config && <ConfigSection config={config} />}
+          {config && <HeartbeatConfigForm config={config} />}
           <PromptEditor />
           <RecentEvents />
         </div>

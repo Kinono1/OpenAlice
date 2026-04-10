@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
-import type { ToolCall } from '../api'
+import type { ToolCall, StreamingToolCall } from '../api'
 import { Marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
@@ -33,11 +33,12 @@ const CHECK_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" 
 
 function AliceAvatar() {
   return (
-    <div className="w-6 h-6 rounded-full bg-accent/15 flex items-center justify-center text-accent shrink-0">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
-      </svg>
-    </div>
+    <img
+      src="/alice.ico"
+      alt="Alice"
+      className="w-6 h-6 rounded-full ring-1 ring-accent/20 shrink-0"
+      draggable={false}
+    />
   )
 }
 
@@ -86,12 +87,22 @@ export function ChatMessage({ role, text, timestamp, isGrouped, media }: ChatMes
 
   if (role === 'notification') {
     return (
-      <div className="flex flex-col items-center message-enter">
-        <div className="max-w-[90%] px-4 py-2.5 bg-notification-bg border border-notification-border rounded-lg text-[13px] break-words">
-          <div className="markdown-content" dangerouslySetInnerHTML={{ __html: `\ud83d\udd14 ${html}` }} />
-          {media?.map((m, i) => (
-            <img key={i} src={m.url} alt="" className="max-w-full rounded-lg mt-2" />
-          ))}
+      <div className="flex items-start gap-3 message-enter ml-8">
+        <div className="w-0.5 shrink-0 self-stretch rounded-full bg-notification-border" />
+        <div className="flex-1 min-w-0 py-0.5">
+          <div className="flex items-center gap-1.5 mb-1">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-notification-border shrink-0">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            <span className="text-[11px] text-text-muted/60 font-medium">Notification</span>
+          </div>
+          <div ref={contentRef} className="text-[13px] text-text-muted break-words leading-relaxed">
+            <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html! }} />
+            {media?.map((m, i) => (
+              <img key={i} src={m.url} alt="" className="max-w-full rounded-lg mt-2" />
+            ))}
+          </div>
         </div>
       </div>
     )
@@ -121,7 +132,7 @@ export function ChatMessage({ role, text, timestamp, isGrouped, media }: ChatMes
           <span className="text-[12px] text-text-muted font-medium">Alice</span>
         </div>
       )}
-      <div ref={contentRef} className={`max-w-[90%] break-words leading-relaxed ${isGrouped ? 'ml-8' : 'ml-8'}`}>
+      <div ref={contentRef} className="max-w-[90%] break-words leading-relaxed ml-8 bg-bg-tertiary/30 border border-border/30 rounded-2xl rounded-tl-sm px-4 py-3">
         <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html! }} />
         {media?.map((m, i) => (
           <img key={i} src={m.url} alt="" className="max-w-full rounded-lg mt-2" />
@@ -143,6 +154,17 @@ interface ToolCallGroupProps {
   timestamp?: string | null
 }
 
+/** Try to highlight JSON, fall back to plain text */
+function highlightJSON(text: string): string {
+  try {
+    const parsed = JSON.parse(text)
+    const formatted = JSON.stringify(parsed, null, 2)
+    return hljs.highlight(formatted, { language: 'json' }).value
+  } catch {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+}
+
 export function ToolCallGroup({ calls, timestamp }: ToolCallGroupProps) {
   const [expanded, setExpanded] = useState(false)
 
@@ -152,28 +174,34 @@ export function ToolCallGroup({ calls, timestamp }: ToolCallGroupProps) {
     <div className="flex flex-col items-start ml-8">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-secondary border border-border text-text-muted text-[12px] hover:text-text hover:border-accent/40 transition-colors cursor-pointer select-none"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-secondary/80 border border-border text-text-muted text-[12px] hover:text-text hover:border-border hover:bg-bg-secondary transition-all cursor-pointer select-none"
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-60">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-50">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         </svg>
         <span className="truncate max-w-[400px]">{summary}</span>
         <svg
           width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-          className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          className={`shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
         >
           <polyline points="9 18 15 12 9 6" />
         </svg>
       </button>
 
       {expanded && (
-        <div className="mt-1 ml-1 border-l-2 border-border pl-3 flex flex-col gap-2 py-1">
+        <div className="mt-1.5 ml-1 border-l-2 border-border/60 pl-3 flex flex-col gap-3 py-1">
           {calls.map((call, i) => (
             <div key={i} className="text-[12px]">
-              <div className="text-text-muted font-medium">{call.name}</div>
-              <pre className="text-[11px] text-text-muted/70 font-mono whitespace-pre-wrap break-all mt-0.5 leading-relaxed">{call.input}</pre>
+              <div className="text-text-muted font-medium mb-1">{call.name}</div>
+              <pre
+                className="text-[11px] font-mono whitespace-pre-wrap break-all leading-relaxed bg-bg/50 rounded-md px-2.5 py-1.5 border border-border/40"
+                dangerouslySetInnerHTML={{ __html: highlightJSON(call.input) }}
+              />
               {call.result && (
-                <pre className="text-[11px] text-green/80 font-mono whitespace-pre-wrap break-all mt-0.5 leading-relaxed">{call.result}</pre>
+                <pre
+                  className="text-[11px] font-mono whitespace-pre-wrap break-all mt-1 leading-relaxed bg-bg/50 rounded-md px-2.5 py-1.5 border border-green/20 text-green/80"
+                  dangerouslySetInnerHTML={{ __html: highlightJSON(call.result) }}
+                />
               )}
             </div>
           ))}
@@ -185,6 +213,34 @@ export function ToolCallGroup({ calls, timestamp }: ToolCallGroupProps) {
           {new Date(timestamp).toLocaleString()}
         </div>
       )}
+    </div>
+  )
+}
+
+// ==================== Streaming Tool Group ====================
+
+interface StreamingToolGroupProps {
+  tools: StreamingToolCall[]
+}
+
+export function StreamingToolGroup({ tools }: StreamingToolGroupProps) {
+  return (
+    <div className="flex flex-col items-start ml-8 gap-1">
+      {tools.map((tool) => (
+        <div
+          key={tool.id}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-secondary/80 border border-border text-[12px] text-text-muted"
+        >
+          {tool.status === 'running' ? (
+            <span className="inline-block w-3 h-3 border-2 border-text-muted/30 border-t-text-muted rounded-full animate-spin" />
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-green-500">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+          <span>{tool.name}</span>
+        </div>
+      ))}
     </div>
   )
 }

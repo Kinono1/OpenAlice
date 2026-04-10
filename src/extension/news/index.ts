@@ -1,1 +1,0 @@
-export { createNewsTools } from './adapter'

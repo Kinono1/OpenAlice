@@ -715,8 +715,6 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
-        # Building checkpoints should be non-blocking for downstream decision assembly.
-        # Hard failures are encoded in payload status/reason codes, not process exit code.
         return EXIT_OK
     except Exception as exc:  # noqa: BLE001
         output_dir.mkdir(parents=True, exist_ok=True)

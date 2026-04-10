@@ -6,24 +6,24 @@ import type { Plugin, EngineContext, MediaAttachment } from '../../core/types.js
 import type { TelegramConfig, ParsedMessage } from './types.js'
 import { buildParsedMessage } from './helpers.js'
 import { MediaGroupMerger } from './media-group.js'
-import { askClaudeCode } from '../../ai-providers/claude-code/index.js'
-import type { ClaudeCodeConfig } from '../../ai-providers/claude-code/index.js'
+import { askAgentSdk } from '../../ai-providers/agent-sdk/query.js'
+import type { AgentSdkConfig } from '../../ai-providers/agent-sdk/query.js'
 import { SessionStore } from '../../core/session'
 import { forceCompact } from '../../core/compaction'
-import { readAIConfig, writeAIConfig, type AIBackend } from '../../core/ai-config'
-import type { ConnectorCenter, Connector } from '../../core/connector-center.js'
-
-const MAX_MESSAGE_LENGTH = 4096
+import { readAIBackend, writeAIBackend, type AIBackend } from '../../core/config'
+import type { ConnectorCenter } from '../../core/connector-center.js'
+import { TelegramConnector, splitMessage, MAX_MESSAGE_LENGTH } from './telegram-connector.js'
 
 const BACKEND_LABELS: Record<AIBackend, string> = {
   'claude-code': 'Claude Code',
   'vercel-ai-sdk': 'Vercel AI SDK',
+  'agent-sdk': 'Agent SDK',
 }
 
 export class TelegramPlugin implements Plugin {
   name = 'telegram'
   private config: TelegramConfig
-  private claudeCodeConfig: ClaudeCodeConfig
+  private agentSdkConfig: AgentSdkConfig
   private bot: Bot | null = null
   private connectorCenter: ConnectorCenter | null = null
   private merger: MediaGroupMerger | null = null
@@ -37,20 +37,20 @@ export class TelegramPlugin implements Plugin {
 
   constructor(
     config: Omit<TelegramConfig, 'pollingTimeout'> & { pollingTimeout?: number },
-    claudeCodeConfig: ClaudeCodeConfig = {},
+    agentSdkConfig: AgentSdkConfig = {},
   ) {
     this.config = { pollingTimeout: 30, ...config }
-    this.claudeCodeConfig = claudeCodeConfig
+    this.agentSdkConfig = agentSdkConfig
   }
 
   async start(engineCtx: EngineContext) {
     this.connectorCenter = engineCtx.connectorCenter
 
     // Inject agent config into Claude Code config (used by /compact command)
-    this.claudeCodeConfig = {
+    this.agentSdkConfig = {
       disallowedTools: engineCtx.config.agent.claudeCode.disallowedTools,
       maxTurns: engineCtx.config.agent.claudeCode.maxTurns,
-      ...this.claudeCodeConfig,
+      ...this.agentSdkConfig,
     }
 
     const bot = new Bot(this.config.token)
@@ -81,7 +81,7 @@ export class TelegramPlugin implements Plugin {
 
     // ── Commands ──
     bot.command('status', async (ctx) => {
-      const aiConfig = await readAIConfig()
+      const aiConfig = await readAIBackend()
       await this.sendReply(ctx.chat.id, `Engine is running. Provider: ${BACKEND_LABELS[aiConfig.backend]}`)
     })
 
@@ -105,15 +105,17 @@ export class TelegramPlugin implements Plugin {
       try {
         if (data.startsWith('provider:')) {
           const backend = data.slice('provider:'.length) as AIBackend
-          await writeAIConfig(backend)
+          await writeAIBackend(backend)
           await ctx.answerCallbackQuery({ text: `Switched to ${BACKEND_LABELS[backend]}` })
 
           // Edit the original settings message in-place
           const ccLabel = backend === 'claude-code' ? '> Claude Code' : 'Claude Code'
           const aiLabel = backend === 'vercel-ai-sdk' ? '> Vercel AI SDK' : 'Vercel AI SDK'
+          const sdkLabel = backend === 'agent-sdk' ? '> Agent SDK' : 'Agent SDK'
           const keyboard = new InlineKeyboard()
             .text(ccLabel, 'provider:claude-code')
             .text(aiLabel, 'provider:vercel-ai-sdk')
+            .text(sdkLabel, 'provider:agent-sdk')
           await ctx.editMessageText(
             `Current provider: ${BACKEND_LABELS[backend]}\n\nChoose default AI provider:`,
             { reply_markup: keyboard },
@@ -167,13 +169,13 @@ export class TelegramPlugin implements Plugin {
 
     // ── Initialize and get bot info ──
     await bot.init()
-    const aiConfig = await readAIConfig()
+    const aiConfig = await readAIBackend()
     console.log(`telegram plugin: connected as @${bot.botInfo.username} (backend: ${aiConfig.backend})`)
 
     // ── Register connector for outbound delivery (heartbeat / cron responses) ──
     if (this.config.allowedChatIds.length > 0) {
       const deliveryChatId = this.config.allowedChatIds[0]
-      this.unregisterConnector = this.connectorCenter!.register(this.createConnector(bot, deliveryChatId))
+      this.unregisterConnector = this.connectorCenter!.register(new TelegramConnector(bot, deliveryChatId))
     }
 
     // ── Start polling ──
@@ -190,37 +192,6 @@ export class TelegramPlugin implements Plugin {
     this.merger?.flush()
     await this.bot?.stop()
     this.unregisterConnector?.()
-  }
-
-  private createConnector(bot: Bot, chatId: number): Connector {
-    return {
-      channel: 'telegram',
-      to: String(chatId),
-      capabilities: { push: true, media: true },
-      send: async (payload) => {
-        // Send media first (photos)
-        if (payload.media && payload.media.length > 0) {
-          for (const attachment of payload.media) {
-            try {
-              const buf = await readFile(attachment.path)
-              await bot.api.sendPhoto(chatId, new InputFile(buf, 'screenshot.jpg'))
-            } catch (err) {
-              console.error('telegram: failed to send photo:', err)
-            }
-          }
-        }
-
-        // Send text with chunking
-        if (payload.text) {
-          const chunks = splitMessage(payload.text, MAX_MESSAGE_LENGTH)
-          for (const chunk of chunks) {
-            await bot.api.sendMessage(chatId, chunk)
-          }
-        }
-
-        return { delivered: true }
-      },
-    }
   }
 
   private async getSession(userId: number): Promise<SessionStore> {
@@ -265,9 +236,9 @@ export class TelegramPlugin implements Plugin {
       const stopTyping = this.startTypingIndicator(message.chatId)
 
       try {
-        // Route through unified provider (Engine → ProviderRouter → Vercel or Claude Code)
+        // Route through AgentCenter → GenerateRouter → active provider
         const session = await this.getSession(message.from.id)
-        const result = await engineCtx.engine.askWithSession(prompt, session, {
+        const result = await engineCtx.agentCenter.askWithSession(prompt, session, {
           historyPreamble: 'The following is the recent conversation from this Telegram chat. Use it as context if the user references earlier messages.',
         })
         stopTyping()
@@ -304,7 +275,7 @@ export class TelegramPlugin implements Plugin {
     const result = await forceCompact(
       session,
       async (summarizePrompt) => {
-        const r = await askClaudeCode(summarizePrompt, { ...this.claudeCodeConfig, maxTurns: 1 })
+        const r = await askAgentSdk(summarizePrompt, { ...this.agentSdkConfig, maxTurns: 1 })
         return r.text
       },
     )
@@ -317,13 +288,15 @@ export class TelegramPlugin implements Plugin {
   }
 
   private async sendSettingsMenu(chatId: number) {
-    const aiConfig = await readAIConfig()
+    const aiConfig = await readAIBackend()
     const ccLabel = aiConfig.backend === 'claude-code' ? '> Claude Code' : 'Claude Code'
     const aiLabel = aiConfig.backend === 'vercel-ai-sdk' ? '> Vercel AI SDK' : 'Vercel AI SDK'
+    const sdkLabel = aiConfig.backend === 'agent-sdk' ? '> Agent SDK' : 'Agent SDK'
 
     const keyboard = new InlineKeyboard()
       .text(ccLabel, 'provider:claude-code')
       .text(aiLabel, 'provider:vercel-ai-sdk')
+      .text(sdkLabel, 'provider:agent-sdk')
 
     await this.bot!.api.sendMessage(
       chatId,
@@ -429,34 +402,4 @@ export class TelegramPlugin implements Plugin {
       }
     }
   }
-}
-
-function splitMessage(text: string, maxLength: number): string[] {
-  if (text.length <= maxLength) return [text]
-
-  const chunks: string[] = []
-  let remaining = text
-
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLength) {
-      chunks.push(remaining)
-      break
-    }
-
-    // Try to split at a newline
-    let splitAt = remaining.lastIndexOf('\n', maxLength)
-    if (splitAt === -1 || splitAt < maxLength / 2) {
-      // Fall back to splitting at a space
-      splitAt = remaining.lastIndexOf(' ', maxLength)
-    }
-    if (splitAt === -1 || splitAt < maxLength / 2) {
-      // Hard split
-      splitAt = maxLength
-    }
-
-    chunks.push(remaining.slice(0, splitAt))
-    remaining = remaining.slice(splitAt).trimStart()
-  }
-
-  return chunks
 }

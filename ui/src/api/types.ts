@@ -1,3 +1,31 @@
+// ==================== Channels ====================
+
+export interface VercelAiSdkOverride {
+  provider: string
+  model: string
+  baseUrl?: string
+  apiKey?: string
+}
+
+export type LoginMethod = 'api-key' | 'claudeai'
+
+export interface AgentSdkOverride {
+  model?: string
+  baseUrl?: string
+  apiKey?: string
+  loginMethod?: LoginMethod
+}
+
+export interface WebChannel {
+  id: string
+  label: string
+  systemPrompt?: string
+  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk'
+  vercelAiSdk?: VercelAiSdkOverride
+  agentSdk?: AgentSdkOverride
+  disabledTools?: string[]
+}
+
 // ==================== Chat ====================
 
 export interface ChatMessage {
@@ -17,6 +45,14 @@ export interface ToolCall {
   result?: string
 }
 
+export interface StreamingToolCall {
+  id: string
+  name: string
+  input: unknown
+  status: 'running' | 'done'
+  result?: string
+}
+
 export type ChatHistoryItem =
   | { kind: 'text'; role: 'user' | 'assistant'; text: string; timestamp?: string; metadata?: Record<string, unknown>; media?: Array<{ type: string; url: string }> }
   | { kind: 'tool_calls'; calls: ToolCall[]; timestamp?: string }
@@ -28,6 +64,7 @@ export interface AIProviderConfig {
   provider: string
   model: string
   baseUrl?: string
+  loginMethod?: LoginMethod
   apiKeys: { anthropic?: string; openai?: string; google?: string }
 }
 
@@ -36,11 +73,16 @@ export interface AppConfig {
   engine: Record<string, unknown>
   agent: { evolutionMode: boolean; claudeCode: Record<string, unknown> }
   compaction: { maxContextTokens: number; maxOutputTokens: number }
+  strategy?: StrategyConfig
   heartbeat: {
     enabled: boolean
     every: string
     prompt: string
     activeHours: { start: string; end: string; timezone: string } | null
+  }
+  snapshot: {
+    enabled: boolean
+    every: string
   }
   connectors: ConnectorsConfig
   [key: string]: unknown
@@ -72,7 +114,6 @@ export interface NewsCollectorConfig {
   intervalMinutes: number
   maxInMemory: number
   retentionDays: number
-  piggybackOpenBB: boolean
   feeds: NewsCollectorFeed[]
 }
 
@@ -111,48 +152,61 @@ export interface CronJob {
 
 // ==================== Trading ====================
 
-export interface CryptoAccount {
-  balance: number
-  totalMargin: number
+export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
+
+export interface BrokerHealthInfo {
+  status: BrokerHealth
+  consecutiveFailures: number
+  lastError?: string
+  lastSuccessAt?: string
+  lastFailureAt?: string
+  recovering: boolean
+  disabled: boolean
+}
+
+export interface AccountSummary {
+  id: string
+  label: string
+  capabilities: { supportedSecTypes: string[]; supportedOrderTypes: string[] }
+  health: BrokerHealthInfo
+}
+
+export interface TradingAccount {
+  id: string
+  provider: string
+  label: string
+}
+
+export interface AccountInfo {
+  netLiquidation: number
+  totalCashValue: number
   unrealizedPnL: number
-  equity: number
   realizedPnL: number
-  totalPnL: number
+  buyingPower?: number
+  initMarginReq?: number
+  maintMarginReq?: number
 }
 
-export interface CryptoPosition {
-  symbol: string
+export interface Position {
+  contract: {
+    aliceId?: string
+    symbol?: string
+    secType?: string
+    exchange?: string
+    currency?: string
+    lastTradeDateOrContractMonth?: string
+    strike?: number
+    right?: string
+    multiplier?: number
+    localSymbol?: string
+  }
   side: 'long' | 'short'
-  size: number
-  entryPrice: number
-  leverage: number
-  margin: number
-  liquidationPrice?: number
-  markPrice: number
-  unrealizedPnL: number
-  positionValue: number
-}
-
-export interface SecAccount {
-  cash: number
-  portfolioValue: number
-  equity: number
-  buyingPower: number
-  unrealizedPnL: number
-  realizedPnL: number
-  dayTradeCount: number
-}
-
-export interface SecHolding {
-  symbol: string
-  side: 'long' | 'short'
-  qty: number
-  avgEntryPrice: number
-  currentPrice: number
+  quantity: string // Decimal serialized as string
+  avgCost: number
+  marketPrice: number
   marketValue: number
   unrealizedPnL: number
-  unrealizedPnLPercent: number
-  costBasis: number
+  realizedPnL: number
 }
 
 export interface WalletCommitLog {
@@ -167,4 +221,524 @@ export interface ReconnectResult {
   success: boolean
   error?: string
   message?: string
+}
+
+export type CryptoExecutionMode = 'paper_only'
+export type KillSwitchDefaultPolicy = 'block_new_only' | 'block_all'
+
+export interface CryptoExecutionConfig {
+  mode: CryptoExecutionMode
+  enableCryptoDispatcher: boolean
+  requireDecisionTicket: boolean
+  ticketTtlMs: number
+  idempotencyTtlMs: number
+  killSwitchDefaultPolicy: KillSwitchDefaultPolicy
+}
+
+export interface CryptoExecutionRuntime {
+  enabled: boolean
+  mode: CryptoExecutionMode
+  requireDecisionTicket: boolean
+  ticketTtlMs: number
+  idempotencyTtlMs: number
+  killSwitchDefaultPolicy: KillSwitchDefaultPolicy
+  exchangeId: string
+  bridgeActive: boolean
+  intentLedgerPath: string
+  idempotencyStorePath: string
+}
+
+export interface ProcessHealthSummary {
+  status: 'ok'
+  uptime: number
+}
+
+export interface WebReadinessSummary {
+  status: 'ready' | 'not-ready'
+  ready: boolean
+  checks: Record<string, { ok: boolean; detail?: string }>
+}
+
+export interface SignalReadinessSummary {
+  status: 'ready' | 'not-ready'
+  ready: boolean
+  mode: 'paper_only'
+  authEnforced: boolean
+  authConfigured: boolean
+  supportedSymbols: string[]
+  tradingReady: boolean
+  reasons: string[]
+}
+
+export interface TradingRuntimeAccount {
+  id: string
+  label: string
+  type: string
+  enabled: boolean
+  health?: BrokerHealthInfo
+  cryptoExecution?: CryptoExecutionConfig
+  cryptoExecutionRuntime?: CryptoExecutionRuntime
+}
+
+export interface TradingRuntimeSummary {
+  process: ProcessHealthSummary
+  webReadiness: WebReadinessSummary
+  signalReadiness: SignalReadinessSummary
+  accounts: TradingRuntimeAccount[]
+}
+
+export interface StrategyMacroEvent {
+  name: string
+  releaseTimeUtc: number
+  severity: 'high' | 'medium' | 'low'
+  marketScope: Array<'crypto' | 'a-share'>
+  freezeRule: {
+    preFreezeHours: number
+    postFreezeHours: number
+    maxActionDuringFreeze: 'reduce' | 'exit' | 'no-trade' | 'hold'
+  }
+}
+
+export interface StrategyConfig {
+  enabled: boolean
+  governance: {
+    useGovernanceGate: boolean
+    staleDataCapsExecution: boolean
+    preferReduceOnWeakSignal: boolean
+  }
+  runtime: {
+    marketScope: 'crypto' | 'a-share'
+    runtimeIntegrationEnabled: boolean
+  }
+  eventCalendar: {
+    enabled: boolean
+    events: StrategyMacroEvent[]
+  }
+  regime?: {
+    hmm?: {
+      enabled: boolean
+      minObservations: number
+      seedObservations: number
+      stableObservations: number
+      trainingLookback: number
+      maxIterations: number
+      tolerance: number
+      regularization: number
+      confidenceFloor: number
+      anomalyZScore: number
+      zScoreWindow: number
+      realizedVolWindow: number
+      volumeBaselineWindow: number
+    }
+  }
+  factors: {
+    fundingRate: { enabled: boolean; weight: number }
+    basis: { enabled: boolean; weight: number }
+    volumeSurge: { enabled: boolean; weight: number }
+    momentumComposite: { enabled: boolean; weight: number }
+    meanReversion: { enabled: boolean; weight: number }
+    volatilityRegime: {
+      enabled: boolean
+      weight: number
+      componentWeights?: { first: number; second: number; third: number }
+    }
+    liquidationPressure: {
+      enabled: boolean
+      weight: number
+      componentWeights?: { first: number; second: number; third: number }
+    }
+    crossTimeframeDivergence: { enabled: boolean; weight: number }
+  }
+  positionSizing: {
+    enabled: boolean
+    method: 'fixed' | 'kelly' | 'volTarget'
+    defaultAssetLayer: 'core' | 'extended' | 'watch-only'
+    targetVolPct: number
+    maxPctOfEquity: number
+    kellyFraction: number
+    layerConfigs: Array<{
+      layer: 'core' | 'extended' | 'watch-only'
+      maxPositions: number
+      maxPositionPctOfEquity: number
+      minActionStatusToTrade: 'attack' | 'attack-lite' | 'probe' | 'hold' | 'reduce' | 'exit' | 'no-trade'
+      requiresCoreNotRiskOff: boolean
+    }>
+  }
+  research?: {
+    ic?: {
+      enabled: boolean
+      minMeanIc: number
+      minIcIr: number
+      minWinRate: number
+      quantiles: number
+      decayHorizons: number[]
+    }
+  }
+  ml?: {
+    enabled: boolean
+    architecture: 'lstm' | 'patchtst'
+    modelPath?: string
+    lookbackSteps: number
+    forecastHorizonHours: number
+    decisionThreshold: number
+  }
+  metaLabeling?: {
+    enabled: boolean
+    upperBarrierPct: number
+    lowerBarrierPct: number
+    maxHoldingBars: number
+    minConfidenceToTrade: number
+  }
+}
+
+export interface StrategyRuntimeSummary {
+  enabled: boolean
+  alphaPool: {
+    available: boolean
+    path: string
+    generatedAt: string | null
+    totalCandidates: number
+    acceptedCount: number
+    qcmCandidateCount: number
+    shadowOnlyCount: number
+    shadowEligibleCount: number
+    bestOosIc: number | null
+  }
+  governance: StrategyConfig['governance']
+  runtime: StrategyConfig['runtime']
+  eventCalendar: {
+    enabled: boolean
+    configuredEventCount: number
+    active: {
+      active: boolean
+      marketScope: 'crypto' | 'a-share'
+      maxActionDuringFreeze?: 'reduce' | 'exit' | 'no-trade' | 'hold'
+      activeWindows: Array<{
+        startsAtUtc: number
+        endsAtUtc: number
+        event: StrategyMacroEvent
+      }>
+    }
+  }
+  factors: Array<{
+    name: string
+    enabled: boolean
+    weight: number
+  }>
+  positionSizing: StrategyConfig['positionSizing']
+  readiness: {
+    governanceReady: boolean
+    factorLayerReady: boolean
+    dataIntegrationReady: boolean
+    runtimeIntegrationReady: boolean
+    notes: string[]
+  }
+}
+
+export interface StrategyEvaluationSnapshot {
+  symbol: string
+  factorSignals: Array<{
+    name: string
+    value: number
+    confidence: number
+    sourceTier: 'L1' | 'L2' | 'L3' | 'L4' | 'L5'
+    decisionStrength: 'D1' | 'D2' | 'D3' | 'D4' | 'D5'
+    metadata: Record<string, number>
+  }>
+  governance: {
+    actionStatus: string
+    baseActionStatus: string
+    cappedByEventWindow: boolean
+    breakdown: {
+      totalScore: number
+      sourceQualityScore: number
+      marketStructureScore: number
+      eventSafetyScore: number
+      sentimentAlignmentScore: number
+      executionClarityScore: number
+    }
+  }
+  ensemble: {
+    weights: Record<string, number>
+    aggregateValue: number
+    aggregateConfidence: number
+    consensusScore: number
+    decisionStrength: string
+  }
+  regimeEvaluation?: {
+    regime: 'spot-defensive' | 'range-rotation' | 'trend-follow' | 'event-risk-freeze'
+    confidence: number
+    reasons: string[]
+    method?: 'threshold' | 'hmm'
+    fallbackRegime?: 'spot-defensive' | 'range-rotation' | 'trend-follow' | 'event-risk-freeze'
+  }
+  hmmRegime?: {
+    state: 0 | 1 | 2 | 3
+    stateName: 'bull' | 'bear' | 'calm' | 'stress'
+    stateProbs: number[]
+    confidence: number
+    logLikelihood: number
+    anomaly: boolean
+    reasons: string[]
+    method: 'threshold' | 'hmm'
+    coldStartMode: 'threshold_only' | 'threshold_seeded' | 'regularized_em' | 'standard_em'
+    effectiveSampleSize: number
+  } | null
+  freeze: {
+    active: boolean
+    marketScope: 'crypto' | 'a-share'
+    maxActionDuringFreeze?: string
+    activeWindows: Array<{
+      startsAtUtc: number
+      endsAtUtc: number
+      event: StrategyMacroEvent
+    }>
+  }
+  derivedMetrics: {
+    return1hPct: number
+    return6hPct: number
+    return24hPct: number
+    return7dPct: number
+    currentPrice: number
+    currentVolume: number
+    averageVolume: number
+    realizedVolPct: number
+    openInterest: number | null
+    openInterestValue: number | null
+    liquidationCount24h: number | null
+    liquidationNotional24h: number | null
+  }
+  researchDiagnostics?: {
+    hmmEnabled: boolean
+    observationCount: number
+    coldStartMode?: 'threshold_only' | 'threshold_seeded' | 'regularized_em' | 'standard_em'
+    factorDirectionMultipliers: Record<string, number>
+    factorWeightMultipliers: Record<string, number>
+    effectiveFactorValues: Record<string, number>
+    effectiveFactorWeights: Record<string, number>
+  }
+  dataProvenance?: {
+    candles: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    fundingRate: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    basis: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    openInterest: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    liquidation: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    equity: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    referencePrice: {
+      source: 'input' | 'market-data' | 'account-broker' | 'public-ccxt' | 'derived' | 'unavailable'
+      status: 'resolved' | 'fallback' | 'missing'
+      detail?: string
+      accountId?: string
+      exchangeId?: string
+    }
+    completeness: 'full' | 'partial' | 'minimal'
+  }
+  executionPreview?: {
+    mode: 'applied' | 'pass-through' | 'blocked' | 'fallback'
+    actionStatus: string
+    requestedNotionalUsd: number | null
+    recommendedNotionalUsd: number | null
+    effectiveSize: number | null
+    effectiveUsdSize: number | null
+    effectiveNotionalUsd: number | null
+    assetLayer: 'core' | 'extended' | 'watch-only'
+    fallbackReason?: string
+    blockReason?: string
+    reasons: string[]
+    freeze: {
+      active: boolean
+      maxActionDuringFreeze?: string
+      activeEvents: string[]
+    }
+  }
+  positionSizing: {
+    allowed: boolean
+    maxPositionPctOfEquity: number
+    recommendedPctOfEquity: number
+    requestedPctOfEquity: number
+    recommendedNotionalUsd: number | null
+    assetLayer: 'core' | 'extended' | 'watch-only'
+    equity: number | null
+    method: 'fixed' | 'kelly' | 'volTarget'
+    reasons: string[]
+  }
+}
+
+// ==================== Wallet Status / Push ====================
+
+export interface WalletOperation {
+  action: 'placeOrder' | 'modifyOrder' | 'closePosition' | 'cancelOrder' | 'syncOrders'
+  contract?: { aliceId?: string; symbol?: string; localSymbol?: string }
+  order?: { action?: string; orderType?: string; totalQuantity?: number | string; cashQty?: number | string; lmtPrice?: number | string; auxPrice?: number | string }
+  orderId?: string
+  quantity?: string
+  [key: string]: unknown
+}
+
+export interface WalletStatus {
+  staged: WalletOperation[]
+  pendingMessage: string | null
+  head: string | null
+  commitCount: number
+}
+
+export interface WalletRejectResult {
+  hash: string
+  message: string
+  operationCount: number
+}
+
+export interface WalletPushResult {
+  hash: string
+  message: string
+  operationCount: number
+  submitted: Array<{ action: string; success: boolean; orderId?: string; status: string; error?: string }>
+  rejected: Array<{ action: string; success: boolean; error?: string; status: string }>
+}
+
+// ==================== Tool Call Log ====================
+
+export interface ToolCallRecord {
+  seq: number
+  id: string
+  sessionId: string
+  name: string
+  input: unknown
+  output: string
+  status: 'ok' | 'error'
+  durationMs: number
+  timestamp: number
+}
+
+// ==================== Trading Config ====================
+
+export interface AccountConfig {
+  id: string
+  label?: string
+  type: string
+  enabled: boolean
+  guards: GuardEntry[]
+  brokerConfig: Record<string, unknown>
+  cryptoExecution?: CryptoExecutionConfig
+}
+
+// ==================== Broker Type Metadata (from /broker-types endpoint) ====================
+
+export interface BrokerConfigField {
+  name: string
+  type: 'text' | 'password' | 'number' | 'boolean' | 'select'
+  label: string
+  placeholder?: string
+  default?: unknown
+  required?: boolean
+  options?: Array<{ value: string; label: string }>
+  description?: string
+  sensitive?: boolean
+}
+
+export interface SubtitleField {
+  field: string
+  label?: string
+  falseLabel?: string
+  prefix?: string
+}
+
+export interface BrokerTypeInfo {
+  type: string
+  name: string
+  description: string
+  badge: string
+  badgeColor: string
+  fields: BrokerConfigField[]
+  subtitleFields: SubtitleField[]
+  guardCategory: 'crypto' | 'securities'
+}
+
+export interface GuardEntry {
+  type: string
+  options: Record<string, unknown>
+}
+
+export interface TestConnectionResult {
+  success: boolean
+  error?: string
+  account?: unknown
+}
+
+// ==================== Snapshots ====================
+
+export interface UTASnapshotSummary {
+  accountId: string
+  timestamp: string
+  trigger: string
+  account: {
+    netLiquidation: string
+    totalCashValue: string
+    unrealizedPnL: string
+    realizedPnL: string
+    buyingPower?: string
+    initMarginReq?: string
+    maintMarginReq?: string
+  }
+  positions: Array<{
+    aliceId: string
+    side: 'long' | 'short'
+    quantity: string
+    avgCost: string
+    marketPrice: string
+    marketValue: string
+    unrealizedPnL: string
+    realizedPnL: string
+  }>
+  openOrders: Array<{
+    orderId: string
+    aliceId: string
+    action: string
+    orderType: string
+    totalQuantity: string
+    status: string
+  }>
+  health: string
+}
+
+export interface EquityCurvePoint {
+  timestamp: string
+  equity: string
+  accounts: Record<string, string>
 }

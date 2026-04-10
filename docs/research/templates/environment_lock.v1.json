@@ -7,7 +7,7 @@
       "required": true
     },
     "node": {
-      "versionSpec": "22.21.x",
+      "versionSpec": "22.x",
       "required": true
     },
     "pnpm": {

@@ -31,6 +31,45 @@ body,
   height: 100%;
 }
 
+/* ==================== Button utility classes ==================== */
+
+.btn-primary {
+  @apply px-4 py-2 text-[13px] font-medium rounded-lg
+    bg-bg-tertiary border border-border text-text
+    hover:border-accent/40 hover:bg-bg-tertiary/80 transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 text-[13px] font-medium rounded-lg border border-border text-text-muted
+    hover:bg-bg-tertiary hover:text-text transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+}
+
+.btn-danger {
+  @apply px-4 py-2 text-[13px] font-medium rounded-lg border border-red/30 text-red
+    hover:bg-red/10 transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+}
+
+.btn-primary-sm {
+  @apply px-3 py-1.5 text-xs font-medium rounded-md
+    bg-bg-tertiary border border-border text-text
+    hover:border-accent/40 hover:bg-bg-tertiary/80 transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1 focus-visible:ring-offset-bg;
+}
+
+.btn-secondary-sm {
+  @apply px-3 py-1.5 text-xs font-medium rounded-md border border-border text-text-muted
+    hover:bg-bg-tertiary hover:text-text transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1 focus-visible:ring-offset-bg;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
@@ -144,15 +183,15 @@ body,
   }
 }
 .thinking-dot {
-  animation: blink 1.4s infinite;
+  animation: blink 0.9s infinite;
   font-size: 20px;
   line-height: 1;
 }
 .thinking-dot:nth-child(2) {
-  animation-delay: 0.2s;
+  animation-delay: 0.15s;
 }
 .thinking-dot:nth-child(3) {
-  animation-delay: 0.4s;
+  animation-delay: 0.3s;
 }
 
 /* Message entrance animation */
@@ -168,6 +207,19 @@ body,
 }
 .message-enter {
   animation: fadeSlideIn 0.3s ease-out;
+}
+
+/* Page transition animation */
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.page-fade-in {
+  animation: pageFadeIn 150ms ease-out;
 }
 
 /* Code block wrapper for copy button */

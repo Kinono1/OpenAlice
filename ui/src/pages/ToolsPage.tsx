@@ -4,6 +4,8 @@ import type { ToolInfo } from '../api/tools'
 import { Toggle } from '../components/Toggle'
 import { SaveIndicator } from '../components/SaveIndicator'
 import { useAutoSave } from '../hooks/useAutoSave'
+import { PageHeader } from '../components/PageHeader'
+import { PageLoading, EmptyState } from '../components/StateViews'
 
 const GROUP_LABELS: Record<string, string> = {
   thinking: 'Thinking Kit',
@@ -95,25 +97,19 @@ export function ToolsPage() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="shrink-0 border-b border-border">
-        <div className="px-4 md:px-6 py-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-text">Tools</h2>
-            <p className="text-[11px] text-text-muted mt-0.5">
-              {inventory.length} tools in {groups.length} groups — changes apply on next AI request
-            </p>
-          </div>
-          <SaveIndicator status={status} onRetry={retry} />
-        </div>
-      </div>
+      <PageHeader
+        title="Tools"
+        description={<>{inventory.length} tools in {groups.length} groups — changes apply on next AI request</>}
+        right={<SaveIndicator status={status} onRetry={retry} />}
+      />
 
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-5">
         {!loaded ? (
-          <p className="text-sm text-text-muted">Loading…</p>
+          <PageLoading />
         ) : groups.length === 0 ? (
-          <p className="text-sm text-text-muted">No tools registered.</p>
+          <EmptyState title="No tools registered." description="Tools will appear here when the engine starts." />
         ) : (
-          <div className="max-w-[720px] space-y-2">
+          <div className="max-w-[880px] mx-auto space-y-2">
             {groups.map((g) => (
               <ToolGroupCard
                 key={g.key}

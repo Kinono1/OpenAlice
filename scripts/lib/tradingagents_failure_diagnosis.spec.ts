@@ -1,14 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_FAILURE_DIAGNOSIS_CONFIG,
   diagnoseTradingAgentsFailureMechanism,
-} from "./tradingagents_failure_diagnosis.js";
+} from './tradingagents_failure_diagnosis.js'
 
-describe("diagnoseTradingAgentsFailureMechanism", () => {
-  it("classifies measurement variance reduction separately from structural instability", () => {
+describe('diagnoseTradingAgentsFailureMechanism', () => {
+  it('classifies measurement variance reduction separately from structural instability', () => {
     const payload = diagnoseTradingAgentsFailureMechanism({
-      paradigmId: "tradingagents_research_sidecar_v2",
-      poolProfile: "baseline_independent_guard_v1",
+      paradigmId: 'tradingagents_research_sidecar_v2',
+      poolProfile: 'baseline_independent_guard_v1',
       validationRuns: {
         diagnostics: {
           donorOnlyAggregateMetrics: {
@@ -26,72 +26,37 @@ describe("diagnoseTradingAgentsFailureMechanism", () => {
           {
             candidates: [
               {
-                role: "donor",
-                familyKey: "donor_family",
-                correlationBucket: "donor_bucket",
-                wfo: {
-                  windows: [
-                    { gatePassed: true },
-                    { gatePassed: true },
-                    { gatePassed: false },
-                    { gatePassed: false },
-                    { gatePassed: false },
-                    { gatePassed: false },
-                    { gatePassed: true },
-                    { gatePassed: false },
-                  ],
-                },
+                role: 'donor',
+                familyKey: 'donor_family',
+                correlationBucket: 'donor_bucket',
+                backtestMetrics: { sharpe: 0.8 },
               },
             ],
           },
         ],
-        result: "NO_GO",
       },
       routeMatrix: {
-        recommendedProfile: "phaseb_native_spa_candidate_v1",
-        profiles: [
-          {
-            baseAggregateMetrics: {
-              fdrDiagnostics: {
-                symbolDiagnostics: {
-                  "BTC/USD": { benchmarkStrategyId: "BASELINE_CONTROL" },
-                },
-              },
-            },
-          },
-        ],
+        recommendedProfile: 'phaseb_native_spa_candidate_v1',
       },
       wfoSensitivity: {
         profiles: [
           {
-            profile: "native_short_test",
+            profile: 'native_short_test',
             candidates: [
               {
-                role: "donor",
+                role: 'donor',
                 failedWindowRatio: 0.7333,
                 averageDegradation: 25.9,
                 medianTradesPerWindow: 2,
-                diagnosisHints: ["sample_too_sparse_for_stable_oos"],
+                diagnosisHints: ['sample_too_sparse_for_stable_oos'],
               },
             ],
           },
           {
-            profile: "medium_oos",
+            profile: 'long_oos',
             candidates: [
               {
-                role: "donor",
-                failedWindowRatio: 0.7273,
-                averageDegradation: 0.41,
-                medianTradesPerWindow: 4,
-                diagnosisHints: [],
-              },
-            ],
-          },
-          {
-            profile: "long_oos",
-            candidates: [
-              {
-                role: "donor",
+                role: 'donor',
                 failedWindowRatio: 0.625,
                 averageDegradation: 0.145,
                 medianTradesPerWindow: 6,
@@ -102,18 +67,18 @@ describe("diagnoseTradingAgentsFailureMechanism", () => {
         ],
       },
       preRegisteredConfig: DEFAULT_FAILURE_DIAGNOSIS_CONFIG,
-    });
+    })
 
-    expect(payload.primaryRootCause).toBe("measurement_variance_reduction_only");
-    expect(payload.secondaryContributors).toContain("sample_sparsity");
-    expect(payload.secondaryContributors).toContain("structural_instability");
-    expect(payload.decision).toBe("component_salvage_only");
-    expect(payload.structuralFixEligibility.eligible).toBe(false);
-  });
+    expect(payload.primaryRootCause).toBe('measurement_variance_reduction_only')
+    expect(payload.secondaryContributors).toContain('sample_sparsity')
+    expect(payload.secondaryContributors).toContain('structural_instability')
+    expect(payload.decision).toBe('component_salvage_only')
+    expect(payload.structuralFixEligibility.eligible).toBe(false)
+  })
 
-  it("allows structural fix only for clean horizon mismatch cases", () => {
+  it('allows structural fix only for clean horizon mismatch cases', () => {
     const payload = diagnoseTradingAgentsFailureMechanism({
-      paradigmId: "tradingagents_research_sidecar_v2",
+      paradigmId: 'tradingagents_research_sidecar_v2',
       validationRuns: {
         diagnostics: {
           donorOnlyAggregateMetrics: {
@@ -121,6 +86,7 @@ describe("diagnoseTradingAgentsFailureMechanism", () => {
             meanDsrProbability: 0.62,
             fdrQ: 0.04,
             maxFailedWindowRatio: 0.35,
+            meanSharpe: 0.7,
           },
           questions: {
             donorLeadsNonControls: true,
@@ -131,52 +97,31 @@ describe("diagnoseTradingAgentsFailureMechanism", () => {
           {
             candidates: [
               {
-                role: "donor",
-                familyKey: "donor_family_a",
-                correlationBucket: "donor_bucket_a",
-                wfo: {
-                  windows: [
-                    { gatePassed: true },
-                    { gatePassed: true },
-                    { gatePassed: false },
-                    { gatePassed: true },
-                    { gatePassed: true },
-                    { gatePassed: true },
-                  ],
-                },
+                role: 'donor',
+                familyKey: 'donor_family_a',
+                correlationBucket: 'donor_bucket_a',
+                backtestMetrics: { sharpe: 0.7 },
               },
               {
-                role: "donor",
-                familyKey: "donor_family_b",
-                correlationBucket: "donor_bucket_b",
-                wfo: { windows: [] },
+                role: 'donor',
+                familyKey: 'donor_family_b',
+                correlationBucket: 'donor_bucket_b',
+                backtestMetrics: { sharpe: 0.6 },
               },
             ],
           },
         ],
-        result: "NO_GO",
       },
       routeMatrix: {
-        recommendedProfile: "phaseb_native_spa_candidate_v1",
-        profiles: [
-          {
-            baseAggregateMetrics: {
-              fdrDiagnostics: {
-                symbolDiagnostics: {
-                  "BTC/USD": { benchmarkStrategyId: "BASELINE_CONTROL" },
-                },
-              },
-            },
-          },
-        ],
+        recommendedProfile: 'phaseb_native_spa_candidate_v1',
       },
       wfoSensitivity: {
         profiles: [
           {
-            profile: "native_short_test",
+            profile: 'native_short_test',
             candidates: [
               {
-                role: "donor",
+                role: 'donor',
                 failedWindowRatio: 0.65,
                 averageDegradation: 0.7,
                 medianTradesPerWindow: 2,
@@ -185,22 +130,10 @@ describe("diagnoseTradingAgentsFailureMechanism", () => {
             ],
           },
           {
-            profile: "medium_oos",
+            profile: 'long_oos',
             candidates: [
               {
-                role: "donor",
-                failedWindowRatio: 0.48,
-                averageDegradation: 0.38,
-                medianTradesPerWindow: 4,
-                diagnosisHints: [],
-              },
-            ],
-          },
-          {
-            profile: "long_oos",
-            candidates: [
-              {
-                role: "donor",
+                role: 'donor',
                 failedWindowRatio: 0.32,
                 averageDegradation: 0.2,
                 medianTradesPerWindow: 6,
@@ -211,10 +144,10 @@ describe("diagnoseTradingAgentsFailureMechanism", () => {
         ],
       },
       preRegisteredConfig: DEFAULT_FAILURE_DIAGNOSIS_CONFIG,
-    });
+    })
 
-    expect(payload.primaryRootCause).toBe("horizon_mismatch");
-    expect(payload.structuralFixEligibility.eligible).toBe(true);
-    expect(payload.decision).toBe("continue_structural_fix");
-  });
-});
+    expect(payload.primaryRootCause).toBe('horizon_mismatch')
+    expect(payload.structuralFixEligibility.eligible).toBe(true)
+    expect(payload.decision).toBe('continue_structural_fix')
+  })
+})

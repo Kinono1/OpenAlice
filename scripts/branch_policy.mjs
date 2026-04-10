@@ -91,7 +91,7 @@ function checkCurrentBranch(policy) {
 
   if (!knownBranches.has(current)) {
     console.error(
-      `POLICY_FAIL: current branch "${current}" is not in configured workflow branches.`
+      `POLICY_FAIL: current branch "${current}" is not in configured workflow branches.`,
     );
     return EXIT_POLICY_FAIL;
   }
@@ -102,7 +102,7 @@ function checkCurrentBranch(policy) {
   }
 
   console.log(
-    `PASS: current branch "${current}" is a valid workflow branch (default dev is "${defaultBranch}").`
+    `PASS: current branch "${current}" is a valid workflow branch (default dev is "${defaultBranch}").`,
   );
   return EXIT_OK;
 }
@@ -112,7 +112,7 @@ function checkMergeDirection(policy, source, target) {
 
   if (policy.rules.forbiddenMergeDirections.some((x) => sameDirection(x, direction))) {
     console.error(
-      `POLICY_FAIL: merge direction ${source} -> ${target} is explicitly forbidden.`
+      `POLICY_FAIL: merge direction ${source} -> ${target} is explicitly forbidden.`,
     );
     return EXIT_POLICY_FAIL;
   }
@@ -123,7 +123,7 @@ function checkMergeDirection(policy, source, target) {
   }
 
   console.error(
-    `POLICY_FAIL: merge direction ${source} -> ${target} is not in allowedMergeDirections.`
+    `POLICY_FAIL: merge direction ${source} -> ${target} is not in allowedMergeDirections.`,
   );
   return EXIT_POLICY_FAIL;
 }
@@ -149,7 +149,7 @@ function main() {
     if (args.checkMerge) {
       if (!args.source || !args.target) {
         console.error(
-          "POLICY_FAIL: --check-merge requires both --source <branch> and --target <branch>."
+          "POLICY_FAIL: --check-merge requires both --source <branch> and --target <branch>.",
         );
         process.exit(EXIT_POLICY_FAIL);
       }

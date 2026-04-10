@@ -125,6 +125,7 @@ def resolve_note_path(raw_note_file: str, source_manifest: Path, repo_root: Path
         return note_path
 
     candidates = [
+        source_manifest.parent / note_path,
         Path.cwd() / note_path,
         repo_root / note_path,
         source_manifest.parent / note_path.name,

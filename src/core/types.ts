@@ -1,14 +1,16 @@
-import type { ICryptoTradingEngine, Wallet } from '../extension/crypto-trading/index.js'
-import type { ISecuritiesTradingEngine, SecWallet } from '../extension/securities-trading/index.js'
+import type { AccountManager } from '../domain/trading/index.js'
+import type { SnapshotService } from '../domain/trading/snapshot/index.js'
 import type { CronEngine } from '../task/cron/engine.js'
 import type { Heartbeat } from '../task/heartbeat/index.js'
-import type { Config } from './config.js'
+import type { Config, WebChannel } from './config.js'
 import type { ConnectorCenter } from './connector-center.js'
-import type { Engine } from './engine.js'
+import type { AgentCenter } from './agent-center.js'
 import type { EventLog } from './event-log.js'
+import type { ToolCallLog } from './tool-call-log.js'
 import type { ToolCenter } from './tool-center.js'
+import type { CryptoClientLike } from '../domain/market-data/client/types.js'
 
-export type { Config }
+export type { Config, WebChannel }
 
 export interface Plugin {
   name: string
@@ -25,24 +27,19 @@ export interface ReconnectResult {
 export interface EngineContext {
   config: Config
   connectorCenter: ConnectorCenter
-  cryptoEngine: ICryptoTradingEngine | null
-  engine: Engine
+  agentCenter: AgentCenter
   eventLog: EventLog
+  toolCallLog: ToolCallLog
   heartbeat: Heartbeat
   cronEngine: CronEngine
-  reconnectCrypto?: () => Promise<ReconnectResult>
-  reconnectSecurities?: () => Promise<ReconnectResult>
-  reconnectConnectors?: () => Promise<ReconnectResult>
-  /** Current crypto trading engine (updates on reconnect). */
-  getCryptoEngine?: () => ICryptoTradingEngine | null
-  /** Current securities trading engine (updates on reconnect). */
-  getSecuritiesEngine?: () => ISecuritiesTradingEngine | null
-  /** Current crypto wallet (updates on reconnect). */
-  getCryptoWallet?: () => Wallet | null
-  /** Current securities wallet (updates on reconnect). */
-  getSecWallet?: () => SecWallet | null
-  /** Central tool registry. */
-  toolCenter?: ToolCenter
+  toolCenter: ToolCenter
+  cryptoClient: CryptoClientLike
+
+  // Trading (unified account model)
+  accountManager: AccountManager
+  snapshotService?: SnapshotService
+  /** Reconnect connector plugins (Telegram, MCP-Ask, etc.). */
+  reconnectConnectors: () => Promise<ReconnectResult>
 }
 
 /** A media attachment collected from tool results (e.g. browser screenshots). */

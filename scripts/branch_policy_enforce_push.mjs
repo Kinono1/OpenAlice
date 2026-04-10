@@ -50,9 +50,7 @@ function readStdin() {
 }
 
 function refToBranch(ref) {
-  if (!ref) {
-    return null;
-  }
+  if (!ref) return null;
   const prefix = "refs/heads/";
   if (ref.startsWith(prefix)) {
     return ref.slice(prefix.length);
@@ -100,7 +98,7 @@ function enforce(policy, args, updates) {
     Object.entries(policy.remotes ?? {}).map(([role, remoteName]) => [
       remoteName,
       role,
-    ])
+    ]),
   );
   const remoteRole = roleByRemoteName.get(args.remoteName) ?? "";
   const allowedPushDirections = prePush.allowedPushDirections ?? [];
@@ -115,7 +113,7 @@ function enforce(policy, args, updates) {
 
     if (!update.from) {
       violations.push(
-        `non-branch source ref "${update.localRef}" cannot update protected branch ${update.to}; use refs/heads/<branch> as source.`
+        `non-branch source ref "${update.localRef}" cannot update protected branch ${update.to}; use refs/heads/<branch> as source.`,
       );
       continue;
     }
@@ -127,14 +125,14 @@ function enforce(policy, args, updates) {
       (!knownBranches.has(update.from) || !knownBranches.has(update.to))
     ) {
       violations.push(
-        `unknown branch in push direction ${update.from} -> ${update.to}.`
+        `unknown branch in push direction ${update.from} -> ${update.to}.`,
       );
       continue;
     }
 
     if (forbiddenPushDirections.some((x) => sameDirection(x, direction))) {
       violations.push(
-        `forbidden push direction ${update.from} -> ${update.to}.`
+        `forbidden push direction ${update.from} -> ${update.to}.`,
       );
       continue;
     }
@@ -144,24 +142,24 @@ function enforce(policy, args, updates) {
       !allowedPushDirections.some((x) => sameDirection(x, direction))
     ) {
       violations.push(
-        `direction ${update.from} -> ${update.to} is not in allowedPushDirections.`
+        `direction ${update.from} -> ${update.to} is not in allowedPushDirections.`,
       );
       continue;
     }
 
     const remoteRule = branchRemotePolicy.find(
-      (rule) => rule.branch === update.to
+      (rule) => rule.branch === update.to,
     );
     if (remoteRule) {
       if (!remoteRole) {
         violations.push(
-          `remote "${args.remoteName}" is not mapped in policy.remotes for branch ${update.to}.`
+          `remote "${args.remoteName}" is not mapped in policy.remotes for branch ${update.to}.`,
         );
         continue;
       }
       if (!remoteRule.allowedRemoteRoles.includes(remoteRole)) {
         violations.push(
-          `remote role "${remoteRole}" is not allowed for branch ${update.to} (allowed: ${remoteRule.allowedRemoteRoles.join(", ")}).`
+          `remote role "${remoteRole}" is not allowed for branch ${update.to} (allowed: ${remoteRule.allowedRemoteRoles.join(", ")}).`,
         );
       }
     }
@@ -176,7 +174,7 @@ function enforce(policy, args, updates) {
   }
 
   console.log(
-    `PASS: pre-push policy passed for remote "${args.remoteName || "unknown"}".`
+    `PASS: pre-push policy passed for remote "${args.remoteName || "unknown"}".`,
   );
   return EXIT_OK;
 }

@@ -19,40 +19,40 @@ import { z } from 'zod'
 import { glob } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import type { Plugin, EngineContext } from '../../core/types.js'
-import { createRequireAuth, createRequireTrade } from '../../core/auth.js'
-import { createMcpAuthMiddleware } from '../../core/mcp-auth-policy.js'
+import { createCorsOriginResolver } from '../../core/cors.js'
 import { SessionStore, toTextHistory } from '../../core/session.js'
+import { McpAskConnector } from './mcp-ask-connector.js'
 
 export interface McpAskConfig {
-  port: number;
-  allowOrigins?: string[];
+  port: number
+  allowOrigins?: string[]
 }
 
-const SESSION_PREFIX = "mcp-ask";
+const SESSION_PREFIX = 'mcp-ask'
 
 export class McpAskPlugin implements Plugin {
-  name = "mcp-ask";
-  private server: ReturnType<typeof serve> | null = null;
-  private sessions = new Map<string, SessionStore>();
-  private unregisterConnector?: () => void;
+  name = 'mcp-ask'
+  private server: ReturnType<typeof serve> | null = null
+  private sessions = new Map<string, SessionStore>()
+  private unregisterConnector?: () => void
 
   constructor(private config: McpAskConfig) {}
 
   private async getSession(sessionId: string): Promise<SessionStore> {
-    let session = this.sessions.get(sessionId);
+    let session = this.sessions.get(sessionId)
     if (!session) {
-      session = new SessionStore(`${SESSION_PREFIX}__${sessionId}`);
-      await session.restore();
-      this.sessions.set(sessionId, session);
+      session = new SessionStore(`${SESSION_PREFIX}__${sessionId}`)
+      await session.restore()
+      this.sessions.set(sessionId, session)
     }
-    return session;
+    return session
   }
 
   async start(ctx: EngineContext) {
-    const plugin = this;
+    const plugin = this
 
     const createMcpServer = () => {
-      const mcp = new McpServer({ name: "open-alice-ask", version: "1.0.0" });
+      const mcp = new McpServer({ name: 'open-alice-ask', version: '1.0.0' })
 
       // ── askWithSession ──
       mcp.tool(
@@ -62,127 +62,82 @@ export class McpAskPlugin implements Plugin {
         async ({ message, sessionId }) => {
           const session = await plugin.getSession(sessionId)
 
-          const result = await ctx.engine.askWithSession(message, session, {
+          const result = await ctx.agentCenter.askWithSession(message, session, {
             historyPreamble: 'The following is the conversation from an external MCP client. Use it as context if the caller references earlier messages.',
           })
 
           return {
             content: [{ type: 'text' as const, text: JSON.stringify({ text: result.text, sessionId }) }],
           }
-        }
-      );
+        },
+      )
 
       // ── listSessions ──
-      mcp.tool("listSessions", "List all mcp-ask sessions.", {}, async () => {
-        const sessionsDir = join(process.cwd(), "data", "sessions");
-        const sessions: Array<{ sessionId: string }> = [];
-        try {
-          for await (const entry of glob(`${SESSION_PREFIX}__*.jsonl`, {
-            cwd: sessionsDir,
-          })) {
-            const name = basename(entry, ".jsonl");
-            const sessionId = name.slice(`${SESSION_PREFIX}__`.length);
-            if (sessionId) sessions.push({ sessionId });
+      mcp.tool(
+        'listSessions',
+        'List all mcp-ask sessions.',
+        {},
+        async () => {
+          const sessionsDir = join(process.cwd(), 'data', 'sessions')
+          const sessions: Array<{ sessionId: string }> = []
+          try {
+            for await (const entry of glob(`${SESSION_PREFIX}__*.jsonl`, { cwd: sessionsDir })) {
+              const name = basename(entry, '.jsonl')
+              const sessionId = name.slice(`${SESSION_PREFIX}__`.length)
+              if (sessionId) sessions.push({ sessionId })
+            }
+          } catch { /* no sessions dir yet */ }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({ sessions }) }],
           }
-        } catch {
-          /* no sessions dir yet */
-        }
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify({ sessions }) },
-          ],
-        };
-      });
+        },
+      )
 
       // ── getSessionHistory ──
       mcp.tool(
-        "getSessionHistory",
-        "Read conversation history for a session.",
-        {
-          sessionId: z.string().describe("Session identifier"),
-          limit: z
-            .number()
-            .int()
-            .positive()
-            .default(50)
-            .describe("Max messages to return")
-            .optional(),
-        },
+        'getSessionHistory',
+        'Read conversation history for a session.',
+        { sessionId: z.string().describe('Session identifier'), limit: z.number().int().positive().default(50).describe('Max messages to return').optional() },
         async ({ sessionId, limit }) => {
-          const session = await plugin.getSession(sessionId);
-          const entries = await session.readActive();
-          const history = toTextHistory(entries);
-          const trimmed = history.slice(-(limit ?? 50));
+          const session = await plugin.getSession(sessionId)
+          const entries = await session.readActive()
+          const history = toTextHistory(entries)
+          const trimmed = history.slice(-(limit ?? 50))
           return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({ messages: trimmed }),
-              },
-            ],
-          };
-        }
-      );
+            content: [{ type: 'text' as const, text: JSON.stringify({ messages: trimmed }) }],
+          }
+        },
+      )
 
-      return mcp;
-    };
-
-    const app = new Hono();
-    const allowedOrigins = new Set(
-      (this.config.allowOrigins ?? []).map(origin => origin.trim()).filter(Boolean),
-    );
-
-    const requireAuth = createRequireAuth(ctx.config.auth.enforceAuth);
-    const requireTrade = createRequireTrade(ctx.config.auth.enforceAuth);
-    const mcpAuth = createMcpAuthMiddleware(requireAuth, requireTrade);
-
-    if (allowedOrigins.size > 0) {
-      app.use(
-        "*",
-        cors({
-          origin: (origin) => (allowedOrigins.has(origin) ? origin : ""),
-          allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-          allowHeaders: [
-            "Content-Type",
-            "Authorization",
-            "mcp-session-id",
-            "Last-Event-ID",
-            "mcp-protocol-version",
-          ],
-          exposeHeaders: ["mcp-session-id", "mcp-protocol-version"],
-        })
-      );
+      return mcp
     }
 
-    app.use("/mcp", mcpAuth);
+    const app = new Hono()
 
-    app.all("/mcp", async c => {
-      const transport = new WebStandardStreamableHTTPServerTransport();
-      const mcp = createMcpServer();
-      await mcp.connect(transport);
-      return transport.handleRequest(c.req.raw);
-    });
+    app.use('*', cors({
+      origin: createCorsOriginResolver(this.config.allowOrigins),
+      allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+      allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
+      exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
+    }))
+
+    app.all('/mcp', async (c) => {
+      const transport = new WebStandardStreamableHTTPServerTransport()
+      const mcp = createMcpServer()
+      await mcp.connect(transport)
+      return transport.handleRequest(c.req.raw)
+    })
 
     // Register as connector for outbound delivery (heartbeat/cron)
-    this.unregisterConnector = ctx.connectorCenter.register({
-      channel: 'mcp-ask',
-      to: 'default',
-      capabilities: { push: false, media: false },
-      send: async () => {
-        // MCP is pull-based; outbound send is a no-op.
-        return { delivered: false }
-      },
-    });
+    this.unregisterConnector = ctx.connectorCenter.register(new McpAskConnector())
 
-    this.server = serve({ fetch: app.fetch, port: this.config.port }, info => {
-      console.log(
-        `mcp-ask connector listening on http://localhost:${info.port}/mcp`
-      );
-    });
+    this.server = serve({ fetch: app.fetch, port: this.config.port }, (info) => {
+      console.log(`mcp-ask connector listening on http://localhost:${info.port}/mcp`)
+    })
   }
 
   async stop() {
-    this.unregisterConnector?.();
-    this.server?.close();
+    this.unregisterConnector?.()
+    this.server?.close()
   }
 }

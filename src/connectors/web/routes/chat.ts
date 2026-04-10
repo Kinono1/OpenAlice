@@ -1,11 +1,13 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { extname, join } from 'node:path'
 import type { EngineContext } from '../../../core/types.js'
+import type { AskOptions } from '../../../core/ai-provider-manager.js'
 import { SessionStore, toChatHistory } from '../../../core/session.js'
-import { persistMedia, resolveMediaPath } from '../../../core/media-store.js'
+import { readWebSubchannels } from '../../../core/config.js'
+import { resolveMediaPath } from '../../../core/media-store.js'
 
 export interface SSEClient {
   id: string
@@ -14,58 +16,108 @@ export interface SSEClient {
 
 interface ChatDeps {
   ctx: EngineContext
-  session: SessionStore
-  sseClients: Map<string, SSEClient>
+  sessions: Map<string, SessionStore>
+  sseByChannel: Map<string, Map<string, SSEClient>>
   maxSseClients: number
   sseMaxDurationMs: number
 }
 
+interface ChatRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
 /** Chat routes: POST /, GET /history, GET /events (SSE) */
-export function createChatRoutes({
-  ctx,
-  session,
-  sseClients,
-  maxSseClients,
-  sseMaxDurationMs,
-}: ChatDeps) {
+export function createChatRoutes(
+  { ctx, sessions, sseByChannel, maxSseClients, sseMaxDurationMs }: ChatDeps,
+  opts?: ChatRouteOpts,
+) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.post('/', async (c) => {
-    const body = await c.req.json<{ message?: string }>()
+    const body = await c.req.json() as { message?: string; channelId?: string }
     const message = body.message?.trim()
     if (!message) return c.json({ error: 'message is required' }, 400)
 
-    const receivedEntry = await ctx.eventLog.append('message.received', {
-      channel: 'web', to: 'default', prompt: message,
-    })
+    const channelId = body.channelId ?? 'default'
+    const session = sessions.get(channelId)
+    if (!session) return c.json({ error: 'channel not found' }, 404)
 
-    const result = await ctx.engine.askWithSession(message, session, {
+    // Build AskOptions from channel config (if not default)
+    const opts: AskOptions = {
       historyPreamble: 'The following is the recent conversation from the Web UI. Use it as context if the user references earlier messages.',
-    })
-
-    await ctx.eventLog.append('message.sent', {
-      channel: 'web', to: 'default', prompt: message,
-      reply: result.text, durationMs: Date.now() - receivedEntry.ts,
-    })
-
-    // Persist media files with content-addressable 3-word names
-    const media: Array<{ type: 'image'; url: string }> = []
-    for (const m of result.media ?? []) {
-      const name = await persistMedia(m.path)
-      media.push({ type: 'image', url: `/api/media/${name}` })
+    }
+    if (channelId !== 'default') {
+      const channels = await readWebSubchannels()
+      const channel = channels.find((ch) => ch.id === channelId)
+      if (channel) {
+        if (channel.systemPrompt) opts.systemPrompt = channel.systemPrompt
+        if (channel.disabledTools?.length) opts.disabledTools = channel.disabledTools
+        if (channel.provider) opts.provider = channel.provider
+        if (channel.vercelAiSdk) opts.vercelAiSdk = channel.vercelAiSdk
+        if (channel.agentSdk) opts.agentSdk = channel.agentSdk
+      }
     }
 
-    return c.json({ text: result.text, media })
+    const receivedEntry = await ctx.eventLog.append('message.received', {
+      channel: 'web', to: channelId, prompt: message,
+    })
+
+    const stream = ctx.agentCenter.askWithSession(message, session, opts)
+
+    // Stream events directly on the POST response (reliable, same connection).
+    // Also push to other SSE clients for multi-tab sync (best-effort).
+    const channelClients = sseByChannel.get(channelId) ?? new Map()
+
+    return streamSSE(c, async (sseStream) => {
+      for await (const event of stream) {
+        if (event.type === 'done') continue
+        const data = JSON.stringify({ type: 'stream', event })
+
+        // Write to requesting client (reliable)
+        await sseStream.writeSSE({ data })
+
+        // Push to other SSE clients (best-effort, multi-tab)
+        for (const client of channelClients.values()) {
+          try { client.send(data) } catch { /* disconnected */ }
+        }
+      }
+
+      // Stream fully drained — await resolves immediately with cached result
+      const result = await stream
+
+      await ctx.eventLog.append('message.sent', {
+        channel: 'web', to: channelId, prompt: message,
+        reply: result.text, durationMs: Date.now() - receivedEntry.ts,
+      })
+
+      // Media already persisted by AgentCenter — use pre-built URLs
+      const media = (result.mediaUrls ?? []).map((url: string) => ({ type: 'image', url }))
+
+      // Final event with result
+      await sseStream.writeSSE({
+        data: JSON.stringify({ type: 'done', text: result.text, media }),
+      })
+    })
   })
 
   app.get('/history', async (c) => {
     const limit = Number(c.req.query('limit')) || 100
+    const channelId = c.req.query('channel') ?? 'default'
+    const session = sessions.get(channelId)
+    if (!session) return c.json({ error: 'channel not found' }, 404)
     const entries = await session.readActive()
     return c.json({ messages: toChatHistory(entries).slice(-limit) })
   })
 
   app.get('/events', (c) => {
-    if (sseClients.size >= maxSseClients) {
+    const channelId = c.req.query('channel') ?? 'default'
+    // Create SSE client map for this channel if it doesn't exist yet
+    if (!sseByChannel.has(channelId)) sseByChannel.set(channelId, new Map())
+    const channelClients = sseByChannel.get(channelId)!
+    if (channelClients.size >= maxSseClients) {
       return c.json({ error: 'too many SSE clients' }, 429)
     }
 
@@ -80,7 +132,7 @@ export function createChatRoutes({
           resolve()
         }
       })
-      sseClients.set(clientId, {
+      channelClients.set(clientId, {
         id: clientId,
         send: (data) => { stream.writeSSE({ data }).catch(() => {}) },
       })
@@ -90,16 +142,18 @@ export function createChatRoutes({
       }, 30_000)
 
       const maxDurationTimer = setTimeout(() => {
-        stream.writeSSE({ event: 'closing', data: 'max-duration-reached' }).catch(() => {})
-        clearInterval(pingInterval)
-        sseClients.delete(clientId)
-        finish()
+        void (async () => {
+          await stream.writeSSE({ event: 'closing', data: 'max-duration-reached' }).catch(() => {})
+          clearInterval(pingInterval)
+          channelClients.delete(clientId)
+          finish()
+        })()
       }, sseMaxDurationMs)
 
       stream.onAbort(() => {
         clearInterval(pingInterval)
         clearTimeout(maxDurationTimer)
-        sseClients.delete(clientId)
+        channelClients.delete(clientId)
         finish()
       })
 
@@ -111,8 +165,11 @@ export function createChatRoutes({
 }
 
 /** Media routes: GET /:name — serves from data/media/ */
-export function createMediaRoutes() {
+export function createMediaRoutes(opts?: ChatRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   const MIME: Record<string, string> = {
     '.png': 'image/png',
@@ -125,6 +182,17 @@ export function createMediaRoutes() {
 
   app.get('/:date/:name', async (c) => {
     const { date, name } = c.req.param()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return c.json({ error: 'invalid media path' }, 400)
+    }
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)
+      || name.includes('..')
+      || name.includes('/')
+      || name.includes('\\')
+    ) {
+      return c.json({ error: 'invalid media path' }, 400)
+    }
     const filePath = resolveMediaPath(join(date, name))
 
     try {

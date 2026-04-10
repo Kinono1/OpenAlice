@@ -1,35 +1,54 @@
 import { useState } from 'react'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { ChatPage } from './pages/ChatPage'
 import { PortfolioPage } from './pages/PortfolioPage'
 import { EventsPage } from './pages/EventsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AIProviderPage } from './pages/AIProviderPage'
-import { DataSourcesPage } from './pages/DataSourcesPage'
+import { MarketDataPage } from './pages/MarketDataPage'
+import { NewsPage } from './pages/NewsPage'
 import { TradingPage } from './pages/TradingPage'
-import { SecuritiesPage } from './pages/SecuritiesPage'
 import { ConnectorsPage } from './pages/ConnectorsPage'
 import { DevPage } from './pages/DevPage'
 import { HeartbeatPage } from './pages/HeartbeatPage'
 import { ToolsPage } from './pages/ToolsPage'
+import { AgentStatusPage } from './pages/AgentStatusPage'
+import { StrategyPage } from './pages/StrategyPage'
 
 export type Page =
-  | 'chat' | 'portfolio' | 'events' | 'heartbeat' | 'data-sources' | 'connectors'
-  | 'trading/connection' | 'trading/guards'
-  | 'securities/connection' | 'securities/guards'
+  | 'chat' | 'portfolio' | 'events' | 'agent-status' | 'heartbeat' | 'market-data' | 'news' | 'connectors'
+  | 'trading'
+  | 'strategy'
   | 'ai-provider' | 'settings' | 'tools' | 'dev'
 
+/** Page type → URL path mapping. Chat is the root, everything else maps to /slug. */
+export const ROUTES: Record<Page, string> = {
+  'chat': '/',
+  'portfolio': '/portfolio',
+  'events': '/events',
+  'agent-status': '/agent-status',
+  'heartbeat': '/heartbeat',
+  'market-data': '/market-data',
+  'news': '/news',
+  'connectors': '/connectors',
+  'tools': '/tools',
+  'trading': '/trading',
+  'strategy': '/strategy',
+  'ai-provider': '/ai-provider',
+  'settings': '/settings',
+  'dev': '/dev',
+}
+
 export function App() {
-  const [page, setPage] = useState<Page>('chat')
   const [sseConnected, setSseConnected] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const location = useLocation()
 
   return (
     <div className="flex h-full">
       <Sidebar
         sseConnected={sseConnected}
-        currentPage={page}
-        onNavigate={setPage}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -47,18 +66,26 @@ export function App() {
           </button>
           <span className="text-sm font-semibold text-text">Open Alice</span>
         </div>
-        {page === 'chat' && <ChatPage onSSEStatus={setSseConnected} />}
-        {page === 'portfolio' && <PortfolioPage />}
-        {page === 'events' && <EventsPage />}
-        {page === 'heartbeat' && <HeartbeatPage />}
-        {page === 'data-sources' && <DataSourcesPage />}
-        {page === 'connectors' && <ConnectorsPage />}
-        {page.startsWith('trading/') && <TradingPage tab={page.split('/')[1]} />}
-        {page.startsWith('securities/') && <SecuritiesPage tab={page.split('/')[1]} />}
-        {page === 'ai-provider' && <AIProviderPage />}
-        {page === 'settings' && <SettingsPage />}
-        {page === 'tools' && <ToolsPage />}
-        {page === 'dev' && <DevPage />}
+        <div key={location.pathname} className="page-fade-in flex-1 flex flex-col min-h-0">
+          <Routes>
+            <Route path="/" element={<ChatPage onSSEStatus={setSseConnected} />} />
+            <Route path="/portfolio" element={<PortfolioPage />} />
+            <Route path="/events" element={<EventsPage />} />
+            <Route path="/agent-status" element={<AgentStatusPage />} />
+            <Route path="/heartbeat" element={<HeartbeatPage />} />
+            <Route path="/market-data" element={<MarketDataPage />} />
+            <Route path="/news" element={<NewsPage />} />
+            <Route path="/data-sources" element={<Navigate to="/market-data" replace />} />
+            <Route path="/connectors" element={<ConnectorsPage />} />
+            <Route path="/tools" element={<ToolsPage />} />
+            <Route path="/trading" element={<TradingPage />} />
+            <Route path="/strategy" element={<StrategyPage />} />
+            <Route path="/ai-provider" element={<AIProviderPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/dev" element={<DevPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
       </main>
     </div>
   )

@@ -103,147 +103,147 @@ def main() -> int:
     card_errors: list[dict[str, Any]] = []
 
     for card_file in card_files:
-        try:
-            card = read_json_object(card_file)
-        except Exception as exc:  # noqa: BLE001
-            card_errors.append({"path": str(card_file), "error": str(exc)})
-            continue
+      try:
+        card = read_json_object(card_file)
+      except Exception as exc:  # noqa: BLE001
+        card_errors.append({"path": str(card_file), "error": str(exc)})
+        continue
 
-        required_missing = sorted(PAPER_CARD_REQUIRED_FIELDS - set(card.keys()))
-        missing_required_fields += len(required_missing)
-        schema_ok = (
-            card.get("schemaVersion") == "paper_card.v2"
-            and len(required_missing) == 0
-        )
-        if schema_ok:
-            schema_pass_count += 1
+      required_missing = sorted(PAPER_CARD_REQUIRED_FIELDS - set(card.keys()))
+      missing_required_fields += len(required_missing)
+      schema_ok = (
+          card.get("schemaVersion") == "paper_card.v2"
+          and len(required_missing) == 0
+      )
+      if schema_ok:
+          schema_pass_count += 1
 
-        paper_id = str(card.get("paperId", card_file.stem))
-        paper_node_id = f"paper:{paper_id}"
-        if paper_node_id not in node_ids:
-            nodes.append(
-                {"id": paper_node_id, "type": "paper", "label": paper_id, "paperId": paper_id}
-            )
-            node_ids.add(paper_node_id)
-        paper_count += 1
+      paper_id = str(card.get("paperId", card_file.stem))
+      paper_node_id = f"paper:{paper_id}"
+      if paper_node_id not in node_ids:
+          nodes.append(
+              {"id": paper_node_id, "type": "paper", "label": paper_id, "paperId": paper_id}
+          )
+          node_ids.add(paper_node_id)
+      paper_count += 1
 
-        raw_evidence = card.get("evidence")
-        evidence_list = raw_evidence if isinstance(raw_evidence, list) else []
-        evidence_id_set: set[str] = set()
+      raw_evidence = card.get("evidence")
+      evidence_list = raw_evidence if isinstance(raw_evidence, list) else []
+      evidence_id_set: set[str] = set()
 
-        for evidence_item in evidence_list:
-            if not isinstance(evidence_item, dict):
-                continue
-            evidence_id = str(evidence_item.get("evidenceId", "")).strip()
-            if not evidence_id:
-                continue
-            evidence_node_id = f"evidence:{evidence_id}"
-            if evidence_node_id not in node_ids:
-                nodes.append(
-                    {
-                        "id": evidence_node_id,
-                        "type": "evidence",
-                        "label": str(evidence_item.get("text", evidence_id))[:160],
-                        "paperId": paper_id,
-                    }
-                )
-                node_ids.add(evidence_node_id)
-            evidence_id_set.add(evidence_id)
-            evidence_count += 1
+      for evidence_item in evidence_list:
+          if not isinstance(evidence_item, dict):
+              continue
+          evidence_id = str(evidence_item.get("evidenceId", "")).strip()
+          if not evidence_id:
+              continue
+          evidence_node_id = f"evidence:{evidence_id}"
+          if evidence_node_id not in node_ids:
+              nodes.append(
+                  {
+                      "id": evidence_node_id,
+                      "type": "evidence",
+                      "label": str(evidence_item.get("text", evidence_id))[:160],
+                      "paperId": paper_id,
+                  }
+              )
+              node_ids.add(evidence_node_id)
+          evidence_id_set.add(evidence_id)
+          evidence_count += 1
 
-            edge_key = (evidence_node_id, paper_node_id, "derived_from")
-            if edge_key not in edge_keys:
-                edges.append(
-                    {
-                        "source": evidence_node_id,
-                        "target": paper_node_id,
-                        "type": "derived_from",
-                    }
-                )
-                edge_keys.add(edge_key)
+          edge_key = (evidence_node_id, paper_node_id, "derived_from")
+          if edge_key not in edge_keys:
+              edges.append(
+                  {
+                      "source": evidence_node_id,
+                      "target": paper_node_id,
+                      "type": "derived_from",
+                  }
+              )
+              edge_keys.add(edge_key)
 
-        raw_claims = card.get("claims")
-        claims = raw_claims if isinstance(raw_claims, list) else []
-        for claim_item in claims:
-            if not isinstance(claim_item, dict):
-                continue
-            claim_id = str(claim_item.get("claimId", "")).strip()
-            if not claim_id:
-                continue
-            claim_node_id = f"claim:{claim_id}"
-            if claim_node_id not in node_ids:
-                nodes.append(
-                    {
-                        "id": claim_node_id,
-                        "type": "claim",
-                        "label": str(claim_item.get("text", claim_id))[:160],
-                        "paperId": paper_id,
-                    }
-                )
-                node_ids.add(claim_node_id)
-            claim_count += 1
+      raw_claims = card.get("claims")
+      claims = raw_claims if isinstance(raw_claims, list) else []
+      for claim_item in claims:
+          if not isinstance(claim_item, dict):
+              continue
+          claim_id = str(claim_item.get("claimId", "")).strip()
+          if not claim_id:
+              continue
+          claim_node_id = f"claim:{claim_id}"
+          if claim_node_id not in node_ids:
+              nodes.append(
+                  {
+                      "id": claim_node_id,
+                      "type": "claim",
+                      "label": str(claim_item.get("text", claim_id))[:160],
+                      "paperId": paper_id,
+                  }
+              )
+              node_ids.add(claim_node_id)
+          claim_count += 1
 
-            claim_to_paper_key = (claim_node_id, paper_node_id, "derived_from")
-            if claim_to_paper_key not in edge_keys:
-                edges.append(
-                    {
-                        "source": claim_node_id,
-                        "target": paper_node_id,
-                        "type": "derived_from",
-                    }
-                )
-                edge_keys.add(claim_to_paper_key)
+          claim_to_paper_key = (claim_node_id, paper_node_id, "derived_from")
+          if claim_to_paper_key not in edge_keys:
+              edges.append(
+                  {
+                      "source": claim_node_id,
+                      "target": paper_node_id,
+                      "type": "derived_from",
+                  }
+              )
+              edge_keys.add(claim_to_paper_key)
 
-            refs = claim_item.get("evidenceRefs")
-            ref_list = [str(v).strip() for v in refs] if isinstance(refs, list) else []
-            valid_ref_count = 0
-            for ref in ref_list:
-                if not ref or ref not in evidence_id_set:
-                    continue
-                evidence_node_id = f"evidence:{ref}"
-                edge_key = (claim_node_id, evidence_node_id, "supports")
-                if edge_key not in edge_keys:
-                    edges.append(
-                        {
-                            "source": claim_node_id,
-                            "target": evidence_node_id,
-                            "type": "supports",
-                        }
-                    )
-                    edge_keys.add(edge_key)
-                valid_ref_count += 1
+          refs = claim_item.get("evidenceRefs")
+          ref_list = [str(v).strip() for v in refs] if isinstance(refs, list) else []
+          valid_ref_count = 0
+          for ref in ref_list:
+              if not ref or ref not in evidence_id_set:
+                  continue
+              evidence_node_id = f"evidence:{ref}"
+              edge_key = (claim_node_id, evidence_node_id, "supports")
+              if edge_key not in edge_keys:
+                  edges.append(
+                      {
+                          "source": claim_node_id,
+                          "target": evidence_node_id,
+                          "type": "supports",
+                      }
+                  )
+                  edge_keys.add(edge_key)
+              valid_ref_count += 1
 
-            if valid_ref_count > 0:
-                linked_claim_count += 1
-            else:
-                isolated_claim_count += 1
+          if valid_ref_count > 0:
+              linked_claim_count += 1
+          else:
+              isolated_claim_count += 1
 
-            targets = claim_item.get("targetTags")
-            target_tags = [str(v).strip() for v in targets] if isinstance(targets, list) else []
-            for target in target_tags:
-                if not target:
-                    continue
-                target_node_id = f"target:{target}"
-                if target_node_id not in node_ids:
-                    nodes.append(
-                        {
-                            "id": target_node_id,
-                            "type": "target",
-                            "label": target,
-                            "paperId": paper_id,
-                        }
-                    )
-                    node_ids.add(target_node_id)
-                edge_key = (claim_node_id, target_node_id, "targets")
-                if edge_key not in edge_keys:
-                    edges.append(
-                        {
-                            "source": claim_node_id,
-                            "target": target_node_id,
-                            "type": "targets",
-                        }
-                    )
-                    edge_keys.add(edge_key)
+          targets = claim_item.get("targetTags")
+          target_tags = [str(v).strip() for v in targets] if isinstance(targets, list) else []
+          for target in target_tags:
+              if not target:
+                  continue
+              target_node_id = f"target:{target}"
+              if target_node_id not in node_ids:
+                  nodes.append(
+                      {
+                          "id": target_node_id,
+                          "type": "target",
+                          "label": target,
+                          "paperId": paper_id,
+                      }
+                  )
+                  node_ids.add(target_node_id)
+              edge_key = (claim_node_id, target_node_id, "targets")
+              if edge_key not in edge_keys:
+                  edges.append(
+                      {
+                          "source": claim_node_id,
+                          "target": target_node_id,
+                          "type": "targets",
+                      }
+                  )
+                  edge_keys.add(edge_key)
 
     evidence_link_rate = (
         linked_claim_count / claim_count if claim_count > 0 else 0.0

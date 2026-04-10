@@ -2,8 +2,10 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
-import { anthropic } from '@ai-sdk/anthropic'
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
+import { readAIProviderConfig } from '../../core/config.js'
 
 type ModelConfig = {
   provider: string
@@ -22,12 +24,40 @@ interface CodexProviderConfig {
   bearerToken: string
 }
 
-/** Create a Vercel AI SDK model from OpenAlice model config. */
+export interface ModelFromConfig {
+  model: LanguageModel
+  key: string
+}
+
+export interface ModelOverride {
+  provider: string
+  model: string
+  baseUrl?: string
+  baseURL?: string
+  apiKey?: string
+  apiKeyEnv?: string
+  codexConfigPath?: string
+  codexProvider?: string
+}
+
+/** Create a Vercel AI SDK model from OpenAlice config. */
 export async function createConfiguredModel(model: ModelConfig): Promise<LanguageModel> {
   const provider = model.provider.trim().toLowerCase()
 
   if (provider === 'anthropic') {
-    return anthropic(model.model)
+    const client = createAnthropic({
+      apiKey: model.apiKey,
+      baseURL: model.baseURL,
+    })
+    return client(model.model)
+  }
+
+  if (provider === 'google') {
+    const client = createGoogleGenerativeAI({
+      apiKey: model.apiKey,
+      baseURL: model.baseURL,
+    })
+    return client(model.model)
   }
 
   if (provider === 'gmn') {
@@ -45,7 +75,7 @@ export async function createConfiguredModel(model: ModelConfig): Promise<Languag
     const apiKey = model.apiKey ?? process.env[envName]
     if (!apiKey) {
       throw new Error(
-        `Model provider "${model.provider}" requires an API key. Set "${envName}" or model.apiKey in data/config/model.json.`,
+        `Model provider "${model.provider}" requires an API key. Set "${envName}" or model.apiKey in data/config/ai-provider-manager.json.`,
       )
     }
 
@@ -58,8 +88,39 @@ export async function createConfiguredModel(model: ModelConfig): Promise<Languag
   }
 
   throw new Error(
-    `Unsupported model provider "${model.provider}". Supported: anthropic | gmn | openai | openai-compatible.`,
+    `Unsupported model provider "${model.provider}". Supported: anthropic | gmn | google | openai | openai-compatible.`,
   )
+}
+
+export async function createModelFromConfig(override?: ModelOverride): Promise<ModelFromConfig> {
+  const config = await readAIProviderConfig()
+  const provider = (override?.provider ?? config.provider).trim().toLowerCase()
+  const model = override?.model ?? config.model
+  const baseURL = override?.baseUrl ?? override?.baseURL ?? config.baseUrl
+  const apiKey = resolveLegacyApiKey(provider, override?.apiKey, config.apiKeys)
+  const configuredModel = await createConfiguredModel({
+    provider,
+    model,
+    baseURL,
+    apiKey,
+    apiKeyEnv: override?.apiKeyEnv,
+    codexConfigPath: override?.codexConfigPath,
+    codexProvider: override?.codexProvider,
+  })
+
+  return {
+    model: configuredModel,
+    key: `${provider}:${model}:${baseURL ?? ''}`,
+  }
+}
+
+function resolveLegacyApiKey(
+  provider: string,
+  overrideApiKey: string | undefined,
+  apiKeys: Record<string, string | undefined>,
+): string | undefined {
+  if (overrideApiKey) return overrideApiKey
+  return apiKeys[provider]
 }
 
 async function readCodexProviderConfig(model: ModelConfig): Promise<CodexProviderConfig> {
@@ -86,7 +147,7 @@ async function readCodexProviderConfig(model: ModelConfig): Promise<CodexProvide
     throw new Error(`Missing "experimental_bearer_token" under [model_providers.${provider}] in ${configPath}`)
   }
   if (!selectedModel) {
-    throw new Error(`Missing model id in data/config/model.json and Codex config ${configPath}`)
+    throw new Error(`Missing model id in data/config/ai-provider-manager.json and Codex config ${configPath}`)
   }
 
   return {

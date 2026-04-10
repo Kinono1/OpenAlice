@@ -1,24 +1,28 @@
 import { z } from 'zod'
 import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { resolve } from 'path'
-import { newsCollectorSchema } from '../extension/news-collector/config.js'
+import { newsCollectorSchema } from '../domain/news/config.js'
+import { AI_PROVIDER_DEFAULT_MODELS } from '../generated/approvedModelRegistry.js'
 
-const CONFIG_DIR = resolve("data/config");
-const REDACTED_SECRET = "[redacted]";
+const CONFIG_DIR = resolve('data/config')
 
 // ==================== Individual Schemas ====================
 
 const engineSchema = z.object({
-  pairs: z.array(z.string()).min(1).default(["BTC/USD", "ETH/USD", "SOL/USD"]),
+  pairs: z.array(z.string()).min(1).default(['BTC/USD', 'ETH/USD', 'SOL/USD']),
   interval: z.number().int().positive().default(5000),
   port: z.number().int().positive().default(3000),
 })
 
+const loginMethodSchema = z.enum(['api-key', 'claudeai'])
+
 export const aiProviderSchema = z.object({
-  backend: z.enum(['claude-code', 'vercel-ai-sdk']).default('claude-code'),
+  backend: z.enum(['claude-code', 'vercel-ai-sdk', 'agent-sdk']).default('claude-code'),
   provider: z.string().default('anthropic'),
-  model: z.string().default('claude-sonnet-4-6'),
+  model: z.string().default(AI_PROVIDER_DEFAULT_MODELS.anthropic),
   baseUrl: z.string().min(1).optional(),
+  /** Authentication method for Agent SDK: api-key (default), oauth (Console), claudeai (Pro/Max). */
+  loginMethod: loginMethodSchema.default('api-key'),
   apiKeys: z.object({
     anthropic: z.string().optional(),
     openai: z.string().optional(),
@@ -29,39 +33,27 @@ export const aiProviderSchema = z.object({
 const agentSchema = z.object({
   maxSteps: z.number().int().positive().default(20),
   evolutionMode: z.boolean().default(false),
-  claudeCode: z
-    .object({
-      allowedTools: z.array(z.string()).optional(),
-      disallowedTools: z
-        .array(z.string())
-        .default([
-          "Task",
-          "TaskOutput",
-          "AskUserQuestion",
-          "TodoWrite",
-          "NotebookEdit",
-          "Skill",
-          "EnterPlanMode",
-          "ExitPlanMode",
-          "mcp__claude_ai_Figma__*",
-        ]),
-      maxTurns: z.number().int().positive().default(20),
-    })
-    .default({
-      disallowedTools: [
-        "Task",
-        "TaskOutput",
-        "AskUserQuestion",
-        "TodoWrite",
-        "NotebookEdit",
-        "Skill",
-        "EnterPlanMode",
-        "ExitPlanMode",
-        "mcp__claude_ai_Figma__*",
-      ],
-      maxTurns: 20,
-    }),
-});
+  claudeCode: z.object({
+    allowedTools: z.array(z.string()).optional(),
+    disallowedTools: z.array(z.string()).default([
+      'Task', 'TaskOutput',
+      'AskUserQuestion', 'TodoWrite',
+      'NotebookEdit', 'Skill',
+      'EnterPlanMode', 'ExitPlanMode',
+      'mcp__claude_ai_Figma__*',
+    ]),
+    maxTurns: z.number().int().positive().default(20),
+  }).default({
+    disallowedTools: [
+      'Task', 'TaskOutput',
+      'AskUserQuestion', 'TodoWrite',
+      'NotebookEdit', 'Skill',
+      'EnterPlanMode', 'ExitPlanMode',
+      'mcp__claude_ai_Figma__*',
+    ],
+    maxTurns: 20,
+  }),
+})
 
 const cryptoSchema = z.object({
   provider: z.discriminatedUnion('type', [
@@ -73,20 +65,12 @@ const cryptoSchema = z.object({
       password: z.string().optional(),
       sandbox: z.boolean().default(false),
       demoTrading: z.boolean().default(false),
-      defaultMarketType: z.enum(['spot', 'swap']).default('swap'),
       options: z.record(z.string(), z.unknown()).optional(),
-    }),
+    }).passthrough(),
     z.object({
       type: z.literal('none'),
     }),
-  ]).default({
-    type: 'ccxt', exchange: 'bybit', sandbox: false, demoTrading: true, defaultMarketType: 'swap',
-    // Only load linear (USDT-margined) markets from ccxt.
-    // Default is ['spot', 'linear', 'inverse', 'option'] — the extra categories
-    // add unnecessary parallel requests during loadMarkets(), and any single failure
-    // (common on bybit demo API) aborts the entire init.
-    options: { fetchMarkets: { types: ['linear'] } },
-  }),
+  ]).default({ type: 'none' }),
   guards: z.array(z.object({
     type: z.string(),
     options: z.record(z.string(), z.unknown()).default({}),
@@ -104,28 +88,24 @@ const securitiesSchema = z.object({
     z.object({
       type: z.literal('none'),
     }),
-  ]).default({ type: 'alpaca', paper: true }),
+  ]).default({ type: 'none' }),
   guards: z.array(z.object({
     type: z.string(),
     options: z.record(z.string(), z.unknown()).default({}),
   })).default([]),
 })
 
-const openbbSchema = z.object({
+const marketDataSchema = z.object({
   enabled: z.boolean().default(true),
   apiUrl: z.string().default('http://localhost:6900'),
   providers: z.object({
     equity: z.string().default('yfinance'),
     crypto: z.string().default('yfinance'),
     currency: z.string().default('yfinance'),
-    newsCompany: z.string().default('yfinance'),
-    newsWorld: z.string().default('fmp'),
   }).default({
     equity: 'yfinance',
     crypto: 'yfinance',
     currency: 'yfinance',
-    newsCompany: 'yfinance',
-    newsWorld: 'fmp',
   }),
   providerKeys: z.object({
     fred: z.string().optional(),
@@ -140,6 +120,11 @@ const openbbSchema = z.object({
     tiingo: z.string().optional(),
     biztoc: z.string().optional(),
   }).default({}),
+  backend: z.enum(['typebb-sdk', 'openbb-api']).default('typebb-sdk'),
+  apiServer: z.object({
+    enabled: z.boolean().default(true),
+    port: z.number().int().min(1024).max(65535).default(6901),
+  }).default({ enabled: true, port: 6901 }),
 })
 
 const compactionSchema = z.object({
@@ -147,129 +132,20 @@ const compactionSchema = z.object({
   maxOutputTokens: z.number().default(20_000),
   autoCompactBuffer: z.number().default(13_000),
   microcompactKeepRecent: z.number().default(3),
-});
+})
 
-const riskSchema = z.object({
-  enabled: z.boolean().default(true),
-  killSwitch: z.boolean().default(false),
-  maxOpenPositions: z.number().int().positive().default(5),
-  maxLeverage: z.number().int().positive().default(5),
-  maxOrderUsd: z.number().positive().default(5_000),
-  maxPositionPctOfEquity: z.number().positive().max(100).default(30),
-  maxDailyLossUsd: z.number().positive().default(1_000),
-  enforceRealizedPnlConfidence: z.boolean().default(true),
-  minRealizedPnlConfidence: z.number().min(0).max(1).default(0.7),
-  trustedRealizedPnlSources: z
-    .array(z.enum(["balance_payload", "closed_trades_ledger"]))
-    .min(1)
-    .default(["balance_payload", "closed_trades_ledger"]),
-  dailyLossPctSoftCap: z.number().negative().optional(),
-  cvarLossPctSoftCap: z.number().negative().optional(),
-  cvarLookbackDays: z.number().int().positive().default(30),
-  cvarTailAlpha: z.number().positive().max(0.5).default(0.2),
-  consecutiveLossDaysLimit: z.number().int().positive().optional(),
-  consecutiveLossPctThreshold: z.number().negative().optional(),
-  highVolatilityQuantileCut: z.number().min(0).max(1).optional(),
-  capitalScaleRules: z
-    .array(
-      z.object({
-        stage: z.string().min(1),
-        maxOpenPositions: z.number().int().positive().optional(),
-        maxLeverage: z.number().positive().optional(),
-        maxOrderUsd: z.number().positive().optional(),
-        maxPositionPctOfEquity: z.number().positive().max(100).optional(),
-        highVolatilityMaxLeverage: z.number().positive().optional(),
-      })
-    )
-    .optional(),
-});
+const activeHoursSchema = z.object({
+  start: z.string().regex(/^\d{1,2}:\d{2}$/, 'Expected HH:MM format'),
+  end: z.string().regex(/^\d{1,2}:\d{2}$/, 'Expected HH:MM format'),
+  timezone: z.string().default('local'),
+}).nullable().default(null)
 
-const defaultNewsSources = [
-  {
-    id: "coindesk_rss",
-    enabled: true,
-    type: "rss",
-    source: "CoinDesk",
-    url: "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    timeoutMs: 5000,
-    maxItems: 80,
-    category: "institutional-news",
-    priority: 0.9,
-  },
-  {
-    id: "cointelegraph_rss",
-    enabled: true,
-    type: "rss",
-    source: "Cointelegraph",
-    url: "https://cointelegraph.com/rss",
-    timeoutMs: 5000,
-    maxItems: 80,
-    category: "institutional-news",
-    priority: 0.85,
-  },
-  {
-    id: "sec_press_rss",
-    enabled: true,
-    type: "rss",
-    source: "SEC",
-    url: "https://www.sec.gov/news/pressreleases.rss",
-    timeoutMs: 5000,
-    maxItems: 40,
-    category: "regulatory-news",
-    priority: 1.0,
-  },
-  {
-    id: "federal_reserve_rss",
-    enabled: true,
-    type: "rss",
-    source: "FederalReserve",
-    url: "https://www.federalreserve.gov/feeds/press_all.xml",
-    timeoutMs: 5000,
-    maxItems: 40,
-    category: "macro-news",
-    priority: 0.95,
-  },
-] as const;
-
-const newsSourceSchema = z.object({
-  id: z.string().min(1),
-  enabled: z.boolean().default(true),
-  type: z.literal("rss").default("rss"),
-  source: z.string().min(1),
-  url: z.string().url(),
-  timeoutMs: z.number().int().positive().max(30_000).default(5000),
-  maxItems: z.number().int().positive().max(200).default(80),
-  category: z.string().default("institutional-news"),
-  priority: z.number().min(0).max(1).default(0.8),
-});
-
-const newsSchema = z.object({
-  enabled: z.boolean().default(true),
-  lookbackHours: z
-    .number()
-    .int()
-    .min(1)
-    .max(24 * 14)
-    .default(72),
-  maxTotalItems: z.number().int().min(50).max(5000).default(800),
-  dedupeByTitleHours: z.number().int().min(1).max(48).default(6),
-  requestTimeoutMs: z.number().int().min(1000).max(30_000).default(6000),
-  dotApiSourcePriority: z.number().min(0).max(1.5).default(0.75),
-  sources: z
-    .array(newsSourceSchema)
-    .default(
-      defaultNewsSources as unknown as z.infer<typeof newsSourceSchema>[]
-    ),
-});
-
-const activeHoursSchema = z
-  .object({
-    start: z.string().regex(/^\d{1,2}:\d{2}$/, "Expected HH:MM format"),
-    end: z.string().regex(/^\d{1,2}:\d{2}$/, "Expected HH:MM format"),
-    timezone: z.string().default("local"),
-  })
-  .nullable()
-  .default(null);
+const authSchema = z.object({
+  /** If true, auth is enforced even if env tokens are not set (rejects all). */
+  enforceAuth: z.boolean().default(true),
+  /** Token TTL for session tokens (future use). */
+  sessionTtlMs: z.number().int().positive().default(86_400_000),
+})
 
 
 const connectorsSchema = z.object({
@@ -278,12 +154,7 @@ const connectorsSchema = z.object({
     allowOrigins: z.array(z.string()).default([]),
     maxSseClients: z.number().int().positive().max(1000).default(100),
     sseMaxDurationMs: z.number().int().positive().max(86_400_000).default(900_000),
-  }).default({
-    port: 3002,
-    allowOrigins: [],
-    maxSseClients: 100,
-    sseMaxDurationMs: 900_000,
-  }),
+  }).default({ port: 3002, allowOrigins: [], maxSseClients: 100, sseMaxDurationMs: 900_000 }),
   mcp: z.object({
     port: z.number().int().positive().default(3001),
     allowOrigins: z.array(z.string()).default([]),
@@ -303,98 +174,280 @@ const connectorsSchema = z.object({
 
 const heartbeatSchema = z.object({
   enabled: z.boolean().default(false),
-  every: z.string().default("30m"),
-  prompt: z
-    .string()
-    .default(
-      "Read data/brain/heartbeat.md (or data/default/heartbeat.default.md if not found) and follow the instructions inside."
-    ),
+  every: z.string().default('30m'),
+  prompt: z.string().default('Read data/brain/heartbeat.md (or default/heartbeat.default.md if not found) and follow the instructions inside.'),
   activeHours: activeHoursSchema,
-});
+})
 
-const authSchema = z
-  .object({
-    /** If true, auth is enforced even if env tokens are not set (rejects all). */
-    enforceAuth: z.boolean().default(true),
-    /** Token TTL for session tokens (future use). */
-    sessionTtlMs: z.number().int().positive().default(86_400_000),
-  })
-  .default({ enforceAuth: true, sessionTtlMs: 86_400_000 });
-
-const decisionTicketSchema = z
-  .object({
-    /** Whether decision tickets are required before trade execution. */
-    required: z.boolean().default(true),
-    /** Ticket TTL in ms (default: 10 minutes). */
-    ttlMs: z.number().int().positive().default(600_000),
-  })
-  .default({ required: true, ttlMs: 600_000 });
-
-const killSwitchSchema = z
-  .object({
-    /** Default policy when kill switch is triggered. */
-    defaultPolicy: z
-      .enum(["block_new_only", "block_all"])
-      .default("block_new_only"),
-  })
-  .default({ defaultPolicy: "block_new_only" });
-
-const slippageSchema = z
-  .object({
-    /** Max slippage percentage for normal orders. */
-    maxSlippagePct: z.number().min(0).max(1).default(0.005),
-    /** Multiplier for reduceOnly slippage tolerance. */
-    reduceOnlyMultiplier: z.number().min(1).max(10).default(2),
-  })
-  .default({ maxSlippagePct: 0.005, reduceOnlyMultiplier: 2 });
-
-const reconciliationSchema = z
-  .object({
-    /** Interval in ms between reconciliation checks. */
-    intervalMs: z.number().int().positive().default(900_000),
-    /** Threshold percentage for position mismatch. */
-    thresholdPct: z.number().min(0).max(1).default(0.05),
-    /** Number of consecutive breaches to trigger alert. */
-    consecutiveBreaches: z.number().int().positive().default(3),
-    /** Window size for consecutive breach check. */
-    windowSize: z.number().int().positive().default(5),
-  })
-  .default({
-    intervalMs: 900_000,
-    thresholdPct: 0.05,
-    consecutiveBreaches: 3,
-    windowSize: 5,
-  });
-
-const reviewGateSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    blockSeverities: z
-      .array(z.enum(["critical", "high", "medium", "low"]))
-      .default(["critical", "high"]),
-    scope: z
-      .enum(["repo_full_scan_once_then_changed_files", "repo_full_scan", "changed_only"])
-      .default("repo_full_scan_once_then_changed_files"),
-    reportPath: z.string().default("logs/review/latest.json"),
-  })
-  .default({
-    enabled: true,
-    blockSeverities: ["critical", "high"],
-    scope: "repo_full_scan_once_then_changed_files",
-    reportPath: "logs/review/latest.json",
-  });
-
-const shutdownSchema = z
-  .object({
-    /** Max drain wait time in ms. */
-    drainTimeoutMs: z.number().int().positive().default(5_000),
-  })
-  .default({ drainTimeoutMs: 5_000 });
+const snapshotSchema = z.object({
+  enabled: z.boolean().default(true),
+  every: z.string().default('15m'),
+})
 
 export const toolsSchema = z.object({
   /** Tool names that are disabled. Tools not listed are enabled by default. */
   disabled: z.array(z.string()).default([]),
 })
+
+const strategyFactorConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  weight: z.number().nonnegative().default(1),
+})
+
+const strategyCompositeFactorConfigSchema = strategyFactorConfigSchema.extend({
+  componentWeights: z.object({
+    first: z.number().nonnegative(),
+    second: z.number().nonnegative(),
+    third: z.number().nonnegative(),
+  }).optional(),
+})
+
+const strategyLayerConfigSchema = z.object({
+  layer: z.enum(['core', 'extended', 'watch-only']),
+  maxPositions: z.number().int().nonnegative(),
+  maxPositionPctOfEquity: z.number().nonnegative(),
+  minActionStatusToTrade: z.enum(['attack', 'attack-lite', 'probe', 'hold', 'reduce', 'exit', 'no-trade']),
+  requiresCoreNotRiskOff: z.boolean(),
+})
+
+const strategyFreezeRuleSchema = z.object({
+  preFreezeHours: z.number().nonnegative().default(2),
+  postFreezeHours: z.number().nonnegative().default(0.5),
+  maxActionDuringFreeze: z.enum(['reduce', 'exit', 'no-trade', 'hold']).default('reduce'),
+})
+
+const strategyMacroEventSchema = z.object({
+  name: z.string().min(1),
+  releaseTimeUtc: z.number().int(),
+  severity: z.enum(['high', 'medium', 'low']),
+  marketScope: z.array(z.enum(['crypto', 'a-share'])).min(1),
+  freezeRule: strategyFreezeRuleSchema,
+})
+
+const strategyRegimeHmmSchema = z.object({
+  enabled: z.boolean().default(false),
+  minObservations: z.number().int().positive().default(30),
+  seedObservations: z.number().int().positive().default(168),
+  stableObservations: z.number().int().positive().default(500),
+  trainingLookback: z.number().int().positive().default(720),
+  maxIterations: z.number().int().positive().default(24),
+  tolerance: z.number().positive().default(1e-3),
+  regularization: z.number().nonnegative().default(1e-4),
+  confidenceFloor: z.number().min(0).max(1).default(0.4),
+  anomalyZScore: z.number().positive().default(3),
+  zScoreWindow: z.number().int().positive().default(48),
+  realizedVolWindow: z.number().int().positive().default(24),
+  volumeBaselineWindow: z.number().int().positive().default(24),
+})
+
+const strategyResearchIcSchema = z.object({
+  enabled: z.boolean().default(false),
+  minMeanIc: z.number().default(0.03),
+  minIcIr: z.number().default(0.5),
+  minWinRate: z.number().default(0.55),
+  quantiles: z.number().int().min(3).max(10).default(5),
+  decayHorizons: z.array(z.number().int().positive()).default([1, 6, 24, 72, 168]),
+})
+
+const strategyMlSchema = z.object({
+  enabled: z.boolean().default(false),
+  architecture: z.enum(['lstm', 'patchtst']).default('lstm'),
+  modelPath: z.string().optional(),
+  lookbackSteps: z.number().int().positive().default(48),
+  forecastHorizonHours: z.number().int().positive().default(24),
+  decisionThreshold: z.number().positive().default(0.05),
+})
+
+const strategyMetaLabelingSchema = z.object({
+  enabled: z.boolean().default(false),
+  upperBarrierPct: z.number().positive().default(2),
+  lowerBarrierPct: z.number().positive().default(1),
+  maxHoldingBars: z.number().int().positive().default(24),
+  minConfidenceToTrade: z.number().min(0).max(1).default(0.55),
+})
+
+export const strategySchema = z.object({
+  enabled: z.boolean().default(true),
+  governance: z.object({
+    useGovernanceGate: z.boolean().default(true),
+    staleDataCapsExecution: z.boolean().default(true),
+    preferReduceOnWeakSignal: z.boolean().default(false),
+  }).default({
+    useGovernanceGate: true,
+    staleDataCapsExecution: true,
+    preferReduceOnWeakSignal: false,
+  }),
+  runtime: z.object({
+    marketScope: z.enum(['crypto', 'a-share']).default('crypto'),
+    runtimeIntegrationEnabled: z.boolean().default(false),
+  }).default({
+    marketScope: 'crypto',
+    runtimeIntegrationEnabled: false,
+  }),
+  eventCalendar: z.object({
+    enabled: z.boolean().default(true),
+    events: z.array(strategyMacroEventSchema).default([]),
+  }).default({
+    enabled: true,
+    events: [],
+  }),
+  regime: z.object({
+    hmm: strategyRegimeHmmSchema.optional(),
+  }).optional(),
+  factors: z.object({
+    fundingRate: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    basis: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    volumeSurge: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    momentumComposite: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    meanReversion: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    volatilityRegime: strategyCompositeFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    liquidationPressure: strategyCompositeFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    crossTimeframeDivergence: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+  }).default({
+    fundingRate: { enabled: true, weight: 1 },
+    basis: { enabled: true, weight: 1 },
+    volumeSurge: { enabled: true, weight: 1 },
+    momentumComposite: { enabled: true, weight: 1 },
+    meanReversion: { enabled: true, weight: 1 },
+    volatilityRegime: { enabled: true, weight: 1 },
+    liquidationPressure: { enabled: true, weight: 1 },
+    crossTimeframeDivergence: { enabled: true, weight: 1 },
+  }),
+  positionSizing: z.object({
+    enabled: z.boolean().default(true),
+    method: z.enum(['fixed', 'kelly', 'volTarget']).default('fixed'),
+    defaultAssetLayer: z.enum(['core', 'extended', 'watch-only']).default('core'),
+    targetVolPct: z.number().positive().default(10),
+    maxPctOfEquity: z.number().positive().default(0.3),
+    kellyFraction: z.number().positive().default(0.15),
+    layerConfigs: z.array(strategyLayerConfigSchema).default([
+      {
+        layer: 'core',
+        maxPositions: 5,
+        maxPositionPctOfEquity: 0.3,
+        minActionStatusToTrade: 'probe',
+        requiresCoreNotRiskOff: false,
+      },
+      {
+        layer: 'extended',
+        maxPositions: 3,
+        maxPositionPctOfEquity: 0.15,
+        minActionStatusToTrade: 'attack-lite',
+        requiresCoreNotRiskOff: true,
+      },
+      {
+        layer: 'watch-only',
+        maxPositions: 1,
+        maxPositionPctOfEquity: 0.05,
+        minActionStatusToTrade: 'attack',
+        requiresCoreNotRiskOff: true,
+      },
+    ]),
+  }).default({
+    enabled: true,
+    method: 'fixed',
+    defaultAssetLayer: 'core',
+    targetVolPct: 10,
+    maxPctOfEquity: 0.3,
+    kellyFraction: 0.15,
+    layerConfigs: [
+      {
+        layer: 'core',
+        maxPositions: 5,
+        maxPositionPctOfEquity: 0.3,
+        minActionStatusToTrade: 'probe',
+        requiresCoreNotRiskOff: false,
+      },
+      {
+        layer: 'extended',
+        maxPositions: 3,
+        maxPositionPctOfEquity: 0.15,
+        minActionStatusToTrade: 'attack-lite',
+        requiresCoreNotRiskOff: true,
+      },
+      {
+        layer: 'watch-only',
+        maxPositions: 1,
+        maxPositionPctOfEquity: 0.05,
+        minActionStatusToTrade: 'attack',
+        requiresCoreNotRiskOff: true,
+      },
+    ],
+  }),
+  research: z.object({
+    ic: strategyResearchIcSchema.optional(),
+  }).optional(),
+  ml: strategyMlSchema.optional(),
+  metaLabeling: strategyMetaLabelingSchema.optional(),
+})
+
+export type StrategyConfig = z.infer<typeof strategySchema>
+
+/** Vercel AI SDK model override — per-channel provider/model/key/endpoint. */
+export const vercelAiSdkOverrideSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+})
+
+/** Agent SDK model override — per-channel model/key/endpoint. */
+export const agentSdkOverrideSchema = z.object({
+  model: z.string().optional(),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  loginMethod: loginMethodSchema.optional(),
+})
+
+export const webSubchannelSchema = z.object({
+  /** URL-safe identifier. Used as session path segment: data/sessions/web/{id}.jsonl */
+  id: z.string().regex(/^[a-z0-9-_]+$/, 'id must be lowercase alphanumeric with hyphens/underscores'),
+  label: z.string().min(1),
+  /** System prompt override for this channel. */
+  systemPrompt: z.string().optional(),
+  /** AI backend override. Falls back to global config if omitted. */
+  provider: z.enum(['claude-code', 'vercel-ai-sdk', 'agent-sdk']).optional(),
+  /** Vercel AI SDK model override. Only used when provider is 'vercel-ai-sdk'. */
+  vercelAiSdk: vercelAiSdkOverrideSchema.optional(),
+  /** Agent SDK model override. Only used when provider is 'agent-sdk'. */
+  agentSdk: agentSdkOverrideSchema.optional(),
+  /** Tool names to disable in addition to the global disabled list. */
+  disabledTools: z.array(z.string()).optional(),
+})
+
+export const webSubchannelsSchema = z.array(webSubchannelSchema)
+
+export type WebChannel = z.infer<typeof webSubchannelSchema>
+
+// ==================== Account Config ====================
+
+const guardConfigSchema = z.object({
+  type: z.string(),
+  options: z.record(z.string(), z.unknown()).default({}),
+})
+
+const cryptoExecutionSchema = z.object({
+  mode: z.literal('paper_only').default('paper_only'),
+  enableCryptoDispatcher: z.boolean().default(true),
+  requireDecisionTicket: z.boolean().default(false),
+  ticketTtlMs: z.number().int().positive().default(600_000),
+  idempotencyTtlMs: z.number().int().positive().default(1_800_000),
+  killSwitchDefaultPolicy: z.enum(['block_new_only', 'block_all']).default('block_new_only'),
+})
+
+export const accountConfigSchema = z.object({
+  id: z.string(),
+  label: z.string().optional(),
+  type: z.string(),
+  enabled: z.boolean().default(true),
+  guards: z.array(guardConfigSchema).default([]),
+  brokerConfig: z.record(z.string(), z.unknown()).default({}),
+  cryptoExecution: cryptoExecutionSchema.optional(),
+})
+
+export const accountsFileSchema = z.array(accountConfigSchema)
+
+export type AccountConfig = z.infer<typeof accountConfigSchema>
 
 // ==================== Unified Config Type ====================
 
@@ -403,21 +456,15 @@ export type Config = {
   agent: z.infer<typeof agentSchema>
   crypto: z.infer<typeof cryptoSchema>
   securities: z.infer<typeof securitiesSchema>
-  openbb: z.infer<typeof openbbSchema>
+  marketData: z.infer<typeof marketDataSchema>
   compaction: z.infer<typeof compactionSchema>
-  risk: z.infer<typeof riskSchema>
-  news: z.infer<typeof newsSchema>
   aiProvider: z.infer<typeof aiProviderSchema>
   auth: z.infer<typeof authSchema>
-  decisionTicket: z.infer<typeof decisionTicketSchema>
-  killSwitch: z.infer<typeof killSwitchSchema>
-  slippage: z.infer<typeof slippageSchema>
-  reconciliation: z.infer<typeof reconciliationSchema>
-  reviewGate: z.infer<typeof reviewGateSchema>
-  shutdown: z.infer<typeof shutdownSchema>
   heartbeat: z.infer<typeof heartbeatSchema>
+  snapshot: z.infer<typeof snapshotSchema>
+  strategy: z.infer<typeof strategySchema>
   connectors: z.infer<typeof connectorsSchema>
-  newsCollector: z.infer<typeof newsCollectorSchema>
+  news: z.infer<typeof newsCollectorSchema>
   tools: z.infer<typeof toolsSchema>
 }
 
@@ -426,16 +473,12 @@ export type Config = {
 /** Read a JSON config file. Returns undefined if file does not exist. */
 async function loadJsonFile(filename: string): Promise<unknown | undefined> {
   try {
-    return JSON.parse(await readFile(resolve(CONFIG_DIR, filename), "utf-8"));
+    return JSON.parse(await readFile(resolve(CONFIG_DIR, filename), 'utf-8'))
   } catch (err: unknown) {
-    if (
-      err instanceof Error &&
-      "code" in err &&
-      (err as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return undefined;
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
     }
-    throw err;
+    throw err
   }
 }
 
@@ -444,255 +487,51 @@ async function removeJsonFile(filename: string): Promise<void> {
   try { await unlink(resolve(CONFIG_DIR, filename)) } catch { /* ENOENT ok */ }
 }
 
-function readFirstEnv(...names: string[]): string | undefined {
-  for (const name of names) {
-    const value = process.env[name]?.trim();
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function sanitizeSecretsForClient(value: unknown, parentKey?: string): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeSecretsForClient(item, parentKey));
-  }
-  if (!value || typeof value !== "object") {
-    if (
-      typeof value === "string" &&
-      (parentKey === "apiKeys" || parentKey === "providerKeys")
-    ) {
-      return REDACTED_SECRET;
-    }
-    return value;
-  }
-
-  const secretFields = new Set([
-    "apiKey",
-    "apiSecret",
-    "secretKey",
-    "password",
-    "botToken",
-  ]);
-
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, child]) => {
-      if (secretFields.has(key)) {
-        if (typeof child === "string" && child.length > 0) {
-          return [key, REDACTED_SECRET];
-        }
-        return [key, child];
-      }
-
-      if (
-        (key === "apiKeys" || key === "providerKeys") &&
-        child &&
-        typeof child === "object"
-      ) {
-        return [key, sanitizeSecretsForClient(child, key)];
-      }
-
-      return [key, sanitizeSecretsForClient(child, key)];
-    }),
-  );
-}
-
-function stripSecretsForPersistence(
-  section: ConfigSection,
-  value: unknown,
-): unknown {
-  if (section === "crypto" && value && typeof value === "object") {
-    const crypto = value as z.infer<typeof cryptoSchema>;
-    if (crypto.provider.type === "ccxt") {
-      return {
-        ...crypto,
-        provider: {
-          ...crypto.provider,
-          apiKey: undefined,
-          apiSecret: undefined,
-          password: undefined,
-        },
-      };
-    }
-  }
-
-  if (section === "securities" && value && typeof value === "object") {
-    const securities = value as z.infer<typeof securitiesSchema>;
-    if (securities.provider.type === "alpaca") {
-      return {
-        ...securities,
-        provider: {
-          ...securities.provider,
-          apiKey: undefined,
-          secretKey: undefined,
-        },
-      };
-    }
-  }
-
-  if (section === "aiProvider" && value && typeof value === "object") {
-    const aiProvider = value as z.infer<typeof aiProviderSchema>;
-    return {
-      ...aiProvider,
-      apiKeys: {},
-    };
-  }
-
-  if (section === "connectors" && value && typeof value === "object") {
-    const connectors = value as z.infer<typeof connectorsSchema>;
-    return {
-      ...connectors,
-      telegram: {
-        ...connectors.telegram,
-        botToken: undefined,
-      },
-    };
-  }
-
-  return value;
-}
-
-function hydrateSecrets(config: Config): Config {
-  const aiProvider = {
-    ...config.aiProvider,
-    apiKeys: {
-      anthropic:
-        config.aiProvider.apiKeys.anthropic ??
-        readFirstEnv("ANTHROPIC_API_KEY"),
-      openai:
-        config.aiProvider.apiKeys.openai ??
-        readFirstEnv("OPENAI_API_KEY"),
-      google:
-        config.aiProvider.apiKeys.google ??
-        readFirstEnv("GOOGLE_API_KEY"),
-    },
-  };
-
-  const crypto =
-    config.crypto.provider.type === "ccxt"
-      ? {
-          ...config.crypto,
-          provider: {
-            ...config.crypto.provider,
-            apiKey:
-              config.crypto.provider.apiKey ??
-              readFirstEnv("EXCHANGE_API_KEY"),
-            apiSecret:
-              config.crypto.provider.apiSecret ??
-              readFirstEnv("EXCHANGE_API_SECRET"),
-            password:
-              config.crypto.provider.password ??
-              readFirstEnv("EXCHANGE_PASSWORD"),
-          },
-        }
-      : config.crypto;
-
-  const securities =
-    config.securities.provider.type === "alpaca"
-      ? {
-          ...config.securities,
-          provider: {
-            ...config.securities.provider,
-            apiKey:
-              config.securities.provider.apiKey ??
-              readFirstEnv("ALPACA_API_KEY"),
-            secretKey:
-              config.securities.provider.secretKey ??
-              readFirstEnv("ALPACA_SECRET_KEY"),
-          },
-        }
-      : config.securities;
-
-  const connectors = {
-    ...config.connectors,
-    telegram: {
-      ...config.connectors.telegram,
-      botToken:
-        config.connectors.telegram.botToken ??
-        readFirstEnv("TELEGRAM_BOT_TOKEN"),
-    },
-  };
-
-  return {
-    ...config,
-    aiProvider,
-    crypto,
-    securities,
-    connectors,
-  };
-}
-
-export function sanitizeConfigForClient(config: Config): unknown {
-  return sanitizeSecretsForClient(config);
-}
-
-export function sanitizeConfigSectionForClient(value: unknown): unknown {
-  return sanitizeSecretsForClient(value);
-}
-
 /** Parse with Zod; if the file was missing, seed it to disk with defaults. */
-async function parseAndSeed<T>(
-  filename: string,
-  schema: z.ZodType<T>,
-  raw: unknown | undefined
-): Promise<T> {
-  const parsed = schema.parse(raw ?? {});
+async function parseAndSeed<T>(filename: string, schema: z.ZodType<T>, raw: unknown | undefined): Promise<T> {
+  const parsed = schema.parse(raw ?? {})
   if (raw === undefined) {
-    await mkdir(CONFIG_DIR, { recursive: true });
-    await writeFile(
-      resolve(CONFIG_DIR, filename),
-      JSON.stringify(parsed, null, 2) + "\n"
-    );
+    await mkdir(CONFIG_DIR, { recursive: true })
+    await writeFile(resolve(CONFIG_DIR, filename), JSON.stringify(parsed, null, 2) + '\n')
   }
-  return parsed;
+  return parsed
 }
 
 export async function loadConfig(): Promise<Config> {
-  const files = [
-    'engine.json',
-    'agent.json',
-    'crypto.json',
-    'securities.json',
-    'openbb.json',
-    'compaction.json',
-    'risk.json',
-    'news.json',
-    'ai-provider.json',
-    'auth.json',
-    'decision-ticket.json',
-    'kill-switch.json',
-    'slippage.json',
-    'reconciliation.json',
-    'review-gate.json',
-    'shutdown.json',
-    'heartbeat.json',
-    'connectors.json',
-    'news-collector.json',
-    'tools.json',
-  ] as const
+  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'auth.json', 'heartbeat.json', 'snapshot.json', 'strategy.json', 'connectors.json', 'news.json', 'tools.json'] as const
   const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
 
+  // TODO: remove all migration blocks before v1.0 — no stable release yet, breaking changes are fine
   // ---------- Migration: consolidate old ai-provider + model + api-keys → ai-provider ----------
-  const aiProviderRaw = raws[8] as Record<string, unknown> | undefined
+  const aiProviderRaw = raws[6] as Record<string, unknown> | undefined
   if (aiProviderRaw && !('backend' in aiProviderRaw)) {
-    // Old format detected — merge model.json + api-keys.json into ai-provider.json
+    // Old format detected — merge model.json + api-keys.json into ai-provider-manager.json
     const oldModel = await loadJsonFile('model.json') as Record<string, unknown> | undefined
     const oldKeys = await loadJsonFile('api-keys.json') as Record<string, unknown> | undefined
     const migrated = {
       backend: aiProviderRaw.provider ?? 'claude-code',
       provider: oldModel?.provider ?? 'anthropic',
-      model: oldModel?.model ?? 'claude-sonnet-4-6',
+      model: oldModel?.model ?? AI_PROVIDER_DEFAULT_MODELS.anthropic,
       ...(oldModel?.baseUrl ? { baseUrl: oldModel.baseUrl } : {}),
       apiKeys: oldKeys ?? {},
     }
-    raws[8] = migrated
+    raws[6] = migrated
     await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, 'ai-provider.json'), JSON.stringify(migrated, null, 2) + '\n')
+    await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(migrated, null, 2) + '\n')
     await removeJsonFile('model.json')
     await removeJsonFile('api-keys.json')
   }
 
+  // ---------- Migration: claude-code backend → agent-sdk + claudeai ----------
+  if (aiProviderRaw && (aiProviderRaw as Record<string, unknown>).backend === 'claude-code') {
+    const patched = { ...(aiProviderRaw as Record<string, unknown>), backend: 'agent-sdk', loginMethod: 'claudeai' }
+    raws[6] = patched
+    await mkdir(CONFIG_DIR, { recursive: true })
+    await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(patched, null, 2) + '\n')
+  }
+
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
-  const connectorsRaw = raws[17] as Record<string, unknown> | undefined
+  const connectorsRaw = raws[11] as Record<string, unknown> | undefined
   if (connectorsRaw === undefined) {
     const oldTelegram = await loadJsonFile('telegram.json')
     const oldEngine = raws[0] as Record<string, unknown> | undefined
@@ -709,33 +548,68 @@ export async function loadConfig(): Promise<Config> {
       await mkdir(CONFIG_DIR, { recursive: true })
       await writeFile(resolve(CONFIG_DIR, 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
     }
-    raws[17] = Object.keys(migrated).length > 0 ? migrated : undefined
+    raws[11] = Object.keys(migrated).length > 0 ? migrated : undefined
   }
 
-  const parsedConfig: Config = {
+  return {
     engine:        await parseAndSeed(files[0], engineSchema, raws[0]),
     agent:         await parseAndSeed(files[1], agentSchema, raws[1]),
     crypto:        await parseAndSeed(files[2], cryptoSchema, raws[2]),
     securities:    await parseAndSeed(files[3], securitiesSchema, raws[3]),
-    openbb:        await parseAndSeed(files[4], openbbSchema, raws[4]),
+    marketData:    await parseAndSeed(files[4], marketDataSchema, raws[4]),
     compaction:    await parseAndSeed(files[5], compactionSchema, raws[5]),
-    risk:          await parseAndSeed(files[6], riskSchema, raws[6]),
-    news:          await parseAndSeed(files[7], newsSchema, raws[7]),
-    aiProvider:    await parseAndSeed(files[8], aiProviderSchema, raws[8]),
-    auth:          await parseAndSeed(files[9], authSchema, raws[9]),
-    decisionTicket: await parseAndSeed(files[10], decisionTicketSchema, raws[10]),
-    killSwitch:    await parseAndSeed(files[11], killSwitchSchema, raws[11]),
-    slippage:      await parseAndSeed(files[12], slippageSchema, raws[12]),
-    reconciliation: await parseAndSeed(files[13], reconciliationSchema, raws[13]),
-    reviewGate:    await parseAndSeed(files[14], reviewGateSchema, raws[14]),
-    shutdown:      await parseAndSeed(files[15], shutdownSchema, raws[15]),
-    heartbeat:     await parseAndSeed(files[16], heartbeatSchema, raws[16]),
-    connectors:    await parseAndSeed(files[17], connectorsSchema, raws[17]),
-    newsCollector: await parseAndSeed(files[18], newsCollectorSchema, raws[18]),
-    tools:         await parseAndSeed(files[19], toolsSchema, raws[19]),
+    aiProvider:    await parseAndSeed(files[6], aiProviderSchema, raws[6]),
+    auth:          await parseAndSeed(files[7], authSchema, raws[7]),
+    heartbeat:     await parseAndSeed(files[8], heartbeatSchema, raws[8]),
+    snapshot:      await parseAndSeed(files[9], snapshotSchema, raws[9]),
+    strategy:      await parseAndSeed(files[10], strategySchema, raws[10]),
+    connectors:    await parseAndSeed(files[11], connectorsSchema, raws[11]),
+    news:          await parseAndSeed(files[12], newsCollectorSchema, raws[12]),
+    tools:         await parseAndSeed(files[13], toolsSchema, raws[13]),
   }
+}
 
-  return hydrateSecrets(parsedConfig)
+// ==================== Account Config Loader ====================
+
+/** Common fields that live at the top level, not inside brokerConfig. */
+const BASE_FIELDS = new Set(['id', 'label', 'type', 'guards', 'brokerConfig'])
+
+/**
+ * Migrate flat account config (legacy) to nested brokerConfig format.
+ * Any field not in BASE_FIELDS gets moved into brokerConfig.
+ */
+function migrateAccountConfig(raw: Record<string, unknown>): Record<string, unknown> {
+  if (raw.brokerConfig) return raw  // already migrated
+  const migrated: Record<string, unknown> = {}
+  const brokerConfig: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (BASE_FIELDS.has(k)) {
+      migrated[k] = v
+    } else {
+      brokerConfig[k] = v
+    }
+  }
+  migrated.brokerConfig = brokerConfig
+  return migrated
+}
+
+export async function readAccountsConfig(): Promise<AccountConfig[]> {
+  const raw = await loadJsonFile('accounts.json')
+  if (raw === undefined) {
+    // Seed empty file on first run
+    await mkdir(CONFIG_DIR, { recursive: true })
+    await writeFile(resolve(CONFIG_DIR, 'accounts.json'), '[]\n')
+    return []
+  }
+  // Migrate legacy flat format → nested brokerConfig
+  const migrated = (raw as unknown[]).map((item) => migrateAccountConfig(item as Record<string, unknown>))
+  return accountsFileSchema.parse(migrated)
+}
+
+export async function writeAccountsConfig(accounts: AccountConfig[]): Promise<void> {
+  const validated = accountsFileSchema.parse(accounts)
+  await mkdir(CONFIG_DIR, { recursive: true })
+  await writeFile(resolve(CONFIG_DIR, 'accounts.json'), JSON.stringify(validated, null, 2) + '\n')
 }
 
 // ==================== Hot-read helpers ====================
@@ -743,74 +617,40 @@ export async function loadConfig(): Promise<Config> {
 /** Read agent config from disk (called per-request for hot-reload). */
 export async function readAgentConfig() {
   try {
-    const raw = JSON.parse(
-      await readFile(resolve(CONFIG_DIR, "agent.json"), "utf-8")
-    );
-    return agentSchema.parse(raw);
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'agent.json'), 'utf-8'))
+    return agentSchema.parse(raw)
   } catch {
-    return agentSchema.parse({});
+    return agentSchema.parse({})
   }
 }
 
 /** Read AI provider config from disk (called per-request for hot-reload). */
 export async function readAIProviderConfig() {
   try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'ai-provider.json'), 'utf-8'))
-    return hydrateSecrets({
-      engine: engineSchema.parse({}),
-      agent: agentSchema.parse({}),
-      crypto: cryptoSchema.parse({}),
-      securities: securitiesSchema.parse({}),
-      openbb: openbbSchema.parse({}),
-      compaction: compactionSchema.parse({}),
-      risk: riskSchema.parse({}),
-      news: newsSchema.parse({}),
-      aiProvider: aiProviderSchema.parse(raw),
-      auth: authSchema.parse({}),
-      decisionTicket: decisionTicketSchema.parse({}),
-      killSwitch: killSwitchSchema.parse({}),
-      slippage: slippageSchema.parse({}),
-      reconciliation: reconciliationSchema.parse({}),
-      reviewGate: reviewGateSchema.parse({}),
-      shutdown: shutdownSchema.parse({}),
-      heartbeat: heartbeatSchema.parse({}),
-      connectors: connectorsSchema.parse({}),
-      newsCollector: newsCollectorSchema.parse({}),
-      tools: toolsSchema.parse({}),
-    }).aiProvider
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), 'utf-8'))
+    return aiProviderSchema.parse(raw)
   } catch {
-    return hydrateSecrets({
-      engine: engineSchema.parse({}),
-      agent: agentSchema.parse({}),
-      crypto: cryptoSchema.parse({}),
-      securities: securitiesSchema.parse({}),
-      openbb: openbbSchema.parse({}),
-      compaction: compactionSchema.parse({}),
-      risk: riskSchema.parse({}),
-      news: newsSchema.parse({}),
-      aiProvider: aiProviderSchema.parse({}),
-      auth: authSchema.parse({}),
-      decisionTicket: decisionTicketSchema.parse({}),
-      killSwitch: killSwitchSchema.parse({}),
-      slippage: slippageSchema.parse({}),
-      reconciliation: reconciliationSchema.parse({}),
-      reviewGate: reviewGateSchema.parse({}),
-      shutdown: shutdownSchema.parse({}),
-      heartbeat: heartbeatSchema.parse({}),
-      connectors: connectorsSchema.parse({}),
-      newsCollector: newsCollectorSchema.parse({}),
-      tools: toolsSchema.parse({}),
-    }).aiProvider
+    return aiProviderSchema.parse({})
   }
 }
 
-/** Read OpenBB config from disk (called per-request for hot-reload). */
-export async function readOpenbbConfig() {
+/** Read market data config from disk (called per-request for hot-reload). */
+export async function readMarketDataConfig() {
   try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'openbb.json'), 'utf-8'))
-    return openbbSchema.parse(raw)
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'market-data.json'), 'utf-8'))
+    return marketDataSchema.parse(raw)
   } catch {
-    return openbbSchema.parse({})
+    return marketDataSchema.parse({})
+  }
+}
+
+/** Read strategy config from disk (called per-request for hot-reload). */
+export async function readStrategyConfig() {
+  try {
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'strategy.json'), 'utf-8'))
+    return strategySchema.parse(raw)
+  } catch {
+    return strategySchema.parse({})
   }
 }
 
@@ -824,30 +664,42 @@ export async function readToolsConfig() {
   }
 }
 
+// ==================== AI Backend Helpers ====================
+
+export type AIBackend = 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk'
+
+/** Read the current AI backend from ai-provider-manager.json. */
+export async function readAIBackend(): Promise<{ backend: AIBackend }> {
+  const config = await readAIProviderConfig()
+  return { backend: config.backend }
+}
+
+/** Switch the AI backend in ai-provider-manager.json (preserves other fields). */
+export async function writeAIBackend(backend: AIBackend): Promise<void> {
+  const current = await readAIProviderConfig()
+  const updated = { ...current, backend }
+  await mkdir(CONFIG_DIR, { recursive: true })
+  await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(updated, null, 2) + '\n')
+}
+
 // ==================== Writer ====================
 
-export type ConfigSection = keyof Config;
+export type ConfigSection = keyof Config
 
 const sectionSchemas: Record<ConfigSection, z.ZodTypeAny> = {
   engine: engineSchema,
   agent: agentSchema,
   crypto: cryptoSchema,
   securities: securitiesSchema,
-  openbb: openbbSchema,
+  marketData: marketDataSchema,
   compaction: compactionSchema,
-  risk: riskSchema,
-  news: newsSchema,
   aiProvider: aiProviderSchema,
   auth: authSchema,
-  decisionTicket: decisionTicketSchema,
-  killSwitch: killSwitchSchema,
-  slippage: slippageSchema,
-  reconciliation: reconciliationSchema,
-  reviewGate: reviewGateSchema,
-  shutdown: shutdownSchema,
   heartbeat: heartbeatSchema,
+  snapshot: snapshotSchema,
+  strategy: strategySchema,
   connectors: connectorsSchema,
-  newsCollector: newsCollectorSchema,
+  news: newsCollectorSchema,
   tools: toolsSchema,
 }
 
@@ -856,21 +708,15 @@ const sectionFiles: Record<ConfigSection, string> = {
   agent: 'agent.json',
   crypto: 'crypto.json',
   securities: 'securities.json',
-  openbb: 'openbb.json',
+  marketData: 'market-data.json',
   compaction: 'compaction.json',
-  risk: 'risk.json',
-  news: 'news.json',
-  aiProvider: 'ai-provider.json',
+  aiProvider: 'ai-provider-manager.json',
   auth: 'auth.json',
-  decisionTicket: 'decision-ticket.json',
-  killSwitch: 'kill-switch.json',
-  slippage: 'slippage.json',
-  reconciliation: 'reconciliation.json',
-  reviewGate: 'review-gate.json',
-  shutdown: 'shutdown.json',
   heartbeat: 'heartbeat.json',
+  snapshot: 'snapshot.json',
+  strategy: 'strategy.json',
   connectors: 'connectors.json',
-  newsCollector: 'news-collector.json',
+  news: 'news.json',
   tools: 'tools.json',
 }
 
@@ -878,17 +724,23 @@ const sectionFiles: Record<ConfigSection, string> = {
 export const validSections = Object.keys(sectionSchemas) as ConfigSection[]
 
 /** Validate and write a config section to disk. Returns the validated config. */
-export async function writeConfigSection(
-  section: ConfigSection,
-  data: unknown
-): Promise<unknown> {
-  const schema = sectionSchemas[section];
-  const validated = schema.parse(data);
-  const persisted = stripSecretsForPersistence(section, validated);
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(
-    resolve(CONFIG_DIR, sectionFiles[section]),
-    JSON.stringify(persisted, null, 2) + "\n"
-  );
-  return persisted;
+export async function writeConfigSection(section: ConfigSection, data: unknown): Promise<unknown> {
+  const schema = sectionSchemas[section]
+  const validated = schema.parse(data)
+  await mkdir(CONFIG_DIR, { recursive: true })
+  await writeFile(resolve(CONFIG_DIR, sectionFiles[section]), JSON.stringify(validated, null, 2) + '\n')
+  return validated
+}
+
+/** Read web sub-channel definitions from disk. Returns empty array if file missing. */
+export async function readWebSubchannels(): Promise<WebChannel[]> {
+  const raw = await loadJsonFile('web-subchannels.json')
+  return webSubchannelsSchema.parse(raw ?? [])
+}
+
+/** Write web sub-channel definitions to disk. */
+export async function writeWebSubchannels(channels: WebChannel[]): Promise<void> {
+  const validated = webSubchannelsSchema.parse(channels)
+  await mkdir(CONFIG_DIR, { recursive: true })
+  await writeFile(resolve(CONFIG_DIR, 'web-subchannels.json'), JSON.stringify(validated, null, 2) + '\n')
 }

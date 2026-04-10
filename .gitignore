@@ -2,11 +2,6 @@ node_modules/
 dist/
 logs/
 /data/*
-!/data/default/
-!/data/default/**
-!/data/config/
-/data/config/*
-!/data/config/branch_workflow.v1.json
 state.json
 *.log
 
@@ -29,12 +24,20 @@ Thumbs.db
 # Test
 coverage/
 
-# Python ML runtime
-.venv/
-__pycache__/
-*.pyc
-catboost_info/
-
 # Claude Code
-CLAUDE.md
 .claude/
+packages/ibkr/ref/source/JavaClient/
+packages/ibkr/ref/source/cppclient/
+packages/ibkr/ref/samples/Java/
+packages/ibkr/ref/samples/Cpp/
+packages/ibkr/ref/CMakeLists.txt
+
+# Local research artifacts
+research/cache/
+research/**/__pycache__/
+scripts/**/__pycache__/
+
+# Local planning scratch files
+task_plan.md
+findings.md
+progress.md

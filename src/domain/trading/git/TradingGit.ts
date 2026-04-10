@@ -1,0 +1,671 @@
+/**
+ * TradingGit — Trading-as-Git implementation
+ *
+ * Unified git-like operation tracking for all trading accounts.
+ */
+
+import { createHash } from 'crypto'
+import Decimal from 'decimal.js'
+import { Order, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import type { ITradingGit, TradingGitConfig } from './interfaces.js'
+import type {
+  CommitHash,
+  Operation,
+  OperationResult,
+  OperationStatus,
+  AddResult,
+  CommitPrepareResult,
+  PushResult,
+  RejectResult,
+  GitStatus,
+  GitCommit,
+  GitState,
+  CommitLogEntry,
+  GitExportState,
+  OperationSummary,
+  PriceChangeInput,
+  SimulatePriceChangeResult,
+  OrderStatusUpdate,
+  SyncResult,
+} from './types.js'
+import { getOperationSymbol } from './types.js'
+
+function generateCommitHash(content: object): CommitHash {
+  const hash = createHash('sha256')
+    .update(JSON.stringify(content))
+    .digest('hex')
+  return hash.slice(0, 8)
+}
+
+export class TradingGit implements ITradingGit {
+  private stagingArea: Operation[] = []
+  private pendingMessage: string | null = null
+  private pendingHash: CommitHash | null = null
+  private pendingOperations: Operation[] | null = null
+  private commits: GitCommit[] = []
+  private head: CommitHash | null = null
+  private currentRound: number | undefined = undefined
+  private readonly config: TradingGitConfig
+
+  constructor(config: TradingGitConfig) {
+    this.config = config
+  }
+
+  // ==================== git add / commit / push ====================
+
+  add(operation: Operation): AddResult {
+    if (this.pendingMessage !== null || this.pendingHash !== null || this.pendingOperations !== null) {
+      throw new Error('Cannot add operations after commit. Commit or reject has created a pending review set; recommit after clearing it.')
+    }
+    this.stagingArea.push(operation)
+    return {
+      staged: true,
+      index: this.stagingArea.length - 1,
+      operation,
+    }
+  }
+
+  commit(message: string): CommitPrepareResult {
+    if (this.stagingArea.length === 0) {
+      throw new Error('Nothing to commit: staging area is empty')
+    }
+
+    const operations = [...this.stagingArea]
+    const timestamp = new Date().toISOString()
+    this.pendingHash = generateCommitHash({
+      message,
+      operations,
+      timestamp,
+      parentHash: this.head,
+    })
+    this.pendingMessage = message
+    this.pendingOperations = operations
+
+    return {
+      prepared: true,
+      hash: this.pendingHash,
+      message,
+      operationCount: operations.length,
+    }
+  }
+
+  async push(): Promise<PushResult> {
+    if (this.stagingArea.length === 0) {
+      throw new Error('Nothing to push: staging area is empty')
+    }
+    if (this.pendingMessage === null || this.pendingHash === null || this.pendingOperations === null) {
+      throw new Error('Nothing to push: please commit first')
+    }
+
+    const operations = this.pendingOperations
+    const message = this.pendingMessage
+    const hash = this.pendingHash
+
+    // Execute all operations
+    const results: OperationResult[] = []
+    for (const op of operations) {
+      try {
+        const raw = await this.config.executeOperation(op)
+        results.push(this.parseOperationResult(op, raw))
+      } catch (error) {
+        results.push({
+          action: op.action,
+          success: false,
+          status: 'rejected',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    // Snapshot state after execution
+    const stateAfter = await this.config.getGitState()
+
+    const commit: GitCommit = {
+      hash,
+      parentHash: this.head,
+      message,
+      operations,
+      results,
+      stateAfter,
+      timestamp: new Date().toISOString(),
+      round: this.currentRound,
+    }
+
+    this.commits.push(commit)
+    this.head = hash
+
+    await this.config.onCommit?.(this.exportState())
+
+    // Clear staging
+    this.stagingArea = []
+    this.pendingMessage = null
+    this.pendingHash = null
+    this.pendingOperations = null
+
+    const rejected = results.filter((r) => !r.success)
+    const submitted = results.filter((r) => r.success)
+
+    return { hash, message, operationCount: operations.length, submitted, rejected }
+  }
+
+  async reject(reason?: string): Promise<RejectResult> {
+    if (this.stagingArea.length === 0) {
+      throw new Error('Nothing to reject: staging area is empty')
+    }
+    if (this.pendingMessage === null || this.pendingHash === null || this.pendingOperations === null) {
+      throw new Error('Nothing to reject: please commit first')
+    }
+
+    const operations = this.pendingOperations
+    const message = `[rejected] ${this.pendingMessage}${reason ? ` — ${reason}` : ''}`
+    const hash = this.pendingHash
+
+    const results: OperationResult[] = operations.map((op) => ({
+      action: op.action,
+      success: false,
+      status: 'user-rejected' as const,
+      error: reason || 'Rejected by user',
+    }))
+
+    const stateAfter = await this.config.getGitState()
+
+    const commit: GitCommit = {
+      hash,
+      parentHash: this.head,
+      message,
+      operations,
+      results,
+      stateAfter,
+      timestamp: new Date().toISOString(),
+      round: this.currentRound,
+    }
+
+    this.commits.push(commit)
+    this.head = hash
+    await this.config.onCommit?.(this.exportState())
+
+    // Clear staging
+    this.stagingArea = []
+    this.pendingMessage = null
+    this.pendingHash = null
+    this.pendingOperations = null
+
+    return { hash, message, operationCount: operations.length }
+  }
+
+  // ==================== git log / show / status ====================
+
+  log(options: { limit?: number; symbol?: string } = {}): CommitLogEntry[] {
+    const { limit = 10, symbol } = options
+
+    let commits = this.commits.slice().reverse()
+
+    if (symbol) {
+      commits = commits.filter((c) =>
+        c.operations.some((op) => getOperationSymbol(op) === symbol),
+      )
+    }
+
+    commits = commits.slice(0, limit)
+
+    return commits.map((c) => ({
+      hash: c.hash,
+      parentHash: c.parentHash,
+      message: c.message,
+      timestamp: c.timestamp,
+      round: c.round,
+      operations: this.buildOperationSummaries(c, symbol),
+    }))
+  }
+
+  private buildOperationSummaries(
+    commit: GitCommit,
+    filterSymbol?: string,
+  ): OperationSummary[] {
+    const summaries: OperationSummary[] = []
+
+    for (let i = 0; i < commit.operations.length; i++) {
+      const op = commit.operations[i]
+      const result = commit.results[i]
+      const symbol = getOperationSymbol(op)
+
+      if (filterSymbol && symbol !== filterSymbol) continue
+
+      summaries.push({
+        symbol,
+        action: op.action,
+        change: this.formatOperationChange(op, result),
+        status: result?.status || 'rejected',
+      })
+    }
+
+    return summaries
+  }
+
+  private formatOperationChange(op: Operation, result?: OperationResult): string {
+    switch (op.action) {
+      case 'placeOrder': {
+        const side = op.order?.action || 'unknown' // BUY / SELL
+        const qty = op.order?.totalQuantity
+        const cashQty = op.order?.cashQty
+        const hasQty = qty && !qty.equals(UNSET_DECIMAL)
+        const hasCash = cashQty !== UNSET_DOUBLE && cashQty > 0
+        const sizeStr = hasCash ? `$${cashQty}` : hasQty ? `${qty}` : '?'
+
+        if (result?.status === 'user-rejected') {
+          return `${side} ${sizeStr} (user-rejected)`
+        }
+        if (result?.status === 'filled') {
+          const price = result.execution?.price ? ` @${result.execution.price}` : ''
+          return `${side} ${sizeStr}${price}`
+        }
+        return `${side} ${sizeStr} (${result?.status || 'unknown'})`
+      }
+
+      case 'closePosition': {
+        const qty = op.quantity
+        if (result?.status === 'filled') {
+          const price = result.execution?.price ? ` @${result.execution.price}` : ''
+          const qtyStr = qty ? ` (partial: ${qty})` : ''
+          return `closed${qtyStr}${price}`
+        }
+        return `close (${result?.status || 'unknown'})`
+      }
+
+      case 'modifyOrder': {
+        return `modified ${op.orderId}`
+      }
+
+      case 'cancelOrder':
+        return `cancelled order ${op.orderId}`
+
+      case 'syncOrders': {
+        const status = result?.status || 'unknown'
+        const price = result?.filledPrice ? ` @${result.filledPrice}`
+          : result?.execution?.price ? ` @${result.execution.price}` : ''
+        const qty = result?.filledQty ? ` (${result.filledQty} filled)` : ''
+        return `synced → ${status}${price}${qty}`
+      }
+    }
+  }
+
+  show(hash: CommitHash): GitCommit | null {
+    return this.commits.find((c) => c.hash === hash) ?? null
+  }
+
+  status(): GitStatus {
+    return {
+      staged: [...this.stagingArea],
+      pendingMessage: this.pendingMessage,
+      pendingHash: this.pendingHash,
+      head: this.head,
+      commitCount: this.commits.length,
+    }
+  }
+
+  // ==================== Serialization ====================
+
+  exportState(): GitExportState {
+    return { commits: [...this.commits], head: this.head }
+  }
+
+  static restore(state: GitExportState, config: TradingGitConfig): TradingGit {
+    const git = new TradingGit(config)
+    git.commits = state.commits.map(TradingGit.rehydrateCommit)
+    git.head = state.head
+    return git
+  }
+
+  /** Rehydrate Decimal fields lost during JSON round-trip. */
+  private static rehydrateCommit(commit: GitCommit): GitCommit {
+    return {
+      ...commit,
+      operations: commit.operations.map(TradingGit.rehydrateOperation),
+      stateAfter: TradingGit.rehydrateGitState(commit.stateAfter),
+    }
+  }
+
+  private static rehydrateOperation(op: Operation): Operation {
+    switch (op.action) {
+      case 'placeOrder':
+        return {
+          ...op,
+          order: op.order ? TradingGit.rehydrateOrder(op.order) : op.order,
+        }
+      case 'closePosition':
+        return {
+          ...op,
+          quantity: op.quantity != null ? new Decimal(String(op.quantity)) : op.quantity,
+        }
+      default:
+        return op
+    }
+  }
+
+  private static rehydrateOrder(order: Order): Order {
+    const rehydrated = Object.assign(new Order(), order)
+    // totalQuantity is the critical Decimal field on Order
+    if (order.totalQuantity != null) {
+      rehydrated.totalQuantity = new Decimal(String(order.totalQuantity))
+    }
+    return rehydrated
+  }
+
+  private static rehydrateGitState(state: GitState): GitState {
+    return {
+      ...state,
+      positions: state.positions.map((pos) => ({
+        ...pos,
+        quantity: new Decimal(String(pos.quantity)),
+      })),
+    }
+  }
+
+  setCurrentRound(round: number): void {
+    this.currentRound = round
+  }
+
+  // ==================== Sync ====================
+
+  private getLatestOrderStatuses(): Map<string, OperationStatus> {
+    const orderStatus = new Map<string, OperationStatus>()
+
+    for (let i = this.commits.length - 1; i >= 0; i--) {
+      for (const result of this.commits[i].results) {
+        if (result.orderId && !orderStatus.has(result.orderId)) {
+          orderStatus.set(result.orderId, result.status)
+        }
+      }
+    }
+
+    return orderStatus
+  }
+
+  private normalizeSyncUpdates(updates: OrderStatusUpdate[]): OrderStatusUpdate[] {
+    const latestByOrderId = new Map<string, OrderStatusUpdate>()
+
+    for (const update of updates) {
+      latestByOrderId.delete(update.orderId)
+      latestByOrderId.set(update.orderId, update)
+    }
+
+    return [...latestByOrderId.values()]
+  }
+
+  async sync(updates: OrderStatusUpdate[], currentState: GitState): Promise<SyncResult> {
+    if (updates.length === 0) {
+      return { hash: this.head ?? '', updatedCount: 0, updates: [] }
+    }
+
+    const normalizedUpdates = this.normalizeSyncUpdates(updates)
+    const latestStatuses = this.getLatestOrderStatuses()
+    const novelUpdates = normalizedUpdates.filter(
+      update => latestStatuses.get(update.orderId) !== update.currentStatus,
+    )
+
+    if (novelUpdates.length === 0) {
+      return { hash: this.head ?? '', updatedCount: 0, updates: [] }
+    }
+
+    const hash = generateCommitHash({
+      updates: novelUpdates,
+      timestamp: new Date().toISOString(),
+      parentHash: this.head,
+    })
+
+    const commit: GitCommit = {
+      hash,
+      parentHash: this.head,
+      message: `[sync] ${novelUpdates.length} order(s) updated`,
+      operations: [{ action: 'syncOrders' as const }],
+      results: novelUpdates.map((u) => ({
+        action: 'syncOrders' as const,
+        success: true,
+        orderId: u.orderId,
+        status: u.currentStatus,
+        filledQty: u.filledQty,
+        filledPrice: u.filledPrice,
+      })),
+      stateAfter: currentState,
+      timestamp: new Date().toISOString(),
+      round: this.currentRound,
+    }
+
+    this.commits.push(commit)
+    this.head = hash
+
+    await this.config.onCommit?.(this.exportState())
+
+    return { hash, updatedCount: novelUpdates.length, updates: novelUpdates }
+  }
+
+  getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
+    const orderStatus = this.getLatestOrderStatuses()
+
+    // Collect orders still pending
+    const pending: Array<{ orderId: string; symbol: string }> = []
+    const seen = new Set<string>()
+
+    for (const commit of this.commits) {
+      for (let j = 0; j < commit.results.length; j++) {
+        const result = commit.results[j]
+        if (
+          result.orderId &&
+          !seen.has(result.orderId) &&
+          orderStatus.get(result.orderId) === 'submitted'
+        ) {
+          const symbol = getOperationSymbol(commit.operations[j])
+          pending.push({ orderId: result.orderId, symbol })
+          seen.add(result.orderId)
+        }
+      }
+    }
+
+    return pending
+  }
+
+  // ==================== Simulation ====================
+
+  async simulatePriceChange(
+    priceChanges: PriceChangeInput[],
+  ): Promise<SimulatePriceChangeResult> {
+    const state = await this.config.getGitState()
+    const { positions, netLiquidation: equity, unrealizedPnL, totalCashValue: cash } = state
+
+    const currentTotalPnL = cash > 0 ? ((equity - cash) / cash) * 100 : 0
+
+    if (positions.length === 0) {
+      return {
+        success: true,
+        currentState: { equity, unrealizedPnL, totalPnL: currentTotalPnL, positions: [] },
+        simulatedState: { equity, unrealizedPnL, totalPnL: currentTotalPnL, positions: [] },
+        summary: {
+          totalPnLChange: 0,
+          equityChange: 0,
+          equityChangePercent: '0.0%',
+          worstCase: 'No positions to simulate.',
+        },
+      }
+    }
+
+    // Parse price changes → target price map
+    const priceMap = new Map<string, number>()
+
+    for (const { symbol, change } of priceChanges) {
+      const parsed = this.parsePriceChange(change)
+      if (!parsed.success) {
+        return {
+          success: false,
+          error: `Invalid change format for ${symbol}: "${change}". Use "@150" for absolute or "+10%" / "-5%" for relative.`,
+          currentState: { equity, unrealizedPnL, totalPnL: currentTotalPnL, positions: [] },
+          simulatedState: { equity, unrealizedPnL, totalPnL: currentTotalPnL, positions: [] },
+          summary: { totalPnLChange: 0, equityChange: 0, equityChangePercent: '0.0%', worstCase: '' },
+        }
+      }
+
+      if (symbol === 'all') {
+        for (const pos of positions) {
+          priceMap.set(pos.contract.symbol || 'unknown', this.applyPriceChange(pos.marketPrice, parsed.type, parsed.value))
+        }
+      } else {
+        const pos = positions.find((p) => (p.contract.symbol || p.contract.aliceId) === symbol)
+        if (pos) {
+          priceMap.set(symbol, this.applyPriceChange(pos.marketPrice, parsed.type, parsed.value))
+        }
+      }
+    }
+
+    const qty = (pos: typeof positions[0]) => pos.quantity.toNumber()
+
+    // Current state
+    const currentPositions = positions.map((pos) => ({
+      symbol: pos.contract.symbol || pos.contract.aliceId || 'unknown',
+      side: pos.side,
+      qty: qty(pos),
+      avgCost: pos.avgCost,
+      marketPrice: pos.marketPrice,
+      unrealizedPnL: pos.unrealizedPnL,
+      marketValue: pos.marketValue,
+    }))
+
+    // Simulated state
+    let simulatedUnrealizedPnL = 0
+    const simulatedPositions = positions.map((pos) => {
+      const sym = pos.contract.symbol || pos.contract.aliceId || 'unknown'
+      const simulatedPrice = priceMap.get(sym) ?? pos.marketPrice
+      const priceChange = simulatedPrice - pos.marketPrice
+      const priceChangePct = pos.marketPrice > 0 ? (priceChange / pos.marketPrice) * 100 : 0
+      const q = qty(pos)
+
+      const newPnL =
+        pos.side === 'long'
+          ? (simulatedPrice - pos.avgCost) * q
+          : (pos.avgCost - simulatedPrice) * q
+
+      const pnlChange = newPnL - pos.unrealizedPnL
+      simulatedUnrealizedPnL += newPnL
+
+      return {
+        symbol: sym,
+        side: pos.side,
+        qty: q,
+        avgCost: pos.avgCost,
+        simulatedPrice,
+        unrealizedPnL: newPnL,
+        marketValue: simulatedPrice * q,
+        pnlChange,
+        priceChangePercent: `${priceChangePct >= 0 ? '+' : ''}${priceChangePct.toFixed(2)}%`,
+      }
+    })
+
+    const pnlDiff = simulatedUnrealizedPnL - unrealizedPnL
+    const simulatedEquity = equity + pnlDiff
+    const simulatedTotalPnL = cash > 0 ? ((simulatedEquity - cash) / cash) * 100 : 0
+    const equityChangePct = equity > 0 ? (pnlDiff / equity) * 100 : 0
+
+    const worst = simulatedPositions.reduce(
+      (w, p) => (p.pnlChange < w.pnlChange ? p : w),
+      simulatedPositions[0],
+    )
+
+    const worstCase =
+      worst.pnlChange < 0
+        ? `${worst.symbol} would lose $${Math.abs(worst.pnlChange).toFixed(2)} (${worst.priceChangePercent})`
+        : 'All positions would profit or break even.'
+
+    return {
+      success: true,
+      currentState: { equity, unrealizedPnL, totalPnL: currentTotalPnL, positions: currentPositions },
+      simulatedState: {
+        equity: simulatedEquity,
+        unrealizedPnL: simulatedUnrealizedPnL,
+        totalPnL: simulatedTotalPnL,
+        positions: simulatedPositions,
+      },
+      summary: {
+        totalPnLChange: pnlDiff,
+        equityChange: pnlDiff,
+        equityChangePercent: `${equityChangePct >= 0 ? '+' : ''}${equityChangePct.toFixed(2)}%`,
+        worstCase,
+      },
+    }
+  }
+
+  private parsePriceChange(
+    change: string,
+  ): { success: true; type: 'absolute' | 'relative'; value: number } | { success: false } {
+    const trimmed = change.trim()
+
+    if (trimmed.startsWith('@')) {
+      const value = parseFloat(trimmed.slice(1))
+      if (isNaN(value) || value <= 0) return { success: false }
+      return { success: true, type: 'absolute', value }
+    }
+
+    if (trimmed.endsWith('%')) {
+      const value = parseFloat(trimmed.slice(0, -1))
+      if (isNaN(value)) return { success: false }
+      return { success: true, type: 'relative', value }
+    }
+
+    return { success: false }
+  }
+
+  private applyPriceChange(
+    currentPrice: number,
+    type: 'absolute' | 'relative',
+    value: number,
+  ): number {
+    return type === 'absolute' ? value : currentPrice * (1 + value / 100)
+  }
+
+  // ==================== Internal ====================
+
+  private parseOperationResult(op: Operation, raw: unknown): OperationResult {
+    const rawObj = raw as Record<string, unknown>
+
+    if (!rawObj || typeof rawObj !== 'object') {
+      return {
+        action: op.action,
+        success: false,
+        status: 'rejected',
+        error: 'Invalid response from trading engine',
+        raw,
+      }
+    }
+
+    const success = rawObj.success === true
+
+    if (!success) {
+      return {
+        action: op.action,
+        success: false,
+        status: 'rejected',
+        error: (rawObj.error as string) ?? 'Unknown error',
+        raw,
+      }
+    }
+
+    const orderId = rawObj.orderId as string | undefined
+    const orderState = rawObj.orderState as OperationResult['orderState']
+
+    return {
+      action: op.action,
+      success: true,
+      orderId,
+      status: this.mapOrderStatus(orderState),
+      orderState,
+      raw,
+    }
+  }
+
+  /** Map IBKR-style OrderState.status to OperationStatus. */
+  private mapOrderStatus(orderState?: { status?: string }): OperationStatus {
+    switch (orderState?.status) {
+      case 'Filled': return 'filled'
+      case 'Cancelled': return 'cancelled'
+      case 'Inactive': return 'rejected'
+      default: return 'submitted'
+    }
+  }
+}

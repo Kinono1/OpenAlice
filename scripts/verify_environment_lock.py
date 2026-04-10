@@ -173,7 +173,6 @@ def match_single_condition(actual: str, condition: str) -> bool:
                 return cmp < 0
             return cmp == 0
 
-    # Exact match fallback.
     return actual == cond
 
 
@@ -283,7 +282,7 @@ def main() -> int:
 
         package_json_path = Path(
             lock.get("project", {})
-            .get("packageJsonPath", "package.json")  # type: ignore[union-attr]
+            .get("packageJsonPath", "package.json")
         )
         package_json: dict[str, Any] | None = None
         package_json_error: str | None = None

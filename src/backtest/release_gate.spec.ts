@@ -1,16 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { evaluateReleaseGate } from "./release_gate.js";
-import { evaluateRampUpSnapshot } from "../deployment/ramp_up.js";
+import { describe, expect, it } from 'vitest'
+import { evaluateReleaseGate, type RampUpEvaluation } from './release_gate.js'
 
-describe("release_gate", () => {
-  it("passes paper and live gates when all checks are healthy", () => {
-    const ramp = evaluateRampUpSnapshot({
-      stageIndex: 1,
-      elapsedDays: 10,
-      tradingDays: 12,
-      trades: 30,
-      maxDrawdownPct: 1.8,
-    });
+describe('release_gate', () => {
+  it('passes paper and live gates when all checks are healthy', () => {
+    const ramp: RampUpEvaluation = {
+      decision: 'promote',
+      reason: 'promotion_ready',
+      currentStage: { allocationPct: 10 },
+      targetStage: { allocationPct: 25 },
+      drawdownBreached: false,
+    }
 
     const result = evaluateReleaseGate({
       wfo: {
@@ -18,18 +17,7 @@ describe("release_gate", () => {
         failedWindows: 0,
         windows: [
           {
-            windowIndex: 0,
-            window: {
-              trainStart: 0,
-              trainEndExclusive: 100,
-              testStart: 100,
-              testEndExclusive: 150,
-            },
-            selectedCandidate: { id: "candidate_1", params: {} },
-            inSample: { sharpe: 1.5, maxDrawdownPct: 5, totalReturnPct: 12, tradeCount: 20 },
-            outOfSample: { sharpe: 1.2, maxDrawdownPct: 6, totalReturnPct: 8, tradeCount: 10 },
             degradationRate: 0.2,
-            gatePassed: true,
           },
         ],
       },
@@ -54,22 +42,22 @@ describe("release_gate", () => {
         dsrMin: 0,
       },
       executionQuality: {
-        action: "monitor",
+        action: 'monitor',
         consecutiveBreaches: 0,
         requiredConsecutiveDays: 3,
         breachedDates: [],
         latestDriftMultiplier: 1.1,
       },
       rampUp: ramp,
-    });
+    })
 
-    expect(result.allowPaperTrading).toBe(true);
-    expect(result.allowLiveTrading).toBe(true);
-    expect(result.hardFail).toBe(false);
-    expect(result.failedChecks).toEqual([]);
-  });
+    expect(result.allowPaperTrading).toBe(true)
+    expect(result.allowLiveTrading).toBe(true)
+    expect(result.hardFail).toBe(false)
+    expect(result.failedChecks).toEqual([])
+  })
 
-  it("blocks paper/live when significance fails", () => {
+  it('blocks paper/live when significance fails', () => {
     const result = evaluateReleaseGate({
       significance: {
         passed: false,
@@ -91,17 +79,17 @@ describe("release_gate", () => {
         pboThreshold: 0.2,
         dsrMin: 0,
       },
-    });
+    })
 
-    expect(result.allowPaperTrading).toBe(false);
-    expect(result.allowLiveTrading).toBe(false);
-    expect(result.failedChecks).toContain("significance");
-  });
+    expect(result.allowPaperTrading).toBe(false)
+    expect(result.allowLiveTrading).toBe(false)
+    expect(result.failedChecks).toContain('significance')
+  })
 
-  it("blocks paper/live when risk simulation gate fails", () => {
+  it('blocks paper/live when risk simulation gate fails', () => {
     const result = evaluateReleaseGate({
       riskSimulation: {
-        method: "moving_block_bootstrap",
+        method: 'moving_block_bootstrap',
         simulations: 1000,
         horizonBars: 240,
         ruinDrawdownPct: 30,
@@ -118,14 +106,14 @@ describe("release_gate", () => {
         },
         gatePassed: false,
       },
-    });
+    })
 
-    expect(result.allowPaperTrading).toBe(false);
-    expect(result.allowLiveTrading).toBe(false);
-    expect(result.failedChecks).toContain("risk_simulation");
-  });
+    expect(result.allowPaperTrading).toBe(false)
+    expect(result.allowLiveTrading).toBe(false)
+    expect(result.failedChecks).toContain('risk_simulation')
+  })
 
-  it("allows paper but blocks live when execution quality trips", () => {
+  it('allows paper but blocks live when execution quality trips', () => {
     const result = evaluateReleaseGate({
       wfo: {
         overallPassed: true,
@@ -153,46 +141,46 @@ describe("release_gate", () => {
         dsrMin: 0,
       },
       executionQuality: {
-        action: "reduce_or_pause",
+        action: 'reduce_or_pause',
         consecutiveBreaches: 3,
         requiredConsecutiveDays: 3,
-        breachedDates: ["2026-02-01", "2026-02-02", "2026-02-03"],
+        breachedDates: ['2026-02-01', '2026-02-02', '2026-02-03'],
         latestDriftMultiplier: 2.5,
       },
-    });
+    })
 
-    expect(result.allowPaperTrading).toBe(true);
-    expect(result.allowLiveTrading).toBe(false);
-    expect(result.failedChecks).toContain("execution_quality");
-  });
+    expect(result.allowPaperTrading).toBe(true)
+    expect(result.allowLiveTrading).toBe(false)
+    expect(result.failedChecks).toContain('execution_quality')
+  })
 
-  it("blocks live on high regime-shift signal", () => {
+  it('blocks live on high regime-shift signal', () => {
     const result = evaluateReleaseGate({
       regimeShift: {
         triggered: true,
-        severity: "high",
-        reason: "volatility regime break",
+        severity: 'high',
+        reason: 'volatility regime break',
       },
-    });
+    })
 
-    expect(result.allowLiveTrading).toBe(false);
-    expect(result.failedChecks).toContain("regime_shift");
-  });
+    expect(result.allowLiveTrading).toBe(false)
+    expect(result.failedChecks).toContain('regime_shift')
+  })
 
-  it("marks insufficient ramp sample as warning rather than failure", () => {
-    const ramp = evaluateRampUpSnapshot({
-      stageIndex: 0,
-      elapsedDays: 2,
-      tradingDays: 1,
-      trades: 1,
-      maxDrawdownPct: 0.1,
-    });
+  it('marks insufficient ramp sample as warning rather than failure', () => {
+    const ramp: RampUpEvaluation = {
+      decision: 'stay',
+      reason: 'insufficient_sample',
+      currentStage: { allocationPct: 5 },
+      targetStage: { allocationPct: 5 },
+      drawdownBreached: false,
+    }
 
-    const result = evaluateReleaseGate({ rampUp: ramp });
-    const rampCheck = result.checks.find((check) => check.name === "ramp_up");
+    const result = evaluateReleaseGate({ rampUp: ramp })
+    const rampCheck = result.checks.find((check) => check.name === 'ramp_up')
 
-    expect(rampCheck?.status).toBe("warn");
-    expect(result.hardFail).toBe(false);
-    expect(result.warningChecks).toContain("ramp_up");
-  });
-});
+    expect(rampCheck?.status).toBe('warn')
+    expect(result.hardFail).toBe(false)
+    expect(result.warningChecks).toContain('ramp_up')
+  })
+})

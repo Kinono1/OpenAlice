@@ -51,7 +51,7 @@ describe('cron listener', () => {
     listener = createCronListener({
       connectorCenter,
       eventLog,
-      engine: mockEngine as any,
+      agentCenter: mockEngine as any,
       session,
     })
   })

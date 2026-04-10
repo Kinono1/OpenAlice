@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { api, type EventLogEntry, type CronJob, type CronSchedule } from '../api'
 import { useSSE } from '../hooks/useSSE'
 import { Toggle } from '../components/Toggle'
+import { PageHeader } from '../components/PageHeader'
 
 // ==================== Helpers ====================
 
@@ -231,7 +232,7 @@ function EventRow({ entry }: { entry: EventLogEntry }) {
   return (
     <>
       <tr
-        className="border-t border-border/50 hover:bg-bg-secondary/50 cursor-pointer"
+        className="border-t border-border/50 hover:bg-bg-tertiary/30 transition-colors cursor-pointer"
         onClick={() => isLong && setExpanded(!expanded)}
       >
         <td className="px-3 py-1.5 text-text-muted">{entry.seq}</td>
@@ -329,7 +330,7 @@ function CronSection() {
         <span className="text-xs text-text-muted">{jobs.length} jobs</span>
         <button
           onClick={() => setShowAdd(true)}
-          className="text-xs px-3 py-1.5 rounded-md bg-accent/20 text-accent border border-accent/30 hover:bg-accent/30 transition-colors"
+          className="btn-secondary-sm"
         >
           + Add Job
         </button>
@@ -536,7 +537,7 @@ function AddCronJobForm({ onClose, onCreated }: { onClose: () => void; onCreated
         <button
           type="submit"
           disabled={saving}
-          className="px-3 py-1.5 text-sm rounded-md bg-accent text-white hover:bg-accent/80 transition-colors disabled:opacity-50"
+          className="btn-primary-sm"
         >
           {saving ? 'Creating...' : 'Create'}
         </button>
@@ -554,32 +555,33 @@ export function EventsPage() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {/* Page header */}
-      <div className="flex items-center gap-4 px-4 md:px-6 py-4 border-b border-border shrink-0">
-        <h2 className="text-base font-semibold text-text">Events</h2>
-        <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
-          <button
-            onClick={() => setTab('events')}
-            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-              tab === 'events'
-                ? 'bg-bg-tertiary text-text'
-                : 'text-text-muted hover:text-text'
-            }`}
-          >
-            Event Log
-          </button>
-          <button
-            onClick={() => setTab('cron')}
-            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-              tab === 'cron'
-                ? 'bg-bg-tertiary text-text'
-                : 'text-text-muted hover:text-text'
-            }`}
-          >
-            Cron Jobs
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Events"
+        right={
+          <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
+            <button
+              onClick={() => setTab('events')}
+              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+                tab === 'events'
+                  ? 'bg-bg-tertiary text-text'
+                  : 'text-text-muted hover:text-text'
+              }`}
+            >
+              Event Log
+            </button>
+            <button
+              onClick={() => setTab('cron')}
+              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+                tab === 'cron'
+                  ? 'bg-bg-tertiary text-text'
+                  : 'text-text-muted hover:text-text'
+              }`}
+            >
+              Cron Jobs
+            </button>
+          </div>
+        }
+      />
 
       {/* Content area */}
       <div className="flex-1 flex flex-col min-h-0 px-4 md:px-6 py-5">

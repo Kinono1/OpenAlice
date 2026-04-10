@@ -1,68 +1,147 @@
 import { fetchJson } from './client'
-import type { CryptoAccount, CryptoPosition, SecAccount, SecHolding, WalletCommitLog, ReconnectResult } from './types'
+import type { TradingAccount, AccountSummary, AccountInfo, Position, WalletCommitLog, ReconnectResult, AccountConfig, WalletStatus, WalletPushResult, WalletRejectResult, TestConnectionResult, BrokerTypeInfo, UTASnapshotSummary, EquityCurvePoint, TradingRuntimeSummary } from './types'
+
+// ==================== Unified Trading API ====================
 
 export const tradingApi = {
-  // ==================== Reconnect ====================
+  // ==================== Accounts ====================
 
-  async reconnectCrypto(): Promise<ReconnectResult> {
-    const res = await fetch('/api/crypto/reconnect', { method: 'POST' })
+  async listAccounts(): Promise<{ accounts: TradingAccount[] }> {
+    return fetchJson('/api/trading/accounts')
+  },
+
+  async listAccountSummaries(): Promise<{ accounts: AccountSummary[] }> {
+    return fetchJson('/api/trading/accounts')
+  },
+
+  async equity(): Promise<{ totalEquity: number; totalCash: number; totalUnrealizedPnL: number; totalRealizedPnL: number; accounts: Array<{ id: string; label: string; equity: number; cash: number }> }> {
+    return fetchJson('/api/trading/equity')
+  },
+
+  // ==================== Per-account ====================
+
+  async reconnectAccount(accountId: string): Promise<ReconnectResult> {
+    const res = await fetch(`/api/trading/accounts/${accountId}/reconnect`, { method: 'POST' })
     return res.json()
   },
 
-  async reconnectSecurities(): Promise<ReconnectResult> {
-    const res = await fetch('/api/securities/reconnect', { method: 'POST' })
+  async accountInfo(accountId: string): Promise<AccountInfo> {
+    return fetchJson(`/api/trading/accounts/${accountId}/account`)
+  },
+
+  async positions(accountId: string): Promise<{ positions: Position[] }> {
+    return fetchJson(`/api/trading/accounts/${accountId}/positions`)
+  },
+
+  async orders(accountId: string): Promise<{ orders: unknown[] }> {
+    return fetchJson(`/api/trading/accounts/${accountId}/orders`)
+  },
+
+  async marketClock(accountId: string): Promise<{ isOpen: boolean; nextOpen: string; nextClose: string }> {
+    return fetchJson(`/api/trading/accounts/${accountId}/market-clock`)
+  },
+
+  async walletLog(accountId: string, limit = 20, symbol?: string): Promise<{ commits: WalletCommitLog[] }> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (symbol) params.set('symbol', symbol)
+    return fetchJson(`/api/trading/accounts/${accountId}/wallet/log?${params}`)
+  },
+
+  async walletShow(accountId: string, hash: string): Promise<unknown> {
+    return fetchJson(`/api/trading/accounts/${accountId}/wallet/show/${hash}`)
+  },
+
+  // ==================== Wallet operations ====================
+
+  async walletStatus(accountId: string): Promise<WalletStatus> {
+    return fetchJson(`/api/trading/accounts/${accountId}/wallet/status`)
+  },
+
+  async walletReject(accountId: string, reason?: string): Promise<WalletRejectResult> {
+    const res = await fetch(`/api/trading/accounts/${accountId}/wallet/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `Reject failed (${res.status})`)
+    }
     return res.json()
   },
 
-  // ==================== Crypto Data ====================
-
-  async cryptoAccount(): Promise<CryptoAccount> {
-    return fetchJson('/api/crypto/account')
+  async walletPush(accountId: string): Promise<WalletPushResult> {
+    const res = await fetch(`/api/trading/accounts/${accountId}/wallet/push`, { method: 'POST' })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `Push failed (${res.status})`)
+    }
+    return res.json()
   },
 
-  async cryptoPositions(): Promise<{ positions: CryptoPosition[] }> {
-    return fetchJson('/api/crypto/positions')
+  // ==================== Broker Types ====================
+
+  async getBrokerTypes(): Promise<{ brokerTypes: BrokerTypeInfo[] }> {
+    return fetchJson('/api/trading/config/broker-types')
   },
 
-  async cryptoOrders(): Promise<{ orders: unknown[] }> {
-    return fetchJson('/api/crypto/orders')
+  // ==================== Trading Config CRUD ====================
+
+  async loadTradingConfig(): Promise<{ accounts: AccountConfig[] }> {
+    return fetchJson('/api/trading/config')
   },
 
-  async cryptoWalletLog(limit = 20, symbol?: string): Promise<{ commits: WalletCommitLog[] }> {
-    const params = new URLSearchParams({ limit: String(limit) })
-    if (symbol) params.set('symbol', symbol)
-    return fetchJson(`/api/crypto/wallet/log?${params}`)
+  async runtimeSummary(): Promise<TradingRuntimeSummary> {
+    return fetchJson('/api/trading/config/runtime')
   },
 
-  async cryptoWalletShow(hash: string): Promise<unknown> {
-    return fetchJson(`/api/crypto/wallet/show/${hash}`)
+  async upsertAccount(account: AccountConfig): Promise<AccountConfig> {
+    const res = await fetch(`/api/trading/config/accounts/${account.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(account),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `Failed to save account (${res.status})`)
+    }
+    return res.json()
   },
 
-  // ==================== Securities Data ====================
-
-  async secAccount(): Promise<SecAccount> {
-    return fetchJson('/api/securities/account')
+  async deleteAccount(id: string): Promise<void> {
+    const res = await fetch(`/api/trading/config/accounts/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `Failed to delete account (${res.status})`)
+    }
   },
 
-  async secPortfolio(): Promise<{ holdings: SecHolding[] }> {
-    return fetchJson('/api/securities/portfolio')
+  // ==================== Snapshots ====================
+
+  async snapshots(accountId: string, opts?: { limit?: number; startTime?: string; endTime?: string }): Promise<{ snapshots: UTASnapshotSummary[] }> {
+    const params = new URLSearchParams()
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.startTime) params.set('startTime', opts.startTime)
+    if (opts?.endTime) params.set('endTime', opts.endTime)
+    return fetchJson(`/api/trading/accounts/${accountId}/snapshots?${params}`)
   },
 
-  async secOrders(): Promise<{ orders: unknown[] }> {
-    return fetchJson('/api/securities/orders')
+  async equityCurve(opts?: { startTime?: string; endTime?: string; limit?: number }): Promise<{ points: EquityCurvePoint[] }> {
+    const params = new URLSearchParams()
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.startTime) params.set('startTime', opts.startTime)
+    if (opts?.endTime) params.set('endTime', opts.endTime)
+    return fetchJson(`/api/trading/snapshots/equity-curve?${params}`)
   },
 
-  async secMarketClock(): Promise<{ isOpen: boolean; nextOpen: string; nextClose: string }> {
-    return fetchJson('/api/securities/market-clock')
-  },
+  // ==================== Connection Testing ====================
 
-  async secWalletLog(limit = 20, symbol?: string): Promise<{ commits: WalletCommitLog[] }> {
-    const params = new URLSearchParams({ limit: String(limit) })
-    if (symbol) params.set('symbol', symbol)
-    return fetchJson(`/api/securities/wallet/log?${params}`)
-  },
-
-  async secWalletShow(hash: string): Promise<unknown> {
-    return fetchJson(`/api/securities/wallet/show/${hash}`)
+  async testConnection(account: AccountConfig): Promise<TestConnectionResult> {
+    const res = await fetch('/api/trading/config/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(account),
+    })
+    return res.json()
   },
 }

@@ -1,54 +1,64 @@
 import { Hono } from 'hono'
 import type { EngineContext } from '../../../core/types.js'
-import { isAuthEnabled } from '../../../core/auth.js'
+import { getWebAuthStatus } from './security.js'
 
 /**
  * Health and readiness endpoints for monitoring.
  * - GET /api/health — process is alive (always 200)
- * - GET /api/readiness — ready to accept live signals (checks config, auth, exchange)
+ * - GET /api/readiness — ready to accept traffic (checks config, auth, connectors)
  */
 export function createHealthRoutes(ctx: EngineContext) {
   const app = new Hono()
 
-  // Health: process is alive
   app.get('/health', (c) => {
-    return c.json({ status: 'ok', uptime: process.uptime() }, 200)
+    return c.json(getProcessHealthSnapshot(), 200)
   })
 
-  // Readiness: ready to accept live signals
   app.get('/readiness', (c) => {
-    const checks: Record<string, { ok: boolean; detail?: string }> = {}
-    const authEnforced = ctx.config.auth.enforceAuth
-    const authConfigured = isAuthEnabled()
-    const devBypass = process.env.DEV_AUTH_BYPASS === 'true'
-
-    // Check config loaded
-    checks['config'] = { ok: !!ctx.config, detail: 'Config loaded' }
-
-    checks['auth'] = {
-      ok: !authEnforced || authConfigured || devBypass,
-      detail: authEnforced
-        ? authConfigured
-          ? 'Auth enforced and tokens configured'
-          : devBypass
-            ? 'Auth enforced but DEV_AUTH_BYPASS active'
-            : 'Auth enforced but AUTH_TOKEN / TRADE_TOKEN missing'
-        : 'Auth enforcement disabled',
-    }
-
-    // Check exchange connector
-    const hasExchange = ctx.connectorCenter?.hasConnectors?.() ?? false
-    checks['exchange'] = {
-      ok: hasExchange,
-      detail: hasExchange ? 'Exchange connector available' : 'No exchange connector',
-    }
-
-    const allOk = Object.values(checks).every((c: any) => c.ok)
-    return c.json({
-      status: allOk ? 'ready' : 'not-ready',
-      checks,
-    }, allOk ? 200 : 503)
+    const snapshot = getWebReadinessSnapshot(ctx)
+    return c.json(snapshot, snapshot.ready ? 200 : 503)
   })
 
   return app
+}
+
+export function getProcessHealthSnapshot() {
+  return { status: 'ok', uptime: process.uptime() }
+}
+
+export function getWebReadinessSnapshot(ctx: EngineContext) {
+  const checks: Record<string, { ok: boolean; detail?: string }> = {}
+  const { authConfigured, tradeConfigured, devBypass, devBypassRequested } = getWebAuthStatus()
+  const enforceAuth = ctx.config?.auth?.enforceAuth ?? true
+
+  checks.config = { ok: !!ctx.config, detail: 'Config loaded' }
+  checks.auth = {
+    ok: !enforceAuth || authConfigured || tradeConfigured || devBypass,
+    detail: enforceAuth
+      ? authConfigured && tradeConfigured
+        ? 'AUTH_TOKEN and TRADE_TOKEN configured'
+        : authConfigured
+          ? 'AUTH_TOKEN configured; TRADE_TOKEN missing'
+          : tradeConfigured
+            ? 'TRADE_TOKEN configured; AUTH_TOKEN missing'
+            : devBypass
+              ? 'DEV_AUTH_BYPASS active'
+              : devBypassRequested
+                ? 'DEV_AUTH_BYPASS requested but not allowed'
+                : 'AUTH_TOKEN and TRADE_TOKEN missing'
+      : 'Auth enforcement disabled',
+  }
+  checks.connectors = {
+    ok: ctx.connectorCenter?.hasConnectors?.() ?? false,
+    detail: ctx.connectorCenter?.hasConnectors?.()
+      ? 'Outbound connector available'
+      : 'No outbound connector registered',
+  }
+
+  const ready = Object.values(checks).every((check) => check.ok)
+  return {
+    status: ready ? 'ready' : 'not-ready',
+    ready,
+    checks,
+  }
 }

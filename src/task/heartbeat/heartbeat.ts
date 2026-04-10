@@ -4,7 +4,7 @@
  * Registers a cron job (`__heartbeat__`) that fires at a configured interval.
  * When fired, calls the AI engine and filters the response:
  *   1. Active hours guard — skip if outside configured window
- *   2. AI call — engine.askWithSession(prompt, heartbeatSession)
+ *   2. AI call — agentCenter.askWithSession(prompt, heartbeatSession)
  *   3. Ack token filter — skip if AI says "nothing to report"
  *   4. Dedup — skip if same text was sent within 24h
  *   5. Send — connectorCenter.notify(text)
@@ -16,7 +16,7 @@
  */
 
 import type { EventLog, EventLogEntry } from '../../core/event-log.js'
-import type { Engine } from '../../core/engine.js'
+import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
 import type { ConnectorCenter } from '../../core/connector-center.js'
 import { writeConfigSection } from '../../core/config.js'
@@ -78,7 +78,7 @@ export interface HeartbeatOpts {
   connectorCenter: ConnectorCenter
   cronEngine: CronEngine
   eventLog: EventLog
-  engine: Engine
+  agentCenter: AgentCenter
   /** Optional: inject a session for testing. */
   session?: SessionStore
   /** Inject clock for testing. */
@@ -97,7 +97,7 @@ export interface Heartbeat {
 // ==================== Factory ====================
 
 export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
-  const { config, connectorCenter, cronEngine, eventLog, engine } = opts
+  const { config, connectorCenter, cronEngine, eventLog, agentCenter } = opts
   const session = opts.session ?? new SessionStore('heartbeat')
   const now = opts.now ?? Date.now
 
@@ -130,7 +130,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
       }
 
       // 2. Call AI
-      const result = await engine.askWithSession(payload.payload, session, {
+      const result = await agentCenter.askWithSession(payload.payload, session, {
         historyPreamble: 'The following is the recent heartbeat conversation history.',
       })
       const durationMs = now() - startMs

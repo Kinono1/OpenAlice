@@ -822,7 +822,6 @@ def apply_v5_threshold_overlay(pack: dict[str, Any]) -> None:
         "fdrQ": metrics_src.get("fdrQ"),
     }
 
-    # Preserve release gate freshness check to avoid using stale gate statuses.
     current_thresholds = pack.get("thresholds")
     if isinstance(current_thresholds, dict) and "releaseGateStatusAgeHoursMax" in current_thresholds:
         thresholds["releaseGateStatusAgeHoursMax"] = current_thresholds["releaseGateStatusAgeHoursMax"]

@@ -1,26 +1,16 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { api, type AppConfig, type AIProviderConfig } from '../api'
+import { api, type AppConfig, type AIProviderConfig, type LoginMethod } from '../api'
 import { SaveIndicator } from '../components/SaveIndicator'
-import { Section, Field, inputClass } from '../components/form'
+import { ConfigSection, Field, inputClass } from '../components/form'
 import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave'
+import { PageHeader } from '../components/PageHeader'
+import { PageLoading } from '../components/StateViews'
+import { PROVIDER_MODELS, UI_PROVIDER_DEFAULTS } from '../generated/approvedModelRegistry'
 
-const PROVIDER_MODELS: Record<string, { label: string; value: string }[]> = {
-  anthropic: [
-    { label: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
-    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
-    { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5' },
-  ],
-  openai: [
-    { label: 'GPT-5.2 Pro', value: 'gpt-5.2-pro' },
-    { label: 'GPT-5.2', value: 'gpt-5.2' },
-    { label: 'GPT-5 Mini', value: 'gpt-5-mini' },
-  ],
-  google: [
-    { label: 'Gemini 3.1 Pro', value: 'gemini-3.1-pro-preview' },
-    { label: 'Gemini 3 Flash', value: 'gemini-3-flash-preview' },
-    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
-  ],
-}
+const LOGIN_METHODS: { value: LoginMethod; label: string; subtitle: string; hint: string }[] = [
+  { value: 'claudeai', label: 'Claude Pro/Max', subtitle: 'Use your Claude subscription', hint: 'Requires local Claude Code login (run claude login in terminal). No API key needed.' },
+  { value: 'api-key', label: 'API Key', subtitle: 'Pay per token', hint: 'Enter your Anthropic API key below. Billed per token to your API account.' },
+]
 
 const PROVIDERS = [
   { value: 'anthropic', label: 'Anthropic' },
@@ -42,6 +32,48 @@ function detectCustomMode(provider: string, model: string): boolean {
   return !presets.some((p) => p.value === model)
 }
 
+/** UI-level backend. 'openai' is a facade over vercel-ai-sdk with provider=openai. */
+type UIBackend = 'agent-sdk' | 'openai' | 'vercel-ai-sdk'
+
+/** Default provider/model per UI backend — applied on every switch to avoid stale config. */
+const BACKEND_DEFAULTS: Record<UIBackend, { backend: string; provider: string; model: string }> = {
+  'agent-sdk':    { backend: 'agent-sdk',    provider: 'anthropic', model: UI_PROVIDER_DEFAULTS.anthropic },
+  'openai':       { backend: 'vercel-ai-sdk', provider: 'openai',   model: UI_PROVIDER_DEFAULTS.openai },
+  'vercel-ai-sdk': { backend: 'vercel-ai-sdk', provider: 'anthropic', model: UI_PROVIDER_DEFAULTS.anthropic },
+}
+
+/** Derive initial UI backend from config. */
+function detectUIBackend(config: AIProviderConfig): UIBackend {
+  if (config.backend === 'vercel-ai-sdk' && config.provider === 'openai') return 'openai'
+  if (config.backend === 'vercel-ai-sdk') return 'vercel-ai-sdk'
+  return 'agent-sdk'
+}
+
+function BackendCard({ selected, onClick, icon, title, description }: {
+  selected: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  title: string
+  description: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-col items-start gap-2 p-4 rounded-xl border-2 text-left transition-all cursor-pointer ${
+        selected
+          ? 'border-accent bg-accent-dim/50'
+          : 'border-border bg-bg hover:border-text-muted/30 hover:bg-bg-tertiary'
+      }`}
+    >
+      <div className={`${selected ? 'text-accent' : 'text-text-muted'}`}>{icon}</div>
+      <div>
+        <p className={`text-[13px] font-semibold ${selected ? 'text-accent' : 'text-text'}`}>{title}</p>
+        <p className="text-[11px] text-text-muted mt-0.5 leading-snug">{description}</p>
+      </div>
+    </button>
+  )
+}
+
 export function AIProviderPage() {
   const [config, setConfig] = useState<AppConfig | null>(null)
 
@@ -49,63 +81,215 @@ export function AIProviderPage() {
     api.config.load().then(setConfig).catch(() => {})
   }, [])
 
+  const uiBackend: UIBackend = config ? detectUIBackend(config.aiProvider) : 'agent-sdk'
+
   const handleBackendSwitch = useCallback(
-    async (backend: string) => {
+    async (target: UIBackend) => {
+      if (!config) return
       try {
-        await api.config.setBackend(backend)
-        setConfig((c) => c ? { ...c, aiProvider: { ...c.aiProvider, backend } } : c)
+        const defaults = BACKEND_DEFAULTS[target]
+        const updated = { ...config.aiProvider, ...defaults }
+        await api.config.updateSection('aiProvider', updated)
+        setConfig((c) => c ? { ...c, aiProvider: updated } : c)
       } catch {
         // Button state reflects actual saved state
       }
     },
-    [],
+    [config],
   )
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="shrink-0 border-b border-border">
-        <div className="px-4 md:px-6 py-4">
-          <h2 className="text-base font-semibold text-text">AI Provider</h2>
-          <p className="text-[12px] text-text-muted mt-0.5">Configure the AI backend, model, and API keys.</p>
-        </div>
-      </div>
+      <PageHeader title="AI Provider" description="Configure the AI backend, model, and API keys." />
 
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
-        {config && (
-          <div className="max-w-[640px] space-y-8">
+      {config ? (
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
+          <div className="max-w-[880px] mx-auto">
             {/* Backend */}
-            <Section id="backend" title="Backend" description="Runtime switch between AI backends. Claude Code calls the local CLI; Vercel AI SDK calls the API directly. Changes take effect immediately.">
-              <div className="flex border border-border rounded-lg overflow-hidden">
-                {(['claude-code', 'vercel-ai-sdk'] as const).map((b) => (
-                  <button
-                    key={b}
-                    onClick={() => handleBackendSwitch(b)}
-                    className={`flex-1 py-2 px-3 text-[13px] font-medium transition-colors ${
-                      config.aiProvider.backend === b
-                        ? 'bg-accent-dim text-accent'
-                        : 'bg-bg text-text-muted hover:bg-bg-tertiary hover:text-text'
-                    } ${b === 'vercel-ai-sdk' ? 'border-l border-border' : ''}`}
-                  >
-                    {b === 'claude-code' ? 'Claude Code' : 'Vercel AI SDK'}
-                  </button>
-                ))}
+            <ConfigSection title="Backend" description="Changes take effect immediately.">
+              <div className="grid grid-cols-3 gap-3">
+                <BackendCard
+                  selected={uiBackend === 'agent-sdk'}
+                  onClick={() => handleBackendSwitch('agent-sdk')}
+                  icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V6a4 4 0 0 1 4-4z" /><path d="M8 8v2a4 4 0 0 0 8 0V8" /><path d="M12 14v4" /><path d="M8 22h8" /><circle cx="9" cy="5.5" r="0.5" fill="currentColor" stroke="none" /><circle cx="15" cy="5.5" r="0.5" fill="currentColor" stroke="none" /></svg>}
+                  title="Claude"
+                  description="Claude Code login or Anthropic API key"
+                />
+                <BackendCard
+                  selected={uiBackend === 'openai'}
+                  onClick={() => handleBackendSwitch('openai')}
+                  icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></svg>}
+                  title="OpenAI"
+                  description="GPT models via OpenAI API"
+                />
+                <BackendCard
+                  selected={uiBackend === 'vercel-ai-sdk'}
+                  onClick={() => handleBackendSwitch('vercel-ai-sdk')}
+                  icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
+                  title="Vercel AI SDK"
+                  description="Multi-provider, custom endpoints"
+                />
               </div>
-            </Section>
+            </ConfigSection>
 
-            {/* Model (only for Vercel AI SDK) */}
-            {config.aiProvider.backend === 'vercel-ai-sdk' && (
-              <Section id="model" title="Model" description="Provider, model, and API keys for Vercel AI SDK. Changes take effect on the next request (hot-reload).">
+            {/* Auth mode (only for Agent SDK) */}
+            {uiBackend === 'agent-sdk' && (
+              <ConfigSection title="Authentication" description="Choose how Alice connects to Claude.">
+                <AgentSdkAuthForm aiProvider={config.aiProvider} onUpdate={(patch) => setConfig((c) => c ? { ...c, aiProvider: { ...c.aiProvider, ...patch } } : c)} />
+              </ConfigSection>
+            )}
+
+            {/* OpenAI simplified form */}
+            {uiBackend === 'openai' && (
+              <ConfigSection title="Model" description="Select a model and enter your OpenAI API key.">
+                <OpenAIForm aiProvider={config.aiProvider} />
+              </ConfigSection>
+            )}
+
+            {/* Full model form (only for Vercel AI SDK) */}
+            {uiBackend === 'vercel-ai-sdk' && (
+              <ConfigSection title="Model" description="Provider, model, and API keys. Changes take effect on the next request.">
                 <ModelForm aiProvider={config.aiProvider} />
-              </Section>
+              </ConfigSection>
             )}
           </div>
-        )}
       </div>
+      ) : (
+        <PageLoading />
+      )}
     </div>
   )
 }
 
-// ==================== Model Form ====================
+// ==================== OpenAI Form (simplified) ====================
+
+function OpenAIForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
+  const presets = PROVIDER_MODELS.openai
+  const initModel = aiProvider.provider === 'openai' && aiProvider.model ? aiProvider.model : UI_PROVIDER_DEFAULTS.openai
+  const isPreset = presets.some((p) => p.value === initModel)
+
+  const [model, setModel] = useState(isPreset ? initModel : '')
+  const [customModel, setCustomModel] = useState(isPreset ? '' : initModel)
+  const [baseUrl, setBaseUrl] = useState(aiProvider.baseUrl || '')
+  const [apiKey, setApiKey] = useState('')
+  const [keySaveStatus, setKeySaveStatus] = useState<SaveStatus>('idle')
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const effectiveModel = model || customModel
+
+  // Auto-save model + baseUrl
+  const modelData = useMemo(
+    () => ({
+      ...aiProvider,
+      provider: 'openai',
+      model: effectiveModel,
+      ...(baseUrl ? { baseUrl } : { baseUrl: undefined }),
+    }),
+    [aiProvider, effectiveModel, baseUrl],
+  )
+
+  const saveModel = useCallback(async (data: Record<string, unknown>) => {
+    await api.config.updateSection('aiProvider', data)
+  }, [])
+
+  const { status: modelStatus, retry: modelRetry } = useAutoSave({
+    data: modelData,
+    save: saveModel,
+  })
+
+  const hasKey = !!aiProvider.apiKeys?.openai
+
+  useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current) }, [])
+
+  const handleSaveKey = async () => {
+    if (!apiKey) return
+    setKeySaveStatus('saving')
+    try {
+      const updatedKeys = { ...aiProvider.apiKeys, openai: apiKey }
+      await api.config.updateSection('aiProvider', { ...aiProvider, apiKeys: updatedKeys })
+      setApiKey('')
+      setKeySaveStatus('saved')
+      if (savedTimer.current) clearTimeout(savedTimer.current)
+      savedTimer.current = setTimeout(() => setKeySaveStatus('idle'), 2000)
+    } catch { setKeySaveStatus('error') }
+  }
+
+  const handleModelSelect = (value: string) => {
+    if (value === '__custom__') {
+      setModel('')
+      setCustomModel('')
+    } else {
+      setModel(value)
+      setCustomModel('')
+    }
+  }
+
+  return (
+    <>
+      <Field label="Model">
+        <select
+          className={inputClass}
+          value={model || '__custom__'}
+          onChange={(e) => handleModelSelect(e.target.value)}
+        >
+          {presets.map((m) => (
+            <option key={m.value} value={m.value}>{m.label}</option>
+          ))}
+          <option value="__custom__">Custom...</option>
+        </select>
+      </Field>
+
+      {!model && (
+        <Field label="Custom Model ID">
+          <input
+            className={inputClass}
+            value={customModel}
+            onChange={(e) => setCustomModel(e.target.value)}
+            placeholder="e.g. gpt-4o, o3-pro"
+          />
+        </Field>
+      )}
+
+      <Field label="API Key">
+        <div className="relative">
+          <input
+            className={inputClass}
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={hasKey ? '(configured)' : 'sk-...'}
+          />
+          {hasKey && (
+            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-green">active</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 mt-2">
+          <button
+            onClick={handleSaveKey}
+            disabled={!apiKey || keySaveStatus === 'saving'}
+            className="btn-primary"
+          >
+            Save Key
+          </button>
+          <SaveIndicator status={keySaveStatus} onRetry={handleSaveKey} />
+        </div>
+      </Field>
+
+      <Field label="Base URL" description="Leave empty for the official OpenAI API. Set for proxies or compatible endpoints (e.g. Azure OpenAI).">
+        <input
+          className={inputClass}
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://api.openai.com/v1"
+        />
+      </Field>
+
+      <SaveIndicator status={modelStatus} onRetry={modelRetry} />
+    </>
+  )
+}
+
+// ==================== Model Form (full Vercel AI SDK) ====================
 
 function ModelForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
   // Detect whether saved config should render as "Custom" in the UI
@@ -174,7 +358,7 @@ function ModelForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
       setSdkProvider(newUiProvider)
       const defaults = PROVIDER_MODELS[newUiProvider]
       if (defaults?.length) {
-        setModel(defaults[0].value)
+        setModel(UI_PROVIDER_DEFAULTS[newUiProvider] ?? defaults[0].value)
         setCustomModel('')
       } else {
         setModel('')
@@ -345,7 +529,7 @@ function ModelForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
               <button
                 onClick={handleSaveKeys}
                 disabled={keySaveStatus === 'saving'}
-                className="bg-user-bubble text-white rounded-lg px-4 py-2 text-[13px] font-medium cursor-pointer transition-opacity hover:opacity-85 disabled:opacity-50"
+                className="btn-primary"
               >
                 Save Keys
               </button>
@@ -354,6 +538,88 @@ function ModelForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
           </div>
         )}
       </div>
+    </>
+  )
+}
+
+// ==================== Agent SDK Auth Form ====================
+
+function AgentSdkAuthForm({ aiProvider, onUpdate }: { aiProvider: AIProviderConfig; onUpdate: (patch: Partial<AIProviderConfig>) => void }) {
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>(aiProvider.loginMethod ?? 'api-key')
+  const [apiKey, setApiKey] = useState('')
+  const [keySaveStatus, setKeySaveStatus] = useState<SaveStatus>('idle')
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current) }, [])
+
+  const handleLoginMethodChange = async (method: LoginMethod) => {
+    setLoginMethod(method)
+    try {
+      await api.config.updateSection('aiProvider', { ...aiProvider, loginMethod: method })
+      onUpdate({ loginMethod: method })
+    } catch { /* revert on failure */ setLoginMethod(loginMethod) }
+  }
+
+  const handleSaveKey = async () => {
+    if (!apiKey) return
+    setKeySaveStatus('saving')
+    try {
+      const updatedKeys = { ...aiProvider.apiKeys, anthropic: apiKey }
+      await api.config.updateSection('aiProvider', { ...aiProvider, apiKeys: updatedKeys })
+      onUpdate({ apiKeys: updatedKeys })
+      setApiKey('')
+      setKeySaveStatus('saved')
+      if (savedTimer.current) clearTimeout(savedTimer.current)
+      savedTimer.current = setTimeout(() => setKeySaveStatus('idle'), 2000)
+    } catch { setKeySaveStatus('error') }
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        {LOGIN_METHODS.map((m) => (
+          <BackendCard
+            key={m.value}
+            selected={loginMethod === m.value}
+            onClick={() => handleLoginMethodChange(m.value)}
+            icon={m.value === 'claudeai'
+              ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" /></svg>
+              : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>}
+            title={m.label}
+            description={m.subtitle}
+          />
+        ))}
+      </div>
+      <p className="text-[11px] text-text-muted mt-2">
+        {LOGIN_METHODS.find((m) => m.value === loginMethod)?.hint}
+      </p>
+
+      {loginMethod === 'api-key' && (
+        <Field label="Anthropic API Key">
+          <div className="relative">
+            <input
+              className={inputClass}
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={aiProvider.apiKeys?.anthropic ? '(configured)' : 'sk-ant-...'}
+            />
+            {aiProvider.apiKeys?.anthropic && (
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-green">active</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={handleSaveKey}
+              disabled={!apiKey || keySaveStatus === 'saving'}
+              className="btn-primary"
+            >
+              Save Key
+            </button>
+            <SaveIndicator status={keySaveStatus} onRetry={handleSaveKey} />
+          </div>
+        </Field>
+      )}
     </>
   )
 }

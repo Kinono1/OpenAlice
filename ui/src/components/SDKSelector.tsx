@@ -189,19 +189,43 @@ export const SECURITIES_SDK_OPTIONS: SDKOption[] = [
   },
 ]
 
-export const DATASOURCE_OPTIONS: SDKOption[] = [
+export const PLATFORM_TYPE_OPTIONS: SDKOption[] = [
   {
-    id: 'openbb',
-    name: 'OpenBB',
-    description: 'Market data, financials, and economic indicators via OpenBB sidecar API.',
-    badge: 'OB',
+    id: 'ccxt',
+    name: 'CCXT (Crypto)',
+    description: 'Unified API for 100+ crypto exchanges. Supports Binance, Bybit, OKX, Coinbase, and more.',
+    badge: 'CC',
+    badgeColor: 'text-accent',
+  },
+  {
+    id: 'alpaca',
+    name: 'Alpaca (Securities)',
+    description: 'Commission-free US equities and ETFs with fractional share support.',
+    badge: 'AL',
     badgeColor: 'text-green',
   },
   {
-    id: 'newsCollector',
-    name: 'News Collector',
-    description: 'RSS/Atom feed aggregation for crypto and financial news.',
-    badge: 'NC',
+    id: 'ibkr',
+    name: 'IBKR (Interactive Brokers)',
+    description: 'Professional-grade trading via TWS or IB Gateway. Stocks, options, futures, bonds.',
+    badge: 'IB',
+    badgeColor: 'text-orange-400',
+  },
+]
+
+export const DATASOURCE_OPTIONS: SDKOption[] = [
+  {
+    id: 'marketData',
+    name: 'Market Data',
+    description: 'Structured financial data — prices, fundamentals, macro indicators.',
+    badge: 'MD',
+    badgeColor: 'text-green',
+  },
+  {
+    id: 'news',
+    name: 'News',
+    description: 'RSS/Atom feed aggregation and news archive search.',
+    badge: 'NW',
     badgeColor: 'text-purple',
   },
 ]

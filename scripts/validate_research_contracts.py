@@ -261,7 +261,6 @@ def main() -> int:
             "files": file_reports,
         }
 
-        # Empty input set is a valid no-op scenario.
         if len(file_reports) == 0:
             report["passed"] = True
             report["summary"]["emptyInput"] = True

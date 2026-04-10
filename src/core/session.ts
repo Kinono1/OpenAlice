@@ -36,7 +36,7 @@ export interface SessionEntry {
   sessionId: string
   timestamp: string
   /** Which provider generated this entry. */
-  provider?: 'engine' | 'claude-code' | 'human' | 'compaction'
+  provider?: 'vercel-ai' | 'claude-code' | 'agent-sdk' | 'human' | 'compaction' | 'notification'
   cwd?: string
   /** Arbitrary metadata attached to the entry (e.g. { kind: 'notification', source: 'heartbeat' }). */
   metadata?: Record<string, unknown>
@@ -55,11 +55,35 @@ export type ContentBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string }
 
-// ==================== Session Store ====================
+// ==================== Session Store Interface ====================
+
+/**
+ * Session store contract.
+ *
+ * Implementations persist conversation entries (user, assistant, system)
+ * and support reading them back. AgentCenter and other consumers depend
+ * on this interface, not on any specific storage backend.
+ *
+ * Two implementations:
+ * - SessionStore      — JSONL file persistence (production)
+ * - MemorySessionStore — in-memory array (testing, no filesystem)
+ */
+export interface ISessionStore {
+  readonly id: string
+  appendUser(content: string | ContentBlock[], provider?: SessionEntry['provider']): Promise<SessionEntry>
+  appendAssistant(content: string | ContentBlock[], provider?: SessionEntry['provider'], metadata?: Record<string, unknown>): Promise<SessionEntry>
+  appendRaw(entry: SessionEntry): Promise<void>
+  readAll(): Promise<SessionEntry[]>
+  readActive(): Promise<SessionEntry[]>
+  restore(): Promise<void>
+  exists(): Promise<boolean>
+}
+
+// ==================== JSONL Session Store ====================
 
 const SESSIONS_DIR = join(process.cwd(), 'data', 'sessions')
 
-export class SessionStore {
+export class SessionStore implements ISessionStore {
   private sessionId: string
   private lastUuid: string | null = null
 
@@ -87,7 +111,7 @@ export class SessionStore {
   /** Append an assistant message to the session. */
   async appendAssistant(
     content: string | ContentBlock[],
-    provider: SessionEntry['provider'] = 'engine',
+    provider: SessionEntry['provider'] = 'vercel-ai',
     metadata?: Record<string, unknown>,
   ): Promise<SessionEntry> {
     return this.append({
@@ -159,6 +183,89 @@ export class SessionStore {
     await mkdir(dirname(this.filePath), { recursive: true })
     await appendFile(this.filePath, JSON.stringify(entry) + '\n')
 
+    this.lastUuid = entry.uuid
+    return entry
+  }
+}
+
+// ==================== In-Memory Session Store ====================
+
+/**
+ * In-memory session store for testing.
+ *
+ * Behaves identically to the JSONL-backed SessionStore but stores entries
+ * in a plain array. Use this in tests to verify persistence behavior
+ * without touching the filesystem — readAll() returns what was actually
+ * written, so duplicate writes surface immediately.
+ */
+export class MemorySessionStore implements ISessionStore {
+  private sessionId: string
+  private lastUuid: string | null = null
+  private entries: SessionEntry[] = []
+
+  constructor(sessionId?: string) {
+    this.sessionId = sessionId ?? randomUUID()
+  }
+
+  get id(): string {
+    return this.sessionId
+  }
+
+  async appendUser(content: string | ContentBlock[], provider: SessionEntry['provider'] = 'human'): Promise<SessionEntry> {
+    return this.append({
+      type: 'user',
+      message: { role: 'user', content },
+      provider,
+    })
+  }
+
+  async appendAssistant(
+    content: string | ContentBlock[],
+    provider: SessionEntry['provider'] = 'vercel-ai',
+    metadata?: Record<string, unknown>,
+  ): Promise<SessionEntry> {
+    return this.append({
+      type: 'assistant',
+      message: { role: 'assistant', content },
+      provider,
+      ...(metadata ? { metadata } : {}),
+    })
+  }
+
+  async appendRaw(entry: SessionEntry): Promise<void> {
+    this.entries.push(entry)
+    this.lastUuid = entry.uuid
+  }
+
+  async readAll(): Promise<SessionEntry[]> {
+    return this.entries.filter(
+      (e) => e.type === 'user' || e.type === 'assistant' || e.type === 'system',
+    )
+  }
+
+  async readActive(): Promise<SessionEntry[]> {
+    return getActiveEntries(await this.readAll())
+  }
+
+  async restore(): Promise<void> {
+    if (this.entries.length > 0) {
+      this.lastUuid = this.entries[this.entries.length - 1].uuid
+    }
+  }
+
+  async exists(): Promise<boolean> {
+    return this.entries.length > 0
+  }
+
+  private append(partial: Omit<SessionEntry, 'uuid' | 'parentUuid' | 'sessionId' | 'timestamp'>): SessionEntry {
+    const entry: SessionEntry = {
+      ...partial,
+      uuid: randomUUID(),
+      parentUuid: this.lastUuid,
+      sessionId: this.sessionId,
+      timestamp: new Date().toISOString(),
+    }
+    this.entries.push(entry)
     this.lastUuid = entry.uuid
     return entry
   }
@@ -268,7 +375,39 @@ export function toModelMessages(entries: SessionEntry[]): SDKModelMessage[] {
     // system role messages (non-boundary) are skipped — they don't map to SDK messages
   }
 
-  return messages
+  // Sanitize: remove tool-call entries that have no matching tool-result.
+  // This can happen when compaction truncates between a tool_use and its result,
+  // or when a session was interrupted mid-tool-call.
+  return sanitizeToolMessages(messages)
+}
+
+/** Strip orphaned tool-call entries that have no matching tool-result downstream. */
+function sanitizeToolMessages(messages: SDKModelMessage[]): SDKModelMessage[] {
+  // Collect all tool-result IDs
+  const resultIds = new Set<string>()
+  for (const msg of messages) {
+    if (msg.role === 'tool') {
+      for (const part of msg.content) {
+        resultIds.add(part.toolCallId)
+      }
+    }
+  }
+
+  const out: SDKModelMessage[] = []
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const filtered = msg.content.filter(
+        (part) => part.type !== 'tool-call' || resultIds.has(part.toolCallId),
+      )
+      if (filtered.length > 0) {
+        out.push({ ...msg, content: filtered })
+      }
+      // Drop assistant message entirely if only orphaned tool-calls remained
+    } else {
+      out.push(msg)
+    }
+  }
+  return out
 }
 
 /** Max characters for a tool input/output summary line. */
@@ -401,13 +540,13 @@ export function toChatHistory(entries: SessionEntry[]): ChatHistoryItem[] {
         result: resultMap.get(tu.id) ? truncate(resultMap.get(tu.id)!, TOOL_SUMMARY_MAX) : undefined,
       }))
 
-      items.push({ kind: 'tool_calls', calls, timestamp: entry.timestamp })
-
-      // If there were also text blocks in this same entry, emit them separately.
+      // Text before tools (边想边做 — thinking then doing).
       const text = textBlocks.map((b) => b.text).join('\n')
       if (text.trim() || media) {
         items.push({ kind: 'text', role: message.role as 'user' | 'assistant', text, timestamp: entry.timestamp, metadata: entry.metadata, media })
       }
+
+      items.push({ kind: 'tool_calls', calls, timestamp: entry.timestamp })
       continue
     }
 

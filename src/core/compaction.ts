@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { SessionEntry, ContentBlock } from './session.js'
-import type { SessionStore } from './session.js'
+import type { ISessionStore } from './session.js'
 
 // ==================== Configuration ====================
 
@@ -239,7 +239,7 @@ export interface CompactionResult {
  * - If full compact needed → writes boundary + summary to JSONL, future readActive() will pick them up
  */
 export async function compactIfNeeded(
-  session: SessionStore,
+  session: ISessionStore,
   config: CompactionConfig,
   summarize: (prompt: string) => Promise<string>,
 ): Promise<CompactionResult> {
@@ -283,7 +283,7 @@ export async function compactIfNeeded(
  * Returns token count before compaction, or null if session was empty.
  */
 export async function forceCompact(
-  session: SessionStore,
+  session: ISessionStore,
   summarize: (prompt: string) => Promise<string>,
 ): Promise<{ preTokens: number } | null> {
   const allEntries = await session.readAll()

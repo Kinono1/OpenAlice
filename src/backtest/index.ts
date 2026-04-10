@@ -1,24 +1,9 @@
 export {
-  createRollingWindows,
-  runStrategyWalkForward,
-} from "./wfo.js";
-
-export type {
-  WfoWindow,
-  WfoConfig,
-  WfoCandidate,
-  WfoWindowMetrics,
-  WfoWindowResult,
-  WfoResult,
-  StrategyWfoInput,
-} from "./wfo.js";
-
-export {
-  estimatePboCscv,
-  computeDeflatedSharpe,
   computeSpaLikePValues,
+  computeDeflatedSharpe,
+  estimatePboCscv,
   evaluateSignificanceGate,
-} from "./statistical_significance.js";
+} from './statistical_significance.js'
 
 export type {
   PboInput,
@@ -30,9 +15,9 @@ export type {
   SpaLikeResult,
   SignificanceGateInput,
   SignificanceGateResult,
-} from "./statistical_significance.js";
+} from './statistical_significance.js'
 
-export { evaluateReleaseGate } from "./release_gate.js";
+export { evaluateReleaseGate } from './release_gate.js'
 
 export type {
   ReleaseGateStatus,
@@ -40,13 +25,30 @@ export type {
   ReleaseGateThresholds,
   ReleaseGateInput,
   ReleaseGateResult,
-} from "./release_gate.js";
+  SlippageGateDecision,
+  RampUpEvaluation,
+  RegimeShiftGateInput,
+} from './release_gate.js'
 
-export { evaluateRiskSimulation } from "./risk_simulation.js";
+export { evaluateRiskSimulation } from './risk_simulation.js'
 
 export type {
   RiskSimulationMethod,
   RiskSimulationConfig,
   RiskSimulationPathStats,
   RiskSimulationResult,
-} from "./risk_simulation.js";
+} from './risk_simulation.js'
+
+export {
+  benjaminiHochberg,
+  benjaminiYekutieli,
+  runFdrCorrection,
+} from './fdr.js'
+
+export type {
+  FdrMethod,
+  FdrItem,
+  FdrDiagnostics,
+  RunFdrCorrectionInput,
+  RunFdrCorrectionResult,
+} from './fdr.js'
