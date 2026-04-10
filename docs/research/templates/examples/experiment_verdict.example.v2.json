@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "experiment_verdict.v2",
+  "generatedAt": "2026-03-02T16:15:00Z",
+  "result": "NO_GO",
+  "reasonCodes": ["HARD_FDR_THRESHOLD_FAIL"],
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "aggregateMetrics": {
+    "meanPbo": 0.18,
+    "meanDsrProbability": 0.54,
+    "fdrQ": 0.13
+  },
+  "candidates": [
+    {
+      "strategyId": "S1",
+      "strategyName": "trend_baseline",
+      "status": "fail",
+      "metrics": {
+        "pbo": 0.19,
+        "dsrProbability": 0.58,
+        "fdrQ": 0.13
+      },
+      "releaseGate": {
+        "allowPaperTrading": true,
+        "allowLiveTrading": false,
+        "failedChecks": ["significance"]
+      },
+      "failureReasonCode": "HARD_FDR_THRESHOLD_FAIL"
+    }
+  ],
+  "outputPaths": {
+    "validationRuns": "data/research/strategy/strategy_validation_runs.json",
+    "releaseGateStatus": "data/runtime/release_gate_status.json"
+  },
+  "notes": "Example NO_GO verdict due FDR threshold breach."
+}

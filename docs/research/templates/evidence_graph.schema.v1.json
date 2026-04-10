@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/evidence_graph.schema.v1.json",
+  "title": "OpenAlice Evidence Graph v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "sourceCardsDir",
+    "nodes",
+    "edges",
+    "stats"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "evidence_graph.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceCardsDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "label"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "type": {
+            "type": "string",
+            "enum": ["paper", "claim", "evidence", "target"]
+          },
+          "label": { "type": "string", "minLength": 1 },
+          "paperId": { "type": "string" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target", "type"],
+        "properties": {
+          "source": { "type": "string", "minLength": 1 },
+          "target": { "type": "string", "minLength": 1 },
+          "type": {
+            "type": "string",
+            "enum": ["supports", "mentions", "targets", "derived_from"]
+          },
+          "weight": { "type": "number" }
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paperCount",
+        "claimCount",
+        "evidenceCount",
+        "edgeCount",
+        "evidenceLinkRate",
+        "isolatedClaimCount"
+      ],
+      "properties": {
+        "paperCount": { "type": "integer", "minimum": 0 },
+        "claimCount": { "type": "integer", "minimum": 0 },
+        "evidenceCount": { "type": "integer", "minimum": 0 },
+        "edgeCount": { "type": "integer", "minimum": 0 },
+        "evidenceLinkRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "isolatedClaimCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "thresholds"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minEvidenceLinkRate"],
+          "properties": {
+            "minEvidenceLinkRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "gate_checkpoint.v1",
+  "gateId": "G1",
+  "generatedAt": "2026-03-02T16:15:00Z",
+  "hardGate": true,
+  "status": "pass",
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "warned": 0
+  },
+  "checks": [
+    {
+      "name": "env_verify",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "INFO_ENV_VERIFY_PASS",
+      "detail": "environment lock verification passed"
+    },
+    {
+      "name": "freeze_verify",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "INFO_FREEZE_VERIFY_PASS",
+      "detail": "freeze manifest verification passed"
+    }
+  ],
+  "reasonCodes": [
+    "INFO_ENV_VERIFY_PASS",
+    "INFO_FREEZE_VERIFY_PASS"
+  ],
+  "inputs": {
+    "environmentReport": "data/runtime/environment_verify_report.json",
+    "freezeReport": "data/runtime/freeze_verify_report.json"
+  }
+}
