@@ -547,13 +547,14 @@ describe('run_validation_pipeline', () => {
     expect(report.deployableStrategyTarget.optimizationTarget.requirePositiveDeltaVsControlArm).toBe(true)
     expect(
       report.deployableStrategyTarget.robustnessTarget.releaseGate.paperTrading.blockingChecks,
-    ).toEqual(['wfo', 'significance', 'risk_simulation'])
+    ).toEqual(['wfo', 'significance', 'risk_simulation', 'economics'])
     expect(
       report.deployableStrategyTarget.robustnessTarget.releaseGate.liveTrading.blockingChecks,
     ).toEqual([
       'wfo',
       'significance',
       'risk_simulation',
+      'economics',
       'execution_quality',
       'ramp_up',
       'regime_shift',

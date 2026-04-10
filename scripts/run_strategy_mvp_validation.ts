@@ -238,6 +238,10 @@ interface SampleSplitMetrics {
   profitFactor: number
   payoffRatio: number
   expectancyPct: number
+  grossExpectancyPct: number
+  netExpectancyPct: number
+  averageHoldingHours: number
+  medianHoldingHours: number
   totalCostsPaid: number
   costDragPctOfInitialCapital: number
 }
@@ -772,6 +776,18 @@ async function evaluateSymbolSummary(input: {
       wfo,
       significance,
       riskSimulation,
+      economics: {
+        grossExpectancyPct: backtests[index].metrics.grossExpectancyPct,
+        netExpectancyPct: backtests[index].metrics.netExpectancyPct,
+        feeExpectancyDragPct: backtests[index].metrics.feeExpectancyDragPct,
+        slippageExpectancyDragPct: backtests[index].metrics.slippageExpectancyDragPct,
+        fundingExpectancyDragPct: backtests[index].metrics.fundingExpectancyDragPct,
+        totalCostsPaid: backtests[index].metrics.totalCostsPaid,
+        costDragPctOfInitialCapital: backtests[index].metrics.costDragPctOfInitialCapital,
+        averageHoldingHours: backtests[index].metrics.averageHoldingHours,
+        medianHoldingHours: backtests[index].metrics.medianHoldingHours,
+        tradeCount: backtests[index].metrics.tradeCount,
+      },
     })
 
     return {
@@ -1245,12 +1261,15 @@ function buildCandidateBlockerSummary(run: EnrichedRun, failedWindowRatio: numbe
 function resolvePrimaryBlocker(
   run: EnrichedRun,
   releaseGateFailedChecks: ReleaseGateCheck['name'][],
-): 'fdr' | 'release_gate' | 'wfo' | 'candidate_pass' {
+): 'fdr' | 'release_gate' | 'wfo' | 'economics' | 'candidate_pass' {
   if (!run.fdr.passed) {
     return 'fdr'
   }
   if (releaseGateFailedChecks.includes('wfo')) {
     return 'wfo'
+  }
+  if (releaseGateFailedChecks.includes('economics')) {
+    return 'economics'
   }
   if (!run.releaseGate.allowPaperTrading) {
     return 'release_gate'
@@ -1281,6 +1300,10 @@ function summarizeSampleSplitMetrics(metrics: BacktestReport['metrics']): Sample
     profitFactor: metrics.profitFactor,
     payoffRatio: metrics.payoffRatio,
     expectancyPct: metrics.expectancyPct,
+    grossExpectancyPct: metrics.grossExpectancyPct,
+    netExpectancyPct: metrics.netExpectancyPct,
+    averageHoldingHours: metrics.averageHoldingHours,
+    medianHoldingHours: metrics.medianHoldingHours,
     totalCostsPaid: metrics.totalCostsPaid,
     costDragPctOfInitialCapital: metrics.costDragPctOfInitialCapital,
   }

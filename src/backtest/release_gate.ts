@@ -44,11 +44,25 @@ export interface RegimeShiftGateInput {
   reason?: string
 }
 
+export interface EconomicsGateInput {
+  grossExpectancyPct: number
+  netExpectancyPct: number
+  feeExpectancyDragPct: number
+  slippageExpectancyDragPct: number
+  fundingExpectancyDragPct: number
+  totalCostsPaid: number
+  costDragPctOfInitialCapital: number
+  averageHoldingHours: number
+  medianHoldingHours: number
+  tradeCount: number
+}
+
 export interface ReleaseGateCheck {
   name:
     | 'wfo'
     | 'significance'
     | 'risk_simulation'
+    | 'economics'
     | 'execution_quality'
     | 'ramp_up'
     | 'regime_shift'
@@ -63,12 +77,15 @@ export interface ReleaseGateThresholds {
   wfoFailWindowRatio: number
   pboMax: number
   dsrMin: number
+  maxCostDragPctOfInitialCapital: number
+  minAverageHoldingHours: number
 }
 
 export interface ReleaseGateInput {
   wfo?: Pick<WfoResultLike, 'overallPassed' | 'failedWindows' | 'windows'>
   significance?: SignificanceGateResult
   riskSimulation?: RiskSimulationResult
+  economics?: EconomicsGateInput
   executionQuality?: SlippageGateDecision
   rampUp?: RampUpEvaluation
   regimeShift?: RegimeShiftGateInput
@@ -90,6 +107,8 @@ const DEFAULT_THRESHOLDS: ReleaseGateThresholds = {
   wfoFailWindowRatio: 0.3,
   pboMax: 0.2,
   dsrMin: 0,
+  maxCostDragPctOfInitialCapital: 15,
+  minAverageHoldingHours: 4,
 }
 
 export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateResult {
@@ -102,6 +121,7 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateResult 
   checks.push(evaluateWfoCheck(input.wfo, thresholds))
   checks.push(evaluateSignificanceCheck(input.significance, thresholds))
   checks.push(evaluateRiskSimulationCheck(input.riskSimulation))
+  checks.push(evaluateEconomicsCheck(input.economics, thresholds))
   checks.push(evaluateExecutionCheck(input.executionQuality))
   checks.push(evaluateRampUpCheck(input.rampUp))
   checks.push(evaluateRegimeShiftCheck(input.regimeShift))
@@ -113,11 +133,13 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateResult 
     'wfo',
     'significance',
     'risk_simulation',
+    'economics',
   ]
   const liveBlockingNames: ReleaseGateCheck['name'][] = [
     'wfo',
     'significance',
     'risk_simulation',
+    'economics',
     'execution_quality',
     'ramp_up',
     'regime_shift',
@@ -292,6 +314,60 @@ function evaluateExecutionCheck(
       consecutiveBreaches: executionQuality.consecutiveBreaches,
       requiredConsecutiveDays: executionQuality.requiredConsecutiveDays,
       latestDriftMultiplier: executionQuality.latestDriftMultiplier,
+    },
+  }
+}
+
+function evaluateEconomicsCheck(
+  economics: EconomicsGateInput | undefined,
+  thresholds: ReleaseGateThresholds,
+): ReleaseGateCheck {
+  if (!economics) {
+    return {
+      name: 'economics',
+      status: 'skipped',
+      summary: 'Economics gate not provided; skipping gate.',
+      metrics: {},
+    }
+  }
+
+  const totalExpectancyDragPct =
+    economics.feeExpectancyDragPct
+    + economics.slippageExpectancyDragPct
+    + economics.fundingExpectancyDragPct
+  const costsConsumeEdge = economics.grossExpectancyPct <= totalExpectancyDragPct
+  const failed =
+    economics.netExpectancyPct <= 0
+    || economics.costDragPctOfInitialCapital > thresholds.maxCostDragPctOfInitialCapital
+    || costsConsumeEdge
+
+  const warned =
+    !failed
+    && economics.averageHoldingHours < thresholds.minAverageHoldingHours
+
+  return {
+    name: 'economics',
+    status: failed ? 'fail' : warned ? 'warn' : 'pass',
+    summary: failed
+      ? 'Economics gate failed.'
+      : warned
+        ? 'Economics gate passed with holding-time warning.'
+        : 'Economics gate passed.',
+    metrics: {
+      grossExpectancyPct: economics.grossExpectancyPct,
+      netExpectancyPct: economics.netExpectancyPct,
+      feeExpectancyDragPct: economics.feeExpectancyDragPct,
+      slippageExpectancyDragPct: economics.slippageExpectancyDragPct,
+      fundingExpectancyDragPct: economics.fundingExpectancyDragPct,
+      totalExpectancyDragPct,
+      totalCostsPaid: economics.totalCostsPaid,
+      costDragPctOfInitialCapital: economics.costDragPctOfInitialCapital,
+      maxCostDragPctOfInitialCapital: thresholds.maxCostDragPctOfInitialCapital,
+      averageHoldingHours: economics.averageHoldingHours,
+      medianHoldingHours: economics.medianHoldingHours,
+      minAverageHoldingHours: thresholds.minAverageHoldingHours,
+      tradeCount: economics.tradeCount,
+      costsConsumeEdge,
     },
   }
 }

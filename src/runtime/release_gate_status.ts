@@ -206,6 +206,7 @@ function isReleaseGateCheckName(value: unknown): value is ReleaseGateCheck['name
     value === 'wfo' ||
     value === 'significance' ||
     value === 'risk_simulation' ||
+    value === 'economics' ||
     value === 'execution_quality' ||
     value === 'ramp_up' ||
     value === 'regime_shift'

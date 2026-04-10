@@ -113,6 +113,49 @@ describe('release_gate', () => {
     expect(result.failedChecks).toContain('risk_simulation')
   })
 
+  it('blocks paper/live when economics gate shows no net edge after cost', () => {
+    const result = evaluateReleaseGate({
+      economics: {
+        grossExpectancyPct: 0.12,
+        netExpectancyPct: -0.03,
+        feeExpectancyDragPct: 0.04,
+        slippageExpectancyDragPct: 0.05,
+        fundingExpectancyDragPct: 0.06,
+        totalCostsPaid: 1200,
+        costDragPctOfInitialCapital: 18,
+        averageHoldingHours: 2,
+        medianHoldingHours: 1.5,
+        tradeCount: 42,
+      },
+    })
+
+    expect(result.allowPaperTrading).toBe(false)
+    expect(result.allowLiveTrading).toBe(false)
+    expect(result.failedChecks).toContain('economics')
+  })
+
+  it('warns when economics pass but average holding time is below threshold', () => {
+    const result = evaluateReleaseGate({
+      economics: {
+        grossExpectancyPct: 0.4,
+        netExpectancyPct: 0.18,
+        feeExpectancyDragPct: 0.08,
+        slippageExpectancyDragPct: 0.07,
+        fundingExpectancyDragPct: 0.04,
+        totalCostsPaid: 250,
+        costDragPctOfInitialCapital: 4,
+        averageHoldingHours: 2,
+        medianHoldingHours: 1.5,
+        tradeCount: 18,
+      },
+    })
+
+    expect(result.failedChecks).not.toContain('economics')
+    expect(result.warningChecks).toContain('economics')
+    expect(result.allowPaperTrading).toBe(true)
+    expect(result.allowLiveTrading).toBe(true)
+  })
+
   it('allows paper but blocks live when execution quality trips', () => {
     const result = evaluateReleaseGate({
       wfo: {

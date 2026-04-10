@@ -148,6 +148,18 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
     wfo,
     significance,
     riskSimulation,
+    economics: {
+      grossExpectancyPct: selected.metrics.grossExpectancyPct,
+      netExpectancyPct: selected.metrics.netExpectancyPct,
+      feeExpectancyDragPct: selected.metrics.feeExpectancyDragPct,
+      slippageExpectancyDragPct: selected.metrics.slippageExpectancyDragPct,
+      fundingExpectancyDragPct: selected.metrics.fundingExpectancyDragPct,
+      totalCostsPaid: selected.metrics.totalCostsPaid,
+      costDragPctOfInitialCapital: selected.metrics.costDragPctOfInitialCapital,
+      averageHoldingHours: selected.metrics.averageHoldingHours,
+      medianHoldingHours: selected.metrics.medianHoldingHours,
+      tradeCount: selected.metrics.tradeCount,
+    },
   })
 
   const baselineReport = buildBaselineReport(selected.metrics)
@@ -384,11 +396,13 @@ const PAPER_RELEASE_GATE_CHECKS = [
   'wfo',
   'significance',
   'risk_simulation',
+  'economics',
 ] as const
 const LIVE_RELEASE_GATE_CHECKS = [
   'wfo',
   'significance',
   'risk_simulation',
+  'economics',
   'execution_quality',
   'ramp_up',
   'regime_shift',
