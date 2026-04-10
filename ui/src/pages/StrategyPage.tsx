@@ -343,6 +343,12 @@ export function StrategyPage() {
                     <RuntimeCell title="Requested Notional" value={snapshot.executionPreview.requestedNotionalUsd == null ? 'n/a' : snapshot.executionPreview.requestedNotionalUsd.toFixed(2)} />
                     <RuntimeCell title="Effective Notional" value={snapshot.executionPreview.effectiveNotionalUsd == null ? 'n/a' : snapshot.executionPreview.effectiveNotionalUsd.toFixed(2)} />
                     <RuntimeCell title="Fallback" value={snapshot.executionPreview.fallbackReason ?? 'n/a'} />
+                    <RuntimeCell
+                      title="Meta-Label Gate"
+                      value={!snapshot.executionPreview.metaLabeling?.enabled
+                        ? 'disabled'
+                        : `${snapshot.executionPreview.metaLabeling.admitted ? 'pass' : 'block'} · ${snapshot.executionPreview.metaLabeling.score.toFixed(2)}/${snapshot.executionPreview.metaLabeling.threshold.toFixed(2)}`}
+                    />
                   </div>
                 )}
                 <div className="space-y-1">

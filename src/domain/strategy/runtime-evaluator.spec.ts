@@ -70,6 +70,13 @@ const baseConfig: StrategyConfig = {
       },
     ],
   },
+  metaLabeling: {
+    enabled: false,
+    upperBarrierPct: 2,
+    lowerBarrierPct: 1,
+    maxHoldingBars: 24,
+    minConfidenceToTrade: 0.55,
+  },
 }
 
 describe('strategy runtime evaluator', () => {
@@ -238,6 +245,31 @@ describe('strategy runtime evaluator', () => {
     expect(result.ensemble.weights['momentum-composite']).toBeGreaterThan(0)
   })
 
+  it('emits meta-label admission diagnostics when enabled', () => {
+    const result = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: makeCandles(72),
+      strategyConfig: {
+        ...baseConfig,
+        metaLabeling: {
+          ...baseConfig.metaLabeling!,
+          enabled: true,
+          minConfidenceToTrade: 0.6,
+        },
+      },
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      fundingRatePct: 0.04,
+    })
+
+    expect(result.metaLabeling?.enabled).toBe(true)
+    expect(result.metaLabeling?.threshold).toBe(0.6)
+    expect(result.metaLabeling?.score).toBeGreaterThanOrEqual(0)
+    expect(result.metaLabeling?.score).toBeLessThanOrEqual(1)
+    expect(result.metaLabeling?.reasons.length).toBeGreaterThan(0)
+  })
+
   it('applies stale-data penalty when runtime inputs are stale', () => {
     const result = evaluateRuntimeFactorSnapshot({
       symbol: 'BTC/USD',
@@ -272,4 +304,3 @@ describe('strategy runtime evaluator', () => {
     expect(result.positionSizing.reasons[0]).toContain('layer core already has 5 open positions')
   })
 })
-

@@ -36,6 +36,14 @@ export interface StrategyFreezeSummary {
   activeEvents: string[]
 }
 
+export interface MetaLabelAdmissionSummary {
+  enabled: boolean
+  score: number
+  threshold: number
+  admitted: boolean
+  reasons: string[]
+}
+
 export interface StrategyExecutionDecision {
   mode: 'applied' | 'pass-through' | 'blocked' | 'fallback'
   actionStatus: ActionStatus
@@ -50,6 +58,7 @@ export interface StrategyExecutionDecision {
   reasons: string[]
   dataProvenance: StrategyDataProvenance
   freeze: StrategyFreezeSummary
+  metaLabeling?: MetaLabelAdmissionSummary
 }
 
 export type StrategyExecutionSummary = StrategyExecutionDecision

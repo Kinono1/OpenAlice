@@ -14,6 +14,7 @@ import {
 } from './factors/index.js'
 import type { FactorGovernanceResult, FactorSignal } from './factors/index.js'
 import { clamp } from './factors/helpers.js'
+import { evaluateMetaLabelAdmission } from './meta-labeling/index.js'
 import {
   evaluateSignalGovernance,
   type GovernanceContext,
@@ -28,6 +29,7 @@ import {
 } from './position-sizing/index.js'
 import type { AssetLayer, PositionSizingDecision } from './position-sizing/index.js'
 import {
+  type MetaLabelAdmissionSummary,
   createUnavailableStrategyDataProvenance,
   type StrategyExecutionSummary,
   type StrategyDataProvenance,
@@ -103,6 +105,7 @@ export interface RuntimeFactorSnapshot {
     effectiveFactorValues: Record<string, number>
     effectiveFactorWeights: Record<string, number>
   }
+  metaLabeling?: MetaLabelAdmissionSummary
   dataProvenance: StrategyDataProvenance
   positionSizing: PositionSizingDecision & {
     requestedPctOfEquity: number
@@ -537,7 +540,7 @@ export function evaluateRuntimeFactorSnapshot(
         reasons: [`missing layer config for ${assetLayer}`],
       }
 
-  return {
+  const snapshot: RuntimeFactorSnapshot = {
     symbol: input.symbol,
     factorSignals: adjustedSignals,
     ensemble: {
@@ -590,4 +593,13 @@ export function evaluateRuntimeFactorSnapshot(
       equity: input.equity ?? null,
     },
   }
+
+  if (input.strategyConfig.metaLabeling?.enabled) {
+    snapshot.metaLabeling = evaluateMetaLabelAdmission({
+      snapshot,
+      minConfidenceToTrade: input.strategyConfig.metaLabeling.minConfidenceToTrade,
+    })
+  }
+
+  return snapshot
 }

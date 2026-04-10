@@ -66,6 +66,7 @@ export function buildStrategyExecutionDecision(input: {
     maxActionDuringFreeze: snapshot.freeze.maxActionDuringFreeze,
     activeEvents: snapshot.freeze.activeWindows.map((window) => window.event.name),
   } as const
+  const metaLabeling = snapshot.metaLabeling
 
   if (!isNewOpen || request.reduceOnly) {
     return withReason(
@@ -80,8 +81,31 @@ export function buildStrategyExecutionDecision(input: {
         assetLayer: snapshot.positionSizing.assetLayer,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       request.reduceOnly ? 'reduce-only order bypasses strategy sizing' : 'existing position path bypasses new-open sizing gate',
+    )
+  }
+
+  if (metaLabeling?.enabled && !metaLabeling.admitted) {
+    const blockReason = 'meta-label admission gate blocked new open'
+    return withReason(
+      {
+        mode: 'blocked',
+        actionStatus,
+        requestedNotionalUsd,
+        recommendedNotionalUsd,
+        effectiveNotionalUsd: 0,
+        effectiveSize: null,
+        effectiveUsdSize: null,
+        assetLayer: snapshot.positionSizing.assetLayer,
+        blockReason,
+        dataProvenance,
+        freeze,
+        metaLabeling,
+      },
+      blockReason,
+      ...metaLabeling.reasons,
     )
   }
 
@@ -100,6 +124,7 @@ export function buildStrategyExecutionDecision(input: {
         blockReason,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       blockReason,
     )
@@ -120,6 +145,7 @@ export function buildStrategyExecutionDecision(input: {
         blockReason,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       ...snapshot.positionSizing.reasons,
     )
@@ -140,6 +166,7 @@ export function buildStrategyExecutionDecision(input: {
         blockReason,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       blockReason,
     )
@@ -160,6 +187,7 @@ export function buildStrategyExecutionDecision(input: {
         fallbackReason,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       fallbackReason,
     )
@@ -181,6 +209,7 @@ export function buildStrategyExecutionDecision(input: {
         blockReason,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       blockReason,
     )
@@ -199,6 +228,7 @@ export function buildStrategyExecutionDecision(input: {
         assetLayer: snapshot.positionSizing.assetLayer,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       effectiveNotionalUsd < requestedNotionalUsd ? 'strategy capped notional to recommended upper bound' : 'requested notional already within strategy cap',
     )
@@ -223,6 +253,7 @@ export function buildStrategyExecutionDecision(input: {
         fallbackReason,
         dataProvenance,
         freeze,
+        metaLabeling,
       },
       fallbackReason,
     )
@@ -241,6 +272,7 @@ export function buildStrategyExecutionDecision(input: {
       assetLayer: snapshot.positionSizing.assetLayer,
       dataProvenance,
       freeze,
+      metaLabeling,
     },
     effectiveNotionalUsd < requestedNotionalUsd ? 'strategy capped notional to recommended upper bound' : 'requested notional already within strategy cap',
   )

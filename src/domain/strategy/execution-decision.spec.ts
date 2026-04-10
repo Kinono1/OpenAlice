@@ -62,6 +62,7 @@ function makeSnapshot(overrides?: Partial<RuntimeFactorSnapshot>): RuntimeFactor
       referencePrice: { status: 'missing', source: 'unavailable' },
       completeness: 'full',
     },
+    metaLabeling: undefined,
     positionSizing: {
       allowed: true,
       maxPositionPctOfEquity: 0.3,
@@ -148,6 +149,31 @@ describe('buildStrategyExecutionDecision', () => {
     })
     expect(decision.mode).toBe('blocked')
     expect(decision.blockReason).toContain('no-trade')
+  })
+
+  it('blocks new opens when the meta-label admission gate rejects the trade', () => {
+    const decision = buildStrategyExecutionDecision({
+      snapshot: makeSnapshot({
+        metaLabeling: {
+          enabled: true,
+          score: 0.42,
+          threshold: 0.55,
+          admitted: false,
+          reasons: ['meta-label score 0.42 below threshold 0.55'],
+        },
+      }),
+      request: {
+        symbol: 'BTC/USDT:USDT',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2500,
+      },
+      isNewOpen: true,
+    })
+    expect(decision.mode).toBe('blocked')
+    expect(decision.blockReason).toContain('meta-label admission gate blocked new open')
+    expect(decision.metaLabeling?.admitted).toBe(false)
+    expect(decision.reasons).toContain('meta-label score 0.42 below threshold 0.55')
   })
 
   it('passes through reduce-only orders', () => {

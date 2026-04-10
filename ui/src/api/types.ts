@@ -586,6 +586,20 @@ export interface StrategyEvaluationSnapshot {
       maxActionDuringFreeze?: string
       activeEvents: string[]
     }
+    metaLabeling?: {
+      enabled: boolean
+      score: number
+      threshold: number
+      admitted: boolean
+      reasons: string[]
+    }
+  }
+  metaLabeling?: {
+    enabled: boolean
+    score: number
+    threshold: number
+    admitted: boolean
+    reasons: string[]
   }
   positionSizing: {
     allowed: boolean
