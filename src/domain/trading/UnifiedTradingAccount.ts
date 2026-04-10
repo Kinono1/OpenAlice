@@ -39,6 +39,10 @@ export interface UnifiedTradingAccountOptions {
   onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   onPostPush?: (accountId: string) => void | Promise<void>
   onPostReject?: (accountId: string) => void | Promise<void>
+  buildExecuteOperation?: (
+    fallback: (operation: Operation) => Promise<unknown>,
+  ) => (operation: Operation) => Promise<unknown>
+  onClose?: () => void | Promise<void>
 }
 
 // ==================== Stage param types ====================
@@ -46,6 +50,7 @@ export interface UnifiedTradingAccountOptions {
 export interface StagePlaceOrderParams {
   aliceId: string
   symbol?: string
+  ticketId?: string
   action: 'BUY' | 'SELL'
   orderType: string
   totalQuantity?: number
@@ -78,6 +83,7 @@ export interface StageModifyOrderParams {
 export interface StageClosePositionParams {
   aliceId: string
   symbol?: string
+  ticketId?: string
   qty?: number
 }
 
@@ -93,6 +99,7 @@ export class UnifiedTradingAccount {
   private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   private readonly _onPostPush?: (accountId: string) => void | Promise<void>
   private readonly _onPostReject?: (accountId: string) => void | Promise<void>
+  private readonly _onClose?: () => void | Promise<void>
 
   // ---- Health tracking ----
   private static readonly DEGRADED_THRESHOLD = 3
@@ -116,10 +123,11 @@ export class UnifiedTradingAccount {
     this._onHealthChange = options.onHealthChange
     this._onPostPush = options.onPostPush
     this._onPostReject = options.onPostReject
+    this._onClose = options.onClose
 
     // Wire internals
     this._getState = async (): Promise<GitState> => {
-      const pendingIds = this.git.getPendingOrderIds().map(p => p.orderId)
+      const pendingIds = [...new Set(this.git.getPendingOrderIds().map(p => p.orderId))]
       const [accountInfo, positions, orders] = await this._callBroker(() =>
         Promise.all([
           broker.getAccount(),
@@ -154,11 +162,14 @@ export class UnifiedTradingAccount {
           throw new Error(`Unknown operation action: ${(op as { action: string }).action}`)
       }
     }
+    const bridgeDispatcher = options.buildExecuteOperation
+      ? options.buildExecuteOperation(dispatcher)
+      : dispatcher
     const guards = resolveGuards(options.guards ?? [])
-    const guardedDispatcher = createGuardPipeline(dispatcher, broker, guards)
+    const executeOperation = createGuardPipeline(bridgeDispatcher, broker, guards)
 
     const gitConfig = {
-      executeOperation: guardedDispatcher,
+      executeOperation,
       getGitState: this._getState,
       onCommit: options.onCommit,
     }
@@ -342,6 +353,9 @@ export class UnifiedTradingAccount {
     if (!parsed) {
       throw new Error(`Invalid aliceId "${params.aliceId}". Use searchContracts to get a valid contract identifier (expected format: "accountId|nativeKey").`)
     }
+    if (parsed.utaId !== this.id) {
+      throw new Error(`aliceId "${params.aliceId}" belongs to account "${parsed.utaId}", not "${this.id}".`)
+    }
     const contract = this.broker.resolveNativeKey(parsed.nativeKey)
     contract.aliceId = params.aliceId
     if (params.symbol) contract.symbol = params.symbol
@@ -367,7 +381,13 @@ export class UnifiedTradingAccount {
         ? { takeProfit: params.takeProfit, stopLoss: params.stopLoss }
         : undefined
 
-    return this.git.add({ action: 'placeOrder', contract, order, tpsl })
+    return this.git.add({
+      action: 'placeOrder',
+      contract,
+      order,
+      tpsl,
+      ticketId: params.ticketId,
+    })
   }
 
   stageModifyOrder(params: StageModifyOrderParams): AddResult {
@@ -389,6 +409,9 @@ export class UnifiedTradingAccount {
     if (!parsed) {
       throw new Error(`Invalid aliceId "${params.aliceId}". Use searchContracts to get a valid contract identifier (expected format: "accountId|nativeKey").`)
     }
+    if (parsed.utaId !== this.id) {
+      throw new Error(`aliceId "${params.aliceId}" belongs to account "${parsed.utaId}", not "${this.id}".`)
+    }
     const contract = this.broker.resolveNativeKey(parsed.nativeKey)
     contract.aliceId = params.aliceId
     if (params.symbol) contract.symbol = params.symbol
@@ -397,6 +420,7 @@ export class UnifiedTradingAccount {
       action: 'closePosition',
       contract,
       quantity: params.qty != null ? new Decimal(String(params.qty)) : undefined,
+      ticketId: params.ticketId,
     })
   }
 
@@ -443,7 +467,12 @@ export class UnifiedTradingAccount {
   }
 
   async sync(opts?: { delayMs?: number }): Promise<SyncResult> {
-    const pendingOrders = this.git.getPendingOrderIds()
+    const pendingByOrderId = new Map<string, { orderId: string; symbol: string }>()
+    for (const pendingOrder of this.git.getPendingOrderIds()) {
+      pendingByOrderId.delete(pendingOrder.orderId)
+      pendingByOrderId.set(pendingOrder.orderId, pendingOrder)
+    }
+    const pendingOrders = [...pendingByOrderId.values()]
     if (pendingOrders.length === 0) {
       return { hash: '', updatedCount: 0, updates: [] }
     }
@@ -451,7 +480,7 @@ export class UnifiedTradingAccount {
     // Optional delay — gives exchange APIs time to settle before querying
     if (opts?.delayMs) await new Promise(r => setTimeout(r, opts.delayMs))
 
-    const updates: OrderStatusUpdate[] = []
+    const updatesByOrderId = new Map<string, OrderStatusUpdate>()
 
     for (const { orderId, symbol } of pendingOrders) {
       const brokerOrder = await this._callBroker(() => this.broker.getOrder(orderId))
@@ -465,7 +494,7 @@ export class UnifiedTradingAccount {
           ? orderFilledQty.toNumber()
           : undefined
 
-        updates.push({
+        updatesByOrderId.set(orderId, {
           orderId,
           symbol,
           previousStatus: 'submitted',
@@ -475,6 +504,8 @@ export class UnifiedTradingAccount {
         })
       }
     }
+
+    const updates = [...updatesByOrderId.values()]
 
     if (updates.length === 0) {
       return { hash: '', updatedCount: 0, updates: [] }
@@ -558,6 +589,7 @@ export class UnifiedTradingAccount {
       this._recoveryTimer = undefined
       this._recovering = false
     }
+    await Promise.resolve(this._onClose?.())
     return this.broker.close()
   }
 }

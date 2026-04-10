@@ -24,6 +24,11 @@ export interface FactorEnsembleResult {
   decisionStrength: DecisionStrength
 }
 
+export interface FactorWeightConditioning {
+  multiplierBySignal: Record<string, number>
+  reasons?: string[]
+}
+
 export interface FactorGovernanceInput {
   sourceTier: SourceTier
   useType: UseType

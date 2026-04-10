@@ -126,6 +126,30 @@ function normalizeLiquidationPayload(
   }
 }
 
+function extractClientOrderId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined
+  }
+  const record = payload as Record<string, unknown>
+  const info = asRecord(record.info)
+  const candidates = [
+    record.clientOrderId,
+    record.clientOid,
+    record.clOrdId,
+    info.clientOrderId,
+    info.clientOid,
+    info.clOrdId,
+    info.orderLinkId,
+    info.text,
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim()
+    }
+  }
+  return undefined
+}
+
 export interface CcxtBrokerMeta {
   exchange: string  // "bybit", "binance", "okx", etc.
 }
@@ -175,6 +199,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   readonly id: string
   readonly label: string
   readonly meta: CcxtBrokerMeta
+  readonly sandbox: boolean
+  readonly demoTrading: boolean
 
   private exchange: Exchange
   private exchangeName: string
@@ -189,6 +215,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.overrides = exchangeOverrides[config.exchange] ?? {}
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
+    this.sandbox = config.sandbox
+    this.demoTrading = !!config.demoTrading
 
     const exchanges = ccxt as unknown as Record<string, new (opts: Record<string, unknown>) => Exchange>
     const ExchangeClass = exchanges[config.exchange]
@@ -228,6 +256,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     if (!this.initialized) {
       throw new BrokerError('CONFIG', `CcxtBroker[${this.id}] not initialized. Call init() first.`)
     }
+  }
+
+  isPaperEnvironment(): boolean {
+    return this.sandbox || this.demoTrading
   }
 
   // ---- Lifecycle ----
@@ -629,6 +661,27 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     } catch {
       return null
     }
+  }
+
+  async findOrderIdByClientOrderId(symbol: string, clientOrderId: string): Promise<string | null> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(this.resolveNativeKey(symbol), this.markets, this.exchangeName) ?? symbol
+    const openOrders = await this.exchange.fetchOpenOrders(ccxtSymbol).catch(() => [])
+    for (const order of openOrders) {
+      if (extractClientOrderId(order) === clientOrderId) {
+        return typeof order.id === 'string' ? order.id : null
+      }
+    }
+
+    const closedOrders = await this.exchange.fetchClosedOrders(ccxtSymbol).catch(() => [])
+    for (const order of closedOrders) {
+      if (extractClientOrderId(order) === clientOrderId) {
+        return typeof order.id === 'string' ? order.id : null
+      }
+    }
+
+    return null
   }
 
   private convertCcxtOrder(o: CcxtOrder): OpenOrder | null {

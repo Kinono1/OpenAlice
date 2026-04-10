@@ -107,28 +107,92 @@ function makeSourceStatus(
   }
 }
 
-function finalizeProvenance(
-  provenance: StrategyDataProvenance,
-): StrategyDataProvenance {
-  const statuses = [
-    provenance.fundingRate.status,
-    provenance.basis.status,
-    provenance.openInterest.status,
-    provenance.liquidation.status,
-  ]
-  const resolvedCount = statuses.filter((status) => status === 'resolved').length
-  const missingCount = statuses.filter((status) => status === 'missing').length
+function finalizeProvenance(provenance: StrategyDataProvenance): StrategyDataProvenance {
+  const resolvedCount = [
+    provenance.candles,
+    provenance.fundingRate,
+    provenance.basis,
+    provenance.openInterest,
+    provenance.liquidation,
+    provenance.equity,
+    provenance.referencePrice,
+  ].filter((item) => item.status !== 'missing').length
+
   return {
     ...provenance,
     completeness:
-      resolvedCount === statuses.length
+      resolvedCount >= 6
         ? 'full'
-        : missingCount === statuses.length
-          ? 'minimal'
-          : 'partial',
+        : resolvedCount >= 3
+          ? 'partial'
+          : 'minimal',
   }
 }
 
+function parseTimestampMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1_000_000_000_000 ? value : value * 1000
+  }
+  if (typeof value === 'string') {
+    const parsedNumber = Number(value)
+    if (Number.isFinite(parsedNumber)) {
+      return parsedNumber > 1_000_000_000_000 ? parsedNumber : parsedNumber * 1000
+    }
+    const parsedDate = Date.parse(value)
+    return Number.isFinite(parsedDate) ? parsedDate : null
+  }
+  if (value instanceof Date) {
+    const timestamp = value.getTime()
+    return Number.isFinite(timestamp) ? timestamp : null
+  }
+  return null
+}
+
+function resolveCandleTimestampMs(candles: OhlcvData[]): number | null {
+  for (let index = candles.length - 1; index >= 0; index -= 1) {
+    const timestamp = parseTimestampMs(candles[index]?.timestamp ?? candles[index]?.date)
+    if (timestamp != null) return timestamp
+  }
+  return null
+}
+
+function inferIntervalMs(interval?: string): number {
+  const value = interval ?? '1h'
+  const match = /^(\d+)(m|h|d|w)$/i.exec(value.trim())
+  if (!match) return 60 * 60_000
+  const amount = Number(match[1])
+  const unit = match[2].toLowerCase()
+  const base = unit === 'm'
+    ? 60_000
+    : unit === 'h'
+      ? 60 * 60_000
+      : unit === 'd'
+        ? 24 * 60 * 60_000
+        : 7 * 24 * 60 * 60_000
+  return amount * base
+}
+
+function detectStaleRuntimeInputs(input: {
+  candles: OhlcvData[]
+  interval?: string
+  nowUtcMs: number
+  request: RuntimeStrategySnapshotRequest
+}): boolean {
+  const candleTimestamp = resolveCandleTimestampMs(input.candles)
+  if (candleTimestamp == null) return true
+  const expectedIntervalMs = inferIntervalMs(input.interval)
+  const candleAgeMs = Math.max(0, input.nowUtcMs - candleTimestamp)
+  const candleStale = candleAgeMs > expectedIntervalMs * 2.5
+  const derivativesMissing = (
+    input.request.fundingRatePct == null
+    && input.request.openInterest == null
+    && input.request.openInterestValue == null
+    && input.request.liquidationCount24h == null
+    && input.request.liquidationNotional24h == null
+    && input.request.basisInput == null
+  )
+  return candleStale || derivativesMissing
+}
 function resolveSingleCcxtTarget(
   manager: AccountManager,
   source?: string,
@@ -142,6 +206,13 @@ function resolveSingleCcxtTarget(
     accountId: targets[0].id,
     broker: targets[0].broker,
   }
+}
+
+function countLayerPositions(
+  positions: Array<{ contract: Contract }>,
+  symbol: string,
+): number {
+  return positions.filter((position) => position.contract.symbol === symbol).length
 }
 
 function parseExchangeSymbolCandidates(symbol: string): string[] {
@@ -546,7 +617,9 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
 
   let resolvedEquity = request.equity
   let currentOpenPositions = 0
+  let currentLayerOpenPositions = 0
   let isNewOpen = !request.reduceOnly
+  const nowUtcMs = Date.now()
 
   if (resolvedEquity != null) {
     derivatives.dataProvenance.equity = makeSourceStatus(
@@ -571,6 +644,7 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
         )
       }
       currentOpenPositions = positions.length
+      currentLayerOpenPositions = countLayerPositions(positions, request.symbol)
       if (!request.reduceOnly) {
         isNewOpen = !positions.some((position) => position.contract.symbol === request.symbol)
       }
@@ -584,6 +658,21 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
       'equity not resolved',
     )
   }
+
+  const staleData = detectStaleRuntimeInputs({
+    candles,
+    interval: request.interval,
+    nowUtcMs,
+    request: {
+      ...request,
+      fundingRatePct: derivatives.fundingRatePct,
+      openInterest: derivatives.openInterest,
+      openInterestValue: derivatives.openInterestValue,
+      liquidationCount24h: derivatives.liquidationCount24h,
+      liquidationNotional24h: derivatives.liquidationNotional24h,
+      basisInput: derivatives.basisInput,
+    },
+  })
 
   const strategyConfig = await readStrategyConfig()
   const snapshot = evaluateRuntimeFactorSnapshot({
@@ -608,9 +697,9 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
       ),
     },
     equity: resolvedEquity,
-    assetLayer: request.assetLayer,
     currentOpenPositions,
-    currentLayerOpenPositions: 0,
+    currentLayerOpenPositions,
+    staleData,
     winRate: request.winRate,
     avgWinLossRatio: request.avgWinLossRatio,
   })

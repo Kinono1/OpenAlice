@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createCryptoOperationDispatcher, executeCommit } from './operation-dispatcher.core.js'
 import type { ICryptoTradingEngine, CryptoPosition } from './operation-dispatcher.types.js'
 import type { Operation } from './operation-dispatcher.types.js'
+import { DecisionTicketStore } from './decision-ticket.js'
 
 function createMockEngine(overrides: Partial<ICryptoTradingEngine> = {}): ICryptoTradingEngine {
   return {
@@ -100,16 +101,25 @@ describe('createCryptoOperationDispatcher', () => {
 
       const result = await dispatch(op)
 
-      expect(result).toEqual({
-        success: true,
-        error: undefined,
-        order: {
-          id: 'ord-001',
-          status: 'filled',
-          filledPrice: 95000,
-          filledQuantity: 0.1,
-        },
-      })
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          executionTelemetry: expect.objectContaining({
+            dispatcherStartedAtMs: expect.any(Number),
+            riskDecision: 'approved',
+          }),
+          order: expect.objectContaining({
+            id: 'ord-001',
+            status: 'filled',
+            filledPrice: 95000,
+            filledQuantity: 0.1,
+            executionTelemetry: expect.objectContaining({
+              dispatcherStartedAtMs: expect.any(Number),
+              riskDecision: 'approved',
+            }),
+          }),
+        }),
+      )
     })
 
     it('wraps successful pending result (no filledPrice)', async () => {
@@ -126,16 +136,21 @@ describe('createCryptoOperationDispatcher', () => {
         params: { symbol: 'BTC/USD', side: 'buy', type: 'limit', price: 90000 },
       })
 
-      expect(result).toEqual({
-        success: true,
-        error: undefined,
-        order: {
-          id: 'ord-002',
-          status: 'pending',
-          filledPrice: undefined,
-          filledQuantity: undefined,
-        },
-      })
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          executionTelemetry: expect.objectContaining({
+            dispatcherStartedAtMs: expect.any(Number),
+            riskDecision: 'approved',
+          }),
+          order: expect.objectContaining({
+            id: 'ord-002',
+            status: 'pending',
+            filledPrice: undefined,
+            filledQuantity: undefined,
+          }),
+        }),
+      )
     })
 
     it('wraps failed result with error', async () => {
@@ -151,11 +166,33 @@ describe('createCryptoOperationDispatcher', () => {
         params: { symbol: 'BTC/USD', side: 'buy', type: 'market', size: 100 },
       })
 
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: 'Insufficient balance',
+          executionTelemetry: expect.objectContaining({
+            dispatcherStartedAtMs: expect.any(Number),
+            riskDecision: 'approved',
+          }),
+        }),
+      )
+    })
+
+    it('rejects orders without a ticket when the ticket store requires one', async () => {
+      const ticketStore = new DecisionTicketStore({ required: true, ttlMs: 60_000 })
+      dispatch = createCryptoOperationDispatcher(engine, { ticketStore })
+
+      const result = await dispatch({
+        action: 'placeOrder',
+        params: { symbol: 'BTC/USD', side: 'buy', type: 'market' },
+      })
+
       expect(result).toEqual({
         success: false,
-        error: 'Insufficient balance',
-        order: undefined,
+        error: 'ticket: missing required decision ticket',
       })
+      expect(engine.placeOrder).not.toHaveBeenCalled()
+      ticketStore.destroy()
     })
   })
 
@@ -223,16 +260,25 @@ describe('createCryptoOperationDispatcher', () => {
         action: 'closePosition', params: { symbol: 'BTC/USD' },
       })
 
-      expect(result).toEqual({
-        success: true,
-        error: undefined,
-        order: {
-          id: 'ord-001',
-          status: 'filled',
-          filledPrice: 95000,
-          filledQuantity: 0.1,
-        },
-      })
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          executionTelemetry: expect.objectContaining({
+            dispatcherStartedAtMs: expect.any(Number),
+            riskDecision: 'approved',
+          }),
+          order: expect.objectContaining({
+            id: 'ord-001',
+            status: 'filled',
+            filledPrice: 95000,
+            filledQuantity: 0.1,
+            executionTelemetry: expect.objectContaining({
+              dispatcherStartedAtMs: expect.any(Number),
+              riskDecision: 'approved',
+            }),
+          }),
+        }),
+      )
     })
   })
 
@@ -319,6 +365,55 @@ describe('createCryptoOperationDispatcher', () => {
         failed: 1,
         skipped: 1,
       })
+    })
+  })
+
+  describe('execution telemetry', () => {
+    it('emits structured telemetry and risk rejection events for blocked orders', async () => {
+      const append = vi.fn().mockResolvedValue(undefined)
+      dispatch = createCryptoOperationDispatcher(engine, {
+        eventLog: { append },
+        riskConfig: {
+          enabled: true,
+          killSwitch: false,
+          maxOpenPositions: 3,
+          maxLeverage: 2,
+          maxOrderUsd: 5_000,
+          maxPositionPctOfEquity: 30,
+          maxDailyLossUsd: 1_000,
+        },
+      })
+
+      const result = await dispatch({
+        action: 'placeOrder',
+        params: {
+          symbol: 'BTC/USD',
+          side: 'buy',
+          type: 'market',
+          usd_size: 500,
+          leverage: 10,
+          signalTimestampMs: 1_700_000_000_000,
+        },
+      })
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('risk:'),
+        }),
+      )
+      expect(append).toHaveBeenCalledWith(
+        'risk.rejected',
+        expect.objectContaining({
+          symbol: 'BTC/USD',
+          executionTelemetry: expect.objectContaining({
+            signalTimestampMs: 1_700_000_000_000,
+            riskDecision: 'rejected',
+            riskReason: expect.stringContaining('exceeds'),
+          }),
+        }),
+      )
+      expect(engine.placeOrder).not.toHaveBeenCalled()
     })
   })
 

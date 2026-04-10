@@ -5,11 +5,13 @@ import type {
   FactorGovernanceInput,
   FactorGovernanceResult,
   FactorSignal,
+  FactorWeightConditioning,
 } from './types.js'
 
 export function combineFactorSignals(
   signals: FactorSignal[],
   weights: Record<string, number> = {},
+  conditioning?: FactorWeightConditioning,
 ): FactorEnsembleResult {
   if (signals.length === 0) {
     return {
@@ -23,7 +25,8 @@ export function combineFactorSignals(
   }
 
   const weightedSignals = signals.map((signal) => {
-    const configWeight = weights[signal.name] ?? 1
+    const multiplier = conditioning?.multiplierBySignal[signal.name] ?? 1
+    const configWeight = (weights[signal.name] ?? 1) * Math.max(multiplier, 0)
     const weight = decisionStrengthWeight(signal.decisionStrength) * Math.max(configWeight, 0)
     return {
       signal,
@@ -53,7 +56,10 @@ export function combineFactorSignals(
 
   return {
     signals,
-    weights: Object.fromEntries(signals.map((signal) => [signal.name, weights[signal.name] ?? 1])),
+    weights: Object.fromEntries(signals.map((signal) => [
+      signal.name,
+      (weights[signal.name] ?? 1) * (conditioning?.multiplierBySignal[signal.name] ?? 1),
+    ])),
     aggregateValue,
     aggregateConfidence,
     consensusScore,
@@ -65,8 +71,9 @@ export function combineFactorSignalsWithGovernance(
   signals: FactorSignal[],
   input: FactorGovernanceInput,
   weights: Record<string, number> = {},
+  conditioning?: FactorWeightConditioning,
 ): FactorGovernanceResult {
-  const ensemble = combineFactorSignals(signals, weights)
+  const ensemble = combineFactorSignals(signals, weights, conditioning)
   return {
     ...ensemble,
     governance: evaluateSignalGovernance({

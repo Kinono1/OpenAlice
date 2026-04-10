@@ -7,9 +7,18 @@ import type { SDKOption } from '../components/SDKSelector'
 import { ReconnectButton } from '../components/ReconnectButton'
 import { useTradingConfig } from '../hooks/useTradingConfig'
 import { useAccountHealth } from '../hooks/useAccountHealth'
+import { useTradingRuntimeSummary } from '../hooks/useTradingRuntimeSummary'
 import { PageHeader } from '../components/PageHeader'
 import { api } from '../api'
-import type { AccountConfig, BrokerTypeInfo, BrokerConfigField, BrokerHealthInfo } from '../api/types'
+import type {
+  AccountConfig,
+  BrokerTypeInfo,
+  BrokerConfigField,
+  BrokerHealthInfo,
+  CryptoExecutionConfig,
+  TradingRuntimeAccount,
+  TradingRuntimeSummary,
+} from '../api/types'
 
 // ==================== Dialog state ====================
 
@@ -18,11 +27,25 @@ type DialogState =
   | { kind: 'add' }
   | null
 
+const DEFAULT_CRYPTO_EXECUTION: CryptoExecutionConfig = {
+  mode: 'paper_only',
+  enableCryptoDispatcher: true,
+  requireDecisionTicket: false,
+  ticketTtlMs: 600000,
+  idempotencyTtlMs: 1800000,
+  killSwitchDefaultPolicy: 'block_new_only',
+}
+
+function isCcxtAccount(type: string | null | undefined): boolean {
+  return type === 'ccxt'
+}
+
 // ==================== Page ====================
 
 export function TradingPage() {
   const tc = useTradingConfig()
   const healthMap = useAccountHealth()
+  const runtime = useTradingRuntimeSummary()
   const [dialog, setDialog] = useState<DialogState>(null)
   const [brokerTypes, setBrokerTypes] = useState<BrokerTypeInfo[]>([])
 
@@ -37,7 +60,7 @@ export function TradingPage() {
     }
   }, [tc.accounts, dialog])
 
-  if (tc.loading) return <PageShell subtitle="Loading..." />
+  if (tc.loading || runtime.loading) return <PageShell subtitle="Loading..." />
   if (tc.error) {
     return (
       <PageShell subtitle="Failed to load trading configuration.">
@@ -49,15 +72,19 @@ export function TradingPage() {
 
   const deleteAccount = async (accountId: string) => {
     await tc.deleteAccount(accountId)
+    await runtime.refresh()
     setDialog(null)
   }
+
+  const runtimeById = new Map((runtime.runtime?.accounts ?? []).map((account) => [account.id, account]))
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <PageHeader title="Trading" description="Configure your trading accounts." />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
-        <div className="max-w-[720px] space-y-3">
+        <div className="max-w-[720px] space-y-4">
+          <OperatorReadinessPanel runtime={runtime.runtime} error={runtime.error} />
           {tc.accounts.length === 0 ? (
             <EmptyState onAdd={() => setDialog({ kind: 'add' })} />
           ) : (
@@ -68,6 +95,7 @@ export function TradingPage() {
                   account={account}
                   brokerType={brokerTypes.find(bt => bt.type === account.type)}
                   health={healthMap[account.id]}
+                  runtimeAccount={runtimeById.get(account.id)}
                   onClick={() => setDialog({ kind: 'edit', accountId: account.id })}
                 />
               ))}
@@ -93,6 +121,7 @@ export function TradingPage() {
             if (!result.success) {
               throw new Error(result.error || 'Connection failed')
             }
+            await runtime.refresh()
             setDialog(null)
           }}
           onClose={() => setDialog(null)}
@@ -108,7 +137,10 @@ export function TradingPage() {
             account={account}
             brokerType={brokerTypes.find(bt => bt.type === account.type)}
             health={healthMap[account.id]}
-            onSaveAccount={tc.saveAccount}
+            onSaveAccount={async (nextAccount) => {
+              await tc.saveAccount(nextAccount)
+              await runtime.refresh()
+            }}
             onDelete={() => deleteAccount(account.id)}
             onClose={() => setDialog(null)}
           />
@@ -141,6 +173,75 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       <button onClick={onAdd} className="btn-primary">
         + Add Account
       </button>
+    </div>
+  )
+}
+
+function OperatorReadinessPanel({ runtime, error }: {
+  runtime: TradingRuntimeSummary | null
+  error: string | null
+}) {
+  if (error) {
+    return (
+      <div className="rounded-lg border border-border px-4 py-3 bg-bg-secondary">
+        <div className="text-[12px] font-semibold uppercase tracking-wide text-text-muted mb-1">
+          Operator Readiness
+        </div>
+        <p className="text-[12px] text-red">{error}</p>
+      </div>
+    )
+  }
+
+  if (!runtime) return null
+
+  return (
+    <div className="space-y-3">
+      <div className="text-[12px] font-semibold uppercase tracking-wide text-text-muted">
+        Operator Readiness
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <ReadinessCard
+          title="Process Health"
+          status={runtime.process.status}
+          subtitle={`Uptime ${Math.floor(runtime.process.uptime)}s`}
+          ok
+        />
+        <ReadinessCard
+          title="Web Readiness"
+          status={runtime.webReadiness.status}
+          subtitle={Object.entries(runtime.webReadiness.checks)
+            .map(([name, check]) => `${name}:${check.ok ? 'ok' : 'fail'}`)
+            .join(' · ')}
+          ok={runtime.webReadiness.ready}
+        />
+        <ReadinessCard
+          title="Signal Intake"
+          status={runtime.signalReadiness.status}
+          subtitle={runtime.signalReadiness.ready
+            ? `paper_only · ${runtime.signalReadiness.supportedSymbols.join(', ')}`
+            : (runtime.signalReadiness.reasons.join(', ') || 'not-ready')}
+          ok={runtime.signalReadiness.ready}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ReadinessCard({ title, status, subtitle, ok }: {
+  title: string
+  status: string
+  subtitle: string
+  ok: boolean
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-bg-secondary px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[12px] font-semibold uppercase tracking-wide text-text-muted">{title}</div>
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${ok ? 'bg-green/10 text-green' : 'bg-red/10 text-red'}`}>
+          {status}
+        </span>
+      </div>
+      <div className="mt-2 text-[12px] text-text-muted leading-relaxed">{subtitle}</div>
     </div>
   )
 }
@@ -233,10 +334,11 @@ function buildSubtitle(account: AccountConfig, brokerType?: BrokerTypeInfo): str
 
 // ==================== Account Card ====================
 
-function AccountCard({ account, brokerType, health, onClick }: {
+function AccountCard({ account, brokerType, health, runtimeAccount, onClick }: {
   account: AccountConfig
   brokerType?: BrokerTypeInfo
   health?: BrokerHealthInfo
+  runtimeAccount?: TradingRuntimeAccount
   onClick: () => void
 }) {
   const isDisabled = health?.disabled || account.enabled === false
@@ -259,6 +361,28 @@ function AccountCard({ account, brokerType, health, onClick }: {
             {buildSubtitle(account, brokerType)}
             {account.guards.length > 0 && <span className="ml-2 text-text-muted/50">{account.guards.length} guard{account.guards.length > 1 ? 's' : ''}</span>}
           </div>
+          {isCcxtAccount(account.type) && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              <RuntimeBadge>
+                {(runtimeAccount?.cryptoExecutionRuntime?.bridgeActive ?? account.cryptoExecution?.enableCryptoDispatcher ?? true)
+                  ? 'Crypto Dispatcher'
+                  : 'Legacy Path'}
+              </RuntimeBadge>
+              <RuntimeBadge>Paper Only</RuntimeBadge>
+              <RuntimeBadge>
+                Ticket:{' '}
+                {(runtimeAccount?.cryptoExecutionRuntime?.requireDecisionTicket ?? account.cryptoExecution?.requireDecisionTicket)
+                  ? 'on'
+                  : 'off'}
+              </RuntimeBadge>
+              <RuntimeBadge>
+                Kill Switch:{' '}
+                {runtimeAccount?.cryptoExecutionRuntime?.killSwitchDefaultPolicy
+                  ?? account.cryptoExecution?.killSwitchDefaultPolicy
+                  ?? DEFAULT_CRYPTO_EXECUTION.killSwitchDefaultPolicy}
+              </RuntimeBadge>
+            </div>
+          )}
         </div>
         <div className="shrink-0">
           {account.enabled === false
@@ -268,6 +392,14 @@ function AccountCard({ account, brokerType, health, onClick }: {
         </div>
       </div>
     </button>
+  )
+}
+
+function RuntimeBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-[10px] px-2 py-0.5 rounded bg-bg-tertiary text-text-muted border border-border">
+      {children}
+    </span>
   )
 }
 
@@ -327,6 +459,72 @@ function DynamicBrokerFields({ fields, values, showSecrets, onChange }: {
   )
 }
 
+function CryptoExecutionSection({
+  value,
+  onChange,
+}: {
+  value: CryptoExecutionConfig
+  onChange: (next: CryptoExecutionConfig) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Mode">
+          <input className={inputClass} value={value.mode} disabled />
+        </Field>
+        <Field label="Kill Switch Default">
+          <select
+            className={inputClass}
+            value={value.killSwitchDefaultPolicy}
+            onChange={(e) => onChange({
+              ...value,
+              killSwitchDefaultPolicy: e.target.value as CryptoExecutionConfig['killSwitchDefaultPolicy'],
+            })}
+          >
+            <option value="block_new_only">block_new_only</option>
+            <option value="block_all">block_all</option>
+          </select>
+        </Field>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <Toggle
+          checked={value.enableCryptoDispatcher}
+          onChange={(enabled) => onChange({ ...value, enableCryptoDispatcher: enabled })}
+        />
+        <span className="text-[12px] text-text-muted">Enable crypto dispatcher bridge</span>
+      </label>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <Toggle
+          checked={value.requireDecisionTicket}
+          onChange={(required) => onChange({ ...value, requireDecisionTicket: required })}
+        />
+        <span className="text-[12px] text-text-muted">Require decision ticket before execution</span>
+      </label>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Ticket TTL (ms)">
+          <input
+            className={inputClass}
+            type="number"
+            value={value.ticketTtlMs}
+            onChange={(e) => onChange({ ...value, ticketTtlMs: Number(e.target.value || 0) })}
+          />
+        </Field>
+        <Field label="Idempotency TTL (ms)">
+          <input
+            className={inputClass}
+            type="number"
+            value={value.idempotencyTtlMs}
+            onChange={(e) => onChange({ ...value, idempotencyTtlMs: Number(e.target.value || 0) })}
+          />
+        </Field>
+      </div>
+    </div>
+  )
+}
+
 // ==================== Create Wizard ====================
 
 function StepIndicator({ current, total }: { current: number; total: number }) {
@@ -354,6 +552,7 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
   const [type, setType] = useState<string | null>(null)
   const [id, setId] = useState('')
   const [brokerConfig, setBrokerConfig] = useState<Record<string, unknown>>({})
+  const [cryptoExecution, setCryptoExecution] = useState<CryptoExecutionConfig>(DEFAULT_CRYPTO_EXECUTION)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -373,6 +572,9 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
       if (f.default !== undefined) defaults[f.name] = f.default
     }
     setBrokerConfig(defaults)
+    if (isCcxtAccount(bt.type)) {
+      setCryptoExecution(DEFAULT_CRYPTO_EXECUTION)
+    }
   }, [type])
 
   const defaultId = type ? `${type}-main` : ''
@@ -403,7 +605,14 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
   const handleCreate = async () => {
     setSaving(true); setError('')
     try {
-      const account: AccountConfig = { id: finalId, type: type!, enabled: true, guards: [], brokerConfig }
+      const account: AccountConfig = {
+        id: finalId,
+        type: type!,
+        enabled: true,
+        guards: [],
+        brokerConfig,
+        ...(isCcxtAccount(type) ? { cryptoExecution } : {}),
+      }
 
       const testResult = await api.trading.testConnection(account)
       if (!testResult.success) {
@@ -459,6 +668,12 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
                   showSecrets={false}
                   onChange={(f, v) => setBrokerConfig(prev => ({ ...prev, [f]: v }))}
                 />
+                {isCcxtAccount(type) && (
+                  <CryptoExecutionSection
+                    value={cryptoExecution}
+                    onChange={setCryptoExecution}
+                  />
+                )}
               </div>
             )}
             {error && <p className="text-[12px] text-red">{error}</p>}
@@ -539,6 +754,10 @@ function EditDialog({ account, brokerType, health, onSaveAccount, onDelete, onCl
     setDraft(d => ({ ...d, guards }))
   }
 
+  const patchCryptoExecution = (cryptoExecution: CryptoExecutionConfig) => {
+    setDraft(d => ({ ...d, cryptoExecution }))
+  }
+
   const handleSave = async () => {
     setSaving(true); setMsg('')
     try {
@@ -593,6 +812,15 @@ function EditDialog({ account, brokerType, health, onSaveAccount, onDelete, onCl
             </button>
           )}
         </Section>
+
+        {isCcxtAccount(draft.type) && (
+          <Section title="Crypto Execution">
+            <CryptoExecutionSection
+              value={draft.cryptoExecution ?? DEFAULT_CRYPTO_EXECUTION}
+              onChange={patchCryptoExecution}
+            />
+          </Section>
+        )}
 
         {/* Guards */}
         <div>

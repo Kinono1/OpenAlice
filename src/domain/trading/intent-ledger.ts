@@ -7,6 +7,7 @@
 import { open, readFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { StrategyExecutionSummary } from '../strategy/execution-decision.js'
+import type { ExecutionTelemetry } from './operation-dispatcher.types.js'
 
 export interface TradeIntent {
   intentId: string
@@ -27,17 +28,22 @@ export interface TradeIntent {
   clientOrderId?: string
   createdAt: number
   strategy?: StrategyExecutionSummary
+  signalTimestampMs?: number
+  dispatcherStartedAtMs?: number
+  expectedPrice?: number
+  forcedRetryIdempotency?: boolean
 }
 
 export interface IntentResult {
   intentId: string
-  status: 'success' | 'failed' | 'skipped'
+  status: 'success' | 'failed' | 'skipped' | 'unknown'
   orderId?: string
   filledPrice?: number
   filledSize?: number
   error?: string
   completedAt: number
   strategy?: StrategyExecutionSummary
+  executionTelemetry?: ExecutionTelemetry
 }
 
 export interface IntentLedgerEntry {
@@ -84,10 +90,16 @@ export class IntentLedger {
   async readAll(): Promise<IntentLedgerEntry[]> {
     try {
       const raw = await readFile(this.filePath, 'utf-8')
-      return raw
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => JSON.parse(line))
+      const entries: IntentLedgerEntry[] = []
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          entries.push(JSON.parse(line) as IntentLedgerEntry)
+        } catch {
+          // tolerate malformed trailing or partially-written lines
+        }
+      }
+      return entries
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw err

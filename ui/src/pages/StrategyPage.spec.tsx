@@ -27,6 +27,10 @@ vi.mock('../hooks/useStrategyRuntime', () => ({
         basis: { enabled: true, weight: 1 },
         volumeSurge: { enabled: true, weight: 1 },
         momentumComposite: { enabled: true, weight: 1 },
+        meanReversion: { enabled: true, weight: 1 },
+        volatilityRegime: { enabled: true, weight: 1 },
+        liquidationPressure: { enabled: true, weight: 1 },
+        crossTimeframeDivergence: { enabled: true, weight: 1 },
       },
     },
     runtime: {

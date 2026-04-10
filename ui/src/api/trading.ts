@@ -1,5 +1,5 @@
 import { fetchJson } from './client'
-import type { TradingAccount, AccountSummary, AccountInfo, Position, WalletCommitLog, ReconnectResult, AccountConfig, WalletStatus, WalletPushResult, WalletRejectResult, TestConnectionResult, BrokerTypeInfo, UTASnapshotSummary, EquityCurvePoint } from './types'
+import type { TradingAccount, AccountSummary, AccountInfo, Position, WalletCommitLog, ReconnectResult, AccountConfig, WalletStatus, WalletPushResult, WalletRejectResult, TestConnectionResult, BrokerTypeInfo, UTASnapshotSummary, EquityCurvePoint, TradingRuntimeSummary } from './types'
 
 // ==================== Unified Trading API ====================
 
@@ -89,6 +89,10 @@ export const tradingApi = {
 
   async loadTradingConfig(): Promise<{ accounts: AccountConfig[] }> {
     return fetchJson('/api/trading/config')
+  },
+
+  async runtimeSummary(): Promise<TradingRuntimeSummary> {
+    return fetchJson('/api/trading/config/runtime')
   },
 
   async upsertAccount(account: AccountConfig): Promise<AccountConfig> {

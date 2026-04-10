@@ -3,8 +3,12 @@ import {
   combineFactorSignals,
   combineFactorSignalsWithGovernance,
   evaluateBasisFactor,
+  evaluateCrossTimeframeDivergence,
   evaluateFundingRateFactor,
+  evaluateLiquidationPressure,
+  evaluateMeanReversion,
   evaluateMomentumComposite,
+  evaluateVolatilityRegime,
   evaluateVolumeSurgeFactor,
 } from './index.js'
 
@@ -51,6 +55,55 @@ describe('strategy factors', () => {
     })
 
     expect(signal.value).toBeGreaterThan(0)
+    expect(signal.confidence).toBeGreaterThan(0)
+  })
+
+  it('builds mean reversion as the sign-inverted momentum factor', () => {
+    const signal = evaluateMeanReversion({
+      return1hPct: 1,
+      return6hPct: 2,
+      return24hPct: 4,
+      return7dPct: 8,
+      realizedVolPct: 6,
+    })
+
+    expect(signal.value).toBeLessThan(0)
+    expect(signal.confidence).toBeGreaterThan(0)
+  })
+
+  it('treats expanding stressed volatility as bearish', () => {
+    const signal = evaluateVolatilityRegime({
+      realizedVolPct: 18,
+      previousRealizedVolPct: 8,
+      volOfVolPct: 4,
+      consecutiveHighVol: 10,
+    })
+
+    expect(signal.value).toBeLessThan(0)
+    expect(signal.confidence).toBeGreaterThan(0.5)
+  })
+
+  it('treats crowded upside moves as liquidation pressure against trend', () => {
+    const signal = evaluateLiquidationPressure({
+      fundingRateZScore: 2.5,
+      volumeSurgeStrength: 0.9,
+      volExpansionScore: 0.8,
+      priceReturnPct: 3,
+    })
+
+    expect(signal.value).toBeLessThan(0)
+    expect(signal.confidence).toBeGreaterThan(0.5)
+  })
+
+  it('measures divergence between short and long timeframes', () => {
+    const signal = evaluateCrossTimeframeDivergence({
+      return1hPct: 2,
+      return6hPct: 1,
+      return24hPct: -3,
+      return7dPct: -4,
+    })
+
+    expect(Math.abs(signal.value)).toBeGreaterThan(0)
     expect(signal.confidence).toBeGreaterThan(0)
   })
 

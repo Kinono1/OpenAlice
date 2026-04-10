@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -39,5 +39,28 @@ describe('IntentLedger', () => {
 
     await ledger.close()
   })
-})
 
+  it('skips malformed trailing jsonl lines during recovery reads', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'intent-ledger-malformed-'))
+    const filePath = join(tempDir, 'ledger.jsonl')
+    const ledger = new IntentLedger(filePath)
+
+    await ledger.init()
+    await ledger.recordIntent({
+      intentId: 'intent-2',
+      ticketId: 'ticket-2',
+      symbol: 'ETH/USD',
+      action: 'placeOrder',
+      side: 'sell',
+      type: 'market',
+      createdAt: Date.now(),
+    })
+    await appendFile(filePath, '{"type":"result","data":', 'utf-8')
+
+    const entries = await ledger.readAll()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].type).toBe('intent')
+
+    await ledger.close()
+  })
+})

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   CryptoOrderResult,
   CryptoPlaceOrderRequest,
+  ExecutionTelemetry,
   ICryptoTradingEngine,
   RiskCheckContext,
   RiskCheckResult,
@@ -59,6 +60,13 @@ export function createPlaceOrderExecutor({
     opIndex: number,
     commitId: string,
   ): Promise<PlaceOrderExecutionResult> {
+    const dispatcherStartedAtMs = Date.now()
+    const signalTimestampMs =
+      typeof op.params.signalTimestampMs === 'number' &&
+      Number.isFinite(op.params.signalTimestampMs) &&
+      op.params.signalTimestampMs > 0
+        ? op.params.signalTimestampMs
+        : undefined
     const ticketId = (op.params.ticketId as string) ?? ''
     const intentId = randomUUID()
     const contextId = undefined
@@ -84,6 +92,7 @@ export function createPlaceOrderExecutor({
     const prefetchedPositions = prefetchedState?.positions
     const prefetchedAccount = prefetchedState?.account
     let strategySummary: NonNullable<CryptoOrderResult['strategy']> | undefined
+    let expectedPrice: number | undefined
     if (idempotencyKey) {
       req.idempotencyKey = idempotencyKey
     }
@@ -169,8 +178,22 @@ export function createPlaceOrderExecutor({
           : undefined,
         createdAt: Date.now(),
         strategy,
+        signalTimestampMs,
+        dispatcherStartedAtMs,
+        expectedPrice,
+        forcedRetryIdempotency: forceRetryIdempotency,
       })
       intentRecorded = true
+    }
+
+    async function recordIntentFailureEnsuringIntent(
+      error: string,
+      strategy?: NonNullable<CryptoOrderResult['strategy']>,
+      currentRequest: CryptoPlaceOrderRequest = req,
+      executionTelemetry?: ExecutionTelemetry,
+    ): Promise<void> {
+      await recordIntentIfNeeded(currentRequest, strategy)
+      await recordIntentFailure(options, intentId, error, strategy, executionTelemetry)
     }
 
     if (options.killSwitch) {
@@ -191,18 +214,19 @@ export function createPlaceOrderExecutor({
               intentId,
             })
           })
-        await recordIntentFailure(options, intentId, error, strategySummary)
+        await recordIntentFailureEnsuringIntent(error, strategySummary)
         return failWithStrategy(error, strategySummary)
       }
     }
 
-    if (options.ticketStore && !ticketId) {
+    if (options.ticketStore?.isRequired() && !ticketId) {
+      const error = 'ticket: missing required decision ticket'
       await options.eventLog
         ?.append('ticket.skipped', {
           commitId,
           opIndex,
           reason: 'no-ticket-id',
-          required: options.ticketStore.isRequired(),
+          required: true,
         })
         .catch(err => {
           warnOnAncillaryFailure('eventLog.append.ticket.skipped', err, {
@@ -211,6 +235,8 @@ export function createPlaceOrderExecutor({
             intentId,
           })
         })
+      await recordIntentFailureEnsuringIntent(error, strategySummary)
+      return failWithStrategy(error, strategySummary)
     }
     if (options.ticketStore && ticketId) {
       const ticketResult = options.ticketStore.validate(
@@ -235,7 +261,7 @@ export function createPlaceOrderExecutor({
               intentId,
             })
           })
-        await recordIntentFailure(options, intentId, error)
+        await recordIntentFailureEnsuringIntent(error)
         return fail(error)
       }
     }
@@ -261,7 +287,7 @@ export function createPlaceOrderExecutor({
               intentId,
             })
           })
-        await recordIntentFailure(options, intentId, error)
+        await recordIntentFailureEnsuringIntent(error)
         return fail(error)
       }
       if (idempPolicy.warning) {
@@ -282,7 +308,7 @@ export function createPlaceOrderExecutor({
       }
     }
 
-    const expectedPrice = await estimateExpectedPrice(req, op, options)
+    expectedPrice = await estimateExpectedPrice(req, op, options)
     const prepared = await options.preparePlaceOrder?.({
       operation: op,
       request: req,
@@ -326,7 +352,7 @@ export function createPlaceOrderExecutor({
         reason: prepared.reason ?? 'strategy prepare hook rejected order',
         details: prepared.details,
       })
-      await recordIntentFailure(options, intentId, error, strategySummary)
+      await recordIntentFailureEnsuringIntent(error, strategySummary, effectiveRequest)
       return failWithStrategy(error, strategySummary)
     }
     const preGate = await options.beforePlaceOrderGate?.({
@@ -343,7 +369,7 @@ export function createPlaceOrderExecutor({
         reason: preGate.reason ?? 'pre-place-order gate rejected order',
         details: preGate.details,
       })
-      await recordIntentFailure(options, intentId, error, strategySummary)
+      await recordIntentFailureEnsuringIntent(error, strategySummary, effectiveRequest)
       return failWithStrategy(error, strategySummary)
     }
 
@@ -365,7 +391,7 @@ export function createPlaceOrderExecutor({
               intentId,
             })
           })
-        await recordIntentFailure(options, intentId, error)
+        await recordIntentFailureEnsuringIntent(error)
         return fail(error)
       }
 
@@ -387,7 +413,7 @@ export function createPlaceOrderExecutor({
                 intentId,
               })
             })
-          await recordIntentFailure(options, intentId, error, strategySummary)
+          await recordIntentFailureEnsuringIntent(error, strategySummary)
           return failWithStrategy(error, strategySummary)
         }
         const retryTicketResult = options.ticketStore.validate(
@@ -413,7 +439,7 @@ export function createPlaceOrderExecutor({
                 intentId,
               })
             })
-          await recordIntentFailure(options, intentId, error, strategySummary)
+          await recordIntentFailureEnsuringIntent(error, strategySummary)
           return failWithStrategy(error, strategySummary)
         }
       }
@@ -433,7 +459,7 @@ export function createPlaceOrderExecutor({
           err instanceof Error
             ? `idempotency: reserve failed (${err.message})`
             : `idempotency: reserve failed (${String(err)})`
-        await recordIntentFailure(options, intentId, error, strategySummary)
+        await recordIntentFailureEnsuringIntent(error, strategySummary)
         return failWithStrategy(error, strategySummary)
       }
       if (reservation && !reservation.acquired) {
@@ -453,7 +479,7 @@ export function createPlaceOrderExecutor({
               intentId,
             })
           })
-        await recordIntentFailure(options, intentId, duplicateError, strategySummary)
+        await recordIntentFailureEnsuringIntent(duplicateError, strategySummary)
         return failWithStrategy(duplicateError, strategySummary)
       }
       if (reservation?.acquired) {
@@ -484,12 +510,15 @@ export function createPlaceOrderExecutor({
           kind: 'risk_rejected'
           riskContext?: RiskCheckContext
           riskResult: RiskCheckResult
+          riskCheckedAtMs: number
         }
       | {
           kind: 'executed'
           riskContext?: RiskCheckContext
           riskResult: RiskCheckResult
           orderResult: CryptoOrderResult
+          riskCheckedAtMs: number
+          brokerSubmittedAtMs: number
         }
 
     let lockedExecution: LockedExecution
@@ -515,19 +544,28 @@ export function createPlaceOrderExecutor({
             options.riskConfig,
             riskContext,
           )
+          const riskCheckedAtMs = Date.now()
 
           if (!riskResult.approved) {
-            return { kind: 'risk_rejected', riskContext, riskResult }
+            return { kind: 'risk_rejected', riskContext, riskResult, riskCheckedAtMs }
           }
 
+          const brokerSubmittedAtMs = Date.now()
           const orderResult = await engine.placeOrder(effectiveRequest)
-          return { kind: 'executed', riskContext, riskResult, orderResult }
+          return {
+            kind: 'executed',
+            riskContext,
+            riskResult,
+            orderResult,
+            riskCheckedAtMs,
+            brokerSubmittedAtMs,
+          }
         },
       )
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
       await finalizeIdempotency('failed', undefined, error)
-      await recordIntentFailure(options, intentId, error, strategySummary)
+      await recordIntentFailureEnsuringIntent(error, strategySummary, effectiveRequest)
       return failWithStrategy(error, strategySummary)
     }
 
@@ -535,6 +573,36 @@ export function createPlaceOrderExecutor({
     const riskResult = lockedExecution.riskResult
     if (lockedExecution.kind === 'risk_rejected') {
       const error = `risk: ${riskResult.reason ?? 'unknown reason'}`
+      const executionTelemetry: ExecutionTelemetry = {
+        signalTimestampMs,
+        dispatcherStartedAtMs,
+        riskCheckedAtMs: lockedExecution.riskCheckedAtMs,
+        expectedPrice,
+        signalToDispatchMs:
+          signalTimestampMs != null
+            ? lockedExecution.riskCheckedAtMs - signalTimestampMs
+            : null,
+        riskDecision: 'rejected',
+        riskReason: riskResult.reason ?? null,
+        forcedRetryIdempotency: forceRetryIdempotency,
+      }
+      await options.eventLog
+        ?.append('risk.rejected', {
+          commitId,
+          opIndex,
+          intentId,
+          symbol: req.symbol,
+          reason: riskResult.reason ?? 'risk gate rejected order',
+          details: riskResult.details,
+          executionTelemetry,
+        })
+        .catch(err => {
+          warnOnAncillaryFailure('eventLog.append.risk.rejected', err, {
+            commitId,
+            opIndex,
+            intentId,
+          })
+        })
       await options.onRiskRejected?.({
         operation: op,
         request: effectiveRequest,
@@ -542,12 +610,59 @@ export function createPlaceOrderExecutor({
         details: riskResult.details,
       })
       await finalizeIdempotency('failed', undefined, error)
-      await recordIntentFailure(options, intentId, error, strategySummary)
+      await recordIntentFailureEnsuringIntent(
+        error,
+        strategySummary,
+        effectiveRequest,
+        executionTelemetry,
+      )
       return failWithStrategy(error, strategySummary)
+    }
+    const executionTelemetry: ExecutionTelemetry = {
+      signalTimestampMs,
+      dispatcherStartedAtMs,
+      riskCheckedAtMs: lockedExecution.riskCheckedAtMs,
+      brokerSubmittedAtMs: lockedExecution.brokerSubmittedAtMs,
+      expectedPrice,
+      signalToDispatchMs:
+        signalTimestampMs != null
+          ? lockedExecution.brokerSubmittedAtMs - signalTimestampMs
+          : null,
+      signalToFirstFillMs:
+        signalTimestampMs != null &&
+        typeof lockedExecution.orderResult.firstFillAtMs === 'number'
+          ? lockedExecution.orderResult.firstFillAtMs - signalTimestampMs
+          : null,
+      signalToCompletedMs:
+        signalTimestampMs != null &&
+        typeof lockedExecution.orderResult.completedAtMs === 'number'
+          ? lockedExecution.orderResult.completedAtMs - signalTimestampMs
+          : null,
+      dispatchToFirstFillMs:
+        typeof lockedExecution.orderResult.firstFillAtMs === 'number'
+          ? lockedExecution.orderResult.firstFillAtMs -
+            lockedExecution.brokerSubmittedAtMs
+          : null,
+      dispatchToCompletedMs:
+        typeof lockedExecution.orderResult.completedAtMs === 'number'
+          ? lockedExecution.orderResult.completedAtMs -
+            lockedExecution.brokerSubmittedAtMs
+          : null,
+      partialFillRatio:
+        typeof lockedExecution.orderResult.filledSize === 'number' &&
+        typeof lockedExecution.orderResult.requestedSize === 'number' &&
+        lockedExecution.orderResult.requestedSize > 0
+          ? lockedExecution.orderResult.filledSize /
+            lockedExecution.orderResult.requestedSize
+          : null,
+      riskDecision: 'approved',
+      riskReason: null,
+      forcedRetryIdempotency: forceRetryIdempotency,
     }
     const orderResult = {
       ...lockedExecution.orderResult,
       strategy: strategySummary,
+      executionTelemetry,
     }
 
     await safeRunAfterHook(options, {
@@ -590,7 +705,33 @@ export function createPlaceOrderExecutor({
             })
           })
       }
+      orderResult.executionTelemetry = {
+        ...orderResult.executionTelemetry,
+        slippagePct: slipCheck.slippagePct,
+        slippageBps:
+          typeof slipCheck.slippagePct === 'number'
+            ? slipCheck.slippagePct * 10_000
+            : undefined,
+        slippageLimitPct: slipCheck.limit,
+      }
     }
+    await options.eventLog
+      ?.append('execution.telemetry', {
+        commitId,
+        opIndex,
+        intentId,
+        symbol: req.symbol,
+        orderId: orderResult.orderId,
+        success: orderResult.success,
+        executionTelemetry: orderResult.executionTelemetry,
+      })
+      .catch(err => {
+        warnOnAncillaryFailure('eventLog.append.execution.telemetry', err, {
+          commitId,
+          opIndex,
+          intentId,
+        })
+      })
 
     if (options.intentLedger) {
       await options.intentLedger
@@ -603,6 +744,7 @@ export function createPlaceOrderExecutor({
           error: orderResult.error,
           completedAt: Date.now(),
           strategy: strategySummary,
+          executionTelemetry: orderResult.executionTelemetry,
         })
         .catch(err => {
           warnOnAncillaryFailure('intentLedger.recordResult', err, {
@@ -626,6 +768,7 @@ export function createPlaceOrderExecutor({
         walletResult: {
           success: false,
           error: orderResult.error,
+          executionTelemetry: orderResult.executionTelemetry,
           ...(strategySummary ? { strategy: strategySummary } : {}),
         },
       }
@@ -653,8 +796,10 @@ export function createPlaceOrderExecutor({
           idempotencyKey: orderResult.idempotencyKey ?? idempotencyKey,
           firstFillAtMs: orderResult.firstFillAtMs,
           completedAtMs: orderResult.completedAtMs,
+          executionTelemetry: orderResult.executionTelemetry,
           ...(strategySummary ? { strategy: strategySummary } : {}),
         },
+        executionTelemetry: orderResult.executionTelemetry,
         ...(strategySummary ? { strategy: strategySummary } : {}),
       },
     }
@@ -666,6 +811,7 @@ async function recordIntentFailure(
   intentId: string,
   error: string,
   strategy?: NonNullable<CryptoOrderResult['strategy']>,
+  executionTelemetry?: ExecutionTelemetry,
 ): Promise<void> {
   await options.intentLedger
     ?.recordResult({
@@ -674,6 +820,7 @@ async function recordIntentFailure(
       error,
       completedAt: Date.now(),
       strategy,
+      executionTelemetry,
     })
     .catch(err => {
       warnOnAncillaryFailure('intentLedger.recordResult.failure', err, {

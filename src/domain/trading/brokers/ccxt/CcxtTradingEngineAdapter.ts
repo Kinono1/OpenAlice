@@ -10,6 +10,8 @@ import type { EventLog } from '../../../../core/event-log.js'
 import { createCryptoOperationDispatcher } from '../../operation-dispatcher.core.js'
 import { evaluateFreezeWindows } from '../../../strategy/event-calendar/index.js'
 import { evaluateRuntimeStrategySnapshotFromSources } from '../../../strategy/runtime-service.js'
+import { snapshotToStrategyDecision } from '../../../strategy/execution-decision.js'
+import type { StrategyDecision } from '../../../strategy/decision-types.js'
 import {
   createUnavailableStrategyDataProvenance,
   type StrategyExecutionSummary,
@@ -29,8 +31,10 @@ import type {
 } from '../../operation-dispatcher.types.js'
 import type { CryptoClientLike } from '../../../market-data/client/types.js'
 import { DecisionTicketStore } from '../../decision-ticket.js'
+import { getExchangeCapability } from '../../exchange-capabilities.js'
 import { TradeIdempotencyStore } from '../../idempotency-store.js'
 import { IntentLedger } from '../../intent-ledger.js'
+import type { TradeIntent } from '../../intent-ledger.js'
 import { KillSwitch } from '../../kill-switch.js'
 import type { Operation as GitOperation } from '../../git/types.js'
 import type { Order as GitOrder } from '@traderalice/ibkr'
@@ -38,6 +42,10 @@ import type { PlaceOrderResult, Position, Quote } from '../types.js'
 import { CcxtBroker } from './CcxtBroker.js'
 import type { StrategyConfig } from '../../../../core/config.js'
 import type { AccountManager } from '../../account-manager.js'
+import {
+  isReleaseGateStatusBlocking,
+  loadReleaseGateStatus,
+} from '../../../../runtime/release_gate_status.js'
 
 export type CryptoExecutionMode = 'paper_only'
 export type KillSwitchDefaultPolicy = 'block_new_only' | 'block_all'
@@ -186,6 +194,7 @@ function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
         action: 'placeOrder',
         params: {
           symbol,
+          ticketId: op.ticketId,
           side: toDispatcherSide(op.order),
           type: toDispatcherOrderType(op.order),
           size,
@@ -205,6 +214,7 @@ function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
         action: 'closePosition',
         params: {
           symbol,
+          ticketId: op.ticketId,
           size: op.quantity ? op.quantity.toNumber() : undefined,
         },
       }
@@ -308,6 +318,91 @@ function buildFreezeBlockedStrategySummary(input: {
   }
 }
 
+function buildRuntimeBlockedStrategySummary(input: {
+  request: CryptoPlaceOrderRequest
+  strategyConfig?: StrategyConfig
+  freeze: ReturnType<typeof evaluateFreezeWindows> | null
+  expectedPrice?: number
+  reason: string
+}): StrategyExecutionSummary {
+  const requestedNotionalUsd = estimateRequestedNotionalUsd(
+    input.request,
+    input.expectedPrice,
+  )
+  return {
+    mode: 'blocked',
+    actionStatus: 'no-trade',
+    requestedNotionalUsd,
+    recommendedNotionalUsd: 0,
+    effectiveNotionalUsd: 0,
+    effectiveSize: null,
+    effectiveUsdSize: null,
+    assetLayer: input.strategyConfig?.positionSizing.defaultAssetLayer ?? 'core',
+    blockReason: input.reason,
+    reasons: [input.reason],
+    dataProvenance: createUnavailableStrategyDataProvenance(),
+    freeze: {
+      active: input.freeze?.active ?? false,
+      maxActionDuringFreeze: input.freeze?.maxActionDuringFreeze,
+      activeEvents: input.freeze?.activeWindows.map((window) => window.event.name) ?? [],
+    },
+  }
+}
+
+async function reconcilePendingTradingState(input: {
+  broker: CcxtBroker
+  intentLedger: IntentLedger
+  idempotencyStore: TradeIdempotencyStore
+  eventLog?: EventLog
+}): Promise<void> {
+  const entries = await input.intentLedger.readAll()
+  const intents = new Map<string, TradeIntent>()
+  const resolvedIntentIds = new Set<string>()
+  for (const entry of entries) {
+    if (entry.type === 'intent') {
+      const intent = entry.data as TradeIntent
+      intents.set(intent.intentId, intent)
+    } else if (entry.type === 'result') {
+      resolvedIntentIds.add(entry.data.intentId)
+    }
+  }
+
+  for (const intent of intents.values()) {
+    if (resolvedIntentIds.has(intent.intentId)) {
+      continue
+    }
+    let foundOrderId: string | null = null
+    if (intent.clientOrderId && intent.symbol) {
+      foundOrderId = await input.broker.findOrderIdByClientOrderId(intent.symbol, intent.clientOrderId)
+    }
+    await input.intentLedger.recordResult({
+      intentId: intent.intentId,
+      status: foundOrderId ? 'success' : 'failed',
+      orderId: foundOrderId ?? undefined,
+      error: foundOrderId ? undefined : 'startup_reconcile_unresolved',
+      completedAt: Date.now(),
+      strategy: intent.strategy,
+    })
+  }
+
+  const records = await input.idempotencyStore.listRecords()
+  for (const record of records) {
+    if (record.status !== 'in_progress') {
+      continue
+    }
+    let foundOrderId: string | null = null
+    if (record.ticketId && record.symbol) {
+      foundOrderId = await input.broker.findOrderIdByClientOrderId(record.symbol, `ticket:${record.ticketId}`)
+    }
+    await input.idempotencyStore.finalize({
+      key: record.key,
+      status: foundOrderId ? 'succeeded' : 'failed',
+      orderId: foundOrderId ?? undefined,
+      error: foundOrderId ? undefined : 'startup_reconcile_unresolved',
+    })
+  }
+}
+
 export class CcxtTradingEngineAdapter implements ICryptoTradingEngine {
   constructor(private readonly broker: CcxtBroker) {}
 
@@ -318,11 +413,22 @@ export class CcxtTradingEngineAdapter implements ICryptoTradingEngine {
     contract.localSymbol = contract.localSymbol || req.symbol
     contract.symbol = contract.symbol || req.symbol
 
+    const extraParams: Record<string, unknown> = {}
+    if (req.reduceOnly) {
+      extraParams.reduceOnly = true
+    }
+    if (req.idempotencyKey) {
+      const cap = getExchangeCapability(this.broker.meta.exchange)
+      if (cap.clientOrderIdField) {
+        extraParams[cap.clientOrderIdField] = req.idempotencyKey
+      }
+    }
+
     const result = await this.broker.placeOrder(
       contract,
       toGitOrder(contract, req),
       undefined,
-      req.reduceOnly ? { reduceOnly: true } : undefined,
+      Object.keys(extraParams).length > 0 ? extraParams : undefined,
     )
 
     return {
@@ -476,6 +582,12 @@ export async function createCcxtExecutionBridge(input: {
     idempotencyStorePath,
     config.idempotencyTtlMs,
   )
+  await reconcilePendingTradingState({
+    broker: input.broker,
+    intentLedger,
+    idempotencyStore,
+    eventLog: input.eventLog,
+  })
   const ticketStore = new DecisionTicketStore({
     required: config.requireDecisionTicket,
     ttlMs: config.ticketTtlMs,
@@ -492,10 +604,59 @@ export async function createCcxtExecutionBridge(input: {
     exchangeId: input.broker.meta.exchange,
     eventLog: input.eventLog,
     preparePlaceOrder: async ({ request, expectedPrice }) => {
-      if (!strategyRuntimeIntegrationEnabled || request.reduceOnly) {
+      const freeze = evaluateStrategyFreeze()
+      if (request.reduceOnly) {
         return { approved: true }
       }
-      const freeze = evaluateStrategyFreeze()
+
+      if (config.mode === 'paper_only' && !input.broker.isPaperEnvironment()) {
+        const reason = 'paper_only requires sandbox/demo broker target'
+        return {
+          approved: false,
+          reason,
+          strategy: buildRuntimeBlockedStrategySummary({
+            request,
+            strategyConfig: input.strategyConfig,
+            freeze,
+            expectedPrice,
+            reason,
+          }),
+        }
+      }
+
+      const releaseGateBlocking = isReleaseGateStatusBlocking(
+        await loadReleaseGateStatus(),
+        'paper',
+      )
+      if (config.mode === 'paper_only' && releaseGateBlocking.blocking) {
+        const reason = releaseGateBlocking.reason ?? 'paper_release_gate_failed'
+        return {
+          approved: false,
+          reason,
+          strategy: buildRuntimeBlockedStrategySummary({
+            request,
+            strategyConfig: input.strategyConfig,
+            freeze,
+            expectedPrice,
+            reason,
+          }),
+        }
+      }
+
+      if (!strategyRuntimeIntegrationEnabled) {
+        const reason = 'strategy_runtime_integration_disabled'
+        return {
+          approved: false,
+          reason,
+          strategy: buildRuntimeBlockedStrategySummary({
+            request,
+            strategyConfig: input.strategyConfig,
+            freeze,
+            expectedPrice,
+            reason,
+          }),
+        }
+      }
 
       if (!input.accountManager || !input.cryptoClient) {
         if (freeze?.active) {
@@ -517,14 +678,16 @@ export async function createCcxtExecutionBridge(input: {
             }),
           }
         }
+        const reason = 'missing_strategy_runtime_dependencies'
         return {
-          approved: true,
-          strategy: buildFallbackStrategySummary({
+          approved: false,
+          reason,
+          strategy: buildRuntimeBlockedStrategySummary({
             request,
             strategyConfig: input.strategyConfig,
             freeze,
             expectedPrice,
-            reason: 'missing_strategy_runtime_dependencies',
+            reason,
           }),
         }
       }
@@ -549,12 +712,25 @@ export async function createCcxtExecutionBridge(input: {
         })
         const strategy = snapshot.executionPreview
         if (!strategy) {
-          return { approved: true }
-        }
-        if (strategy.mode === 'blocked') {
+          const reason = 'strategy_execution_preview_missing'
           return {
             approved: false,
-            reason: `strategy action ${strategy.actionStatus} blocked new open`,
+            reason,
+            strategy: buildRuntimeBlockedStrategySummary({
+              request,
+              strategyConfig: input.strategyConfig,
+              freeze,
+              expectedPrice,
+              reason,
+            }),
+          }
+        }
+        if (strategy.mode === 'blocked' || strategy.mode === 'fallback') {
+          return {
+            approved: false,
+            reason: strategy.mode === 'fallback'
+              ? `strategy sizing unavailable for ${strategy.actionStatus} new open`
+              : `strategy action ${strategy.actionStatus} blocked new open`,
             details: {
               actionStatus: strategy.actionStatus,
               mode: strategy.mode,
@@ -598,14 +774,16 @@ export async function createCcxtExecutionBridge(input: {
             }),
           }
         }
+        const reason = `runtime-evaluation-failed:${message}`
         return {
-          approved: true,
-          strategy: buildFallbackStrategySummary({
+          approved: false,
+          reason,
+          strategy: buildRuntimeBlockedStrategySummary({
             request,
             strategyConfig: input.strategyConfig,
             freeze,
             expectedPrice,
-            reason: `runtime-evaluation-failed:${message}`,
+            reason,
           }),
         }
       }

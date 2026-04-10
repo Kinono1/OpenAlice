@@ -314,11 +314,40 @@ export interface StrategyConfig {
     enabled: boolean
     events: StrategyMacroEvent[]
   }
+  regime?: {
+    hmm?: {
+      enabled: boolean
+      minObservations: number
+      seedObservations: number
+      stableObservations: number
+      trainingLookback: number
+      maxIterations: number
+      tolerance: number
+      regularization: number
+      confidenceFloor: number
+      anomalyZScore: number
+      zScoreWindow: number
+      realizedVolWindow: number
+      volumeBaselineWindow: number
+    }
+  }
   factors: {
     fundingRate: { enabled: boolean; weight: number }
     basis: { enabled: boolean; weight: number }
     volumeSurge: { enabled: boolean; weight: number }
     momentumComposite: { enabled: boolean; weight: number }
+    meanReversion: { enabled: boolean; weight: number }
+    volatilityRegime: {
+      enabled: boolean
+      weight: number
+      componentWeights?: { first: number; second: number; third: number }
+    }
+    liquidationPressure: {
+      enabled: boolean
+      weight: number
+      componentWeights?: { first: number; second: number; third: number }
+    }
+    crossTimeframeDivergence: { enabled: boolean; weight: number }
   }
   positionSizing: {
     enabled: boolean
@@ -335,10 +364,46 @@ export interface StrategyConfig {
       requiresCoreNotRiskOff: boolean
     }>
   }
+  research?: {
+    ic?: {
+      enabled: boolean
+      minMeanIc: number
+      minIcIr: number
+      minWinRate: number
+      quantiles: number
+      decayHorizons: number[]
+    }
+  }
+  ml?: {
+    enabled: boolean
+    architecture: 'lstm' | 'patchtst'
+    modelPath?: string
+    lookbackSteps: number
+    forecastHorizonHours: number
+    decisionThreshold: number
+  }
+  metaLabeling?: {
+    enabled: boolean
+    upperBarrierPct: number
+    lowerBarrierPct: number
+    maxHoldingBars: number
+    minConfidenceToTrade: number
+  }
 }
 
 export interface StrategyRuntimeSummary {
   enabled: boolean
+  alphaPool: {
+    available: boolean
+    path: string
+    generatedAt: string | null
+    totalCandidates: number
+    acceptedCount: number
+    qcmCandidateCount: number
+    shadowOnlyCount: number
+    shadowEligibleCount: number
+    bestOosIc: number | null
+  }
   governance: StrategyConfig['governance']
   runtime: StrategyConfig['runtime']
   eventCalendar: {
@@ -400,6 +465,25 @@ export interface StrategyEvaluationSnapshot {
     consensusScore: number
     decisionStrength: string
   }
+  regimeEvaluation?: {
+    regime: 'spot-defensive' | 'range-rotation' | 'trend-follow' | 'event-risk-freeze'
+    confidence: number
+    reasons: string[]
+    method?: 'threshold' | 'hmm'
+    fallbackRegime?: 'spot-defensive' | 'range-rotation' | 'trend-follow' | 'event-risk-freeze'
+  }
+  hmmRegime?: {
+    state: 0 | 1 | 2 | 3
+    stateName: 'bull' | 'bear' | 'calm' | 'stress'
+    stateProbs: number[]
+    confidence: number
+    logLikelihood: number
+    anomaly: boolean
+    reasons: string[]
+    method: 'threshold' | 'hmm'
+    coldStartMode: 'threshold_only' | 'threshold_seeded' | 'regularized_em' | 'standard_em'
+    effectiveSampleSize: number
+  } | null
   freeze: {
     active: boolean
     marketScope: 'crypto' | 'a-share'
@@ -423,6 +507,15 @@ export interface StrategyEvaluationSnapshot {
     openInterestValue: number | null
     liquidationCount24h: number | null
     liquidationNotional24h: number | null
+  }
+  researchDiagnostics?: {
+    hmmEnabled: boolean
+    observationCount: number
+    coldStartMode?: 'threshold_only' | 'threshold_seeded' | 'regularized_em' | 'standard_em'
+    factorDirectionMultipliers: Record<string, number>
+    factorWeightMultipliers: Record<string, number>
+    effectiveFactorValues: Record<string, number>
+    effectiveFactorWeights: Record<string, number>
   }
   dataProvenance?: {
     candles: {

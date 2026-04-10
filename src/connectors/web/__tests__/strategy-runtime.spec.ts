@@ -41,6 +41,10 @@ describe('strategy routes', () => {
         basis: { enabled: true, weight: 1 },
         volumeSurge: { enabled: true, weight: 1 },
         momentumComposite: { enabled: true, weight: 1 },
+        meanReversion: { enabled: true, weight: 1 },
+        volatilityRegime: { enabled: true, weight: 1 },
+        liquidationPressure: { enabled: true, weight: 1 },
+        crossTimeframeDivergence: { enabled: true, weight: 1 },
       },
       positionSizing: {
         enabled: true,
@@ -85,8 +89,10 @@ describe('strategy routes', () => {
     const body = await res.json() as Record<string, any>
     expect(body.enabled).toBe(true)
     expect(body.readiness.governanceReady).toBe(true)
-    expect(body.factors).toHaveLength(4)
+    expect(body.factors).toHaveLength(8)
     expect(body.runtime.marketScope).toBe('crypto')
+    expect(body.alphaPool.shadowOnlyCount).toBe(0)
+    expect(body.alphaPool.shadowEligibleCount).toBe(0)
   })
 
   it('evaluates a strategy snapshot from runtime sources', async () => {

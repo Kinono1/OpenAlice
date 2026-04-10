@@ -1,6 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono'
 import { readAccountsConfig, readStrategyConfig, writeConfigSection, type StrategyConfig } from '../../../core/config.js'
-import { buildStrategyRuntimeSummary } from '../../../domain/strategy/runtime.js'
+import { buildStrategyRuntimeSummaryWithPaperGate } from '../../../domain/strategy/runtime.js'
 import { evaluateRuntimeStrategySnapshotFromSources } from '../../../domain/strategy/runtime-service.js'
 import { createRequireAuth } from './security.js'
 import type { EngineContext } from '../../../core/types.js'
@@ -42,7 +42,7 @@ export function createStrategyRoutes(ctx: EngineContext, opts?: StrategyRouteOpt
   app.get('/runtime', async (c) => {
     try {
       const config = await readStrategyConfig()
-      return c.json(buildStrategyRuntimeSummary(config))
+      return c.json(await buildStrategyRuntimeSummaryWithPaperGate(config))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }

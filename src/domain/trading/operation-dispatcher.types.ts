@@ -52,6 +52,7 @@ export interface CryptoOrderResult {
   idempotencyKey?: string
   retryOfOrderId?: string
   strategy?: StrategyExecutionSummary
+  executionTelemetry?: ExecutionTelemetry
 }
 
 export interface CryptoOrder {
@@ -211,6 +212,26 @@ export interface PlaceOrderPreparationResult {
 
 export interface PlaceOrderResultHookInput extends PlaceOrderHookInput {
   result: CryptoOrderResult
+}
+
+export interface ExecutionTelemetry {
+  signalTimestampMs?: number
+  dispatcherStartedAtMs: number
+  riskCheckedAtMs?: number
+  brokerSubmittedAtMs?: number
+  expectedPrice?: number
+  slippagePct?: number
+  slippageBps?: number
+  slippageLimitPct?: number
+  signalToDispatchMs?: number | null
+  signalToFirstFillMs?: number | null
+  signalToCompletedMs?: number | null
+  dispatchToFirstFillMs?: number | null
+  dispatchToCompletedMs?: number | null
+  partialFillRatio?: number | null
+  riskDecision: 'approved' | 'rejected'
+  riskReason?: string | null
+  forcedRetryIdempotency?: boolean
 }
 
 export interface OperationOutcome {

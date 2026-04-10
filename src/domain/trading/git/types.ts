@@ -20,9 +20,9 @@ export type CommitHash = string
 export type OperationAction = Operation['action']
 
 export type Operation =
-  | { action: 'placeOrder'; contract: Contract; order: Order; tpsl?: TpSlParams }
+  | { action: 'placeOrder'; contract: Contract; order: Order; tpsl?: TpSlParams; ticketId?: string }
   | { action: 'modifyOrder'; orderId: string; changes: Partial<Order> }
-  | { action: 'closePosition'; contract: Contract; quantity?: Decimal }
+  | { action: 'closePosition'; contract: Contract; quantity?: Decimal; ticketId?: string }
   | { action: 'cancelOrder'; orderId: string; orderCancel?: OrderCancel }
   | { action: 'syncOrders' }
 

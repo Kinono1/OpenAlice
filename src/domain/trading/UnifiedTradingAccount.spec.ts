@@ -356,13 +356,13 @@ describe('UTA — stagePlaceOrder', () => {
     })
   })
 
-  it('omits tpsl when neither TP nor SL provided', () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
-    const staged = uta.status().staged
-    const op = staged[0] as Extract<Operation, { action: 'placeOrder' }>
-    expect(op.tpsl).toBeUndefined()
+
+  it('rejects stagePlaceOrder when aliceId belongs to another account', () => {
+    expect(() =>
+      uta.stagePlaceOrder({ aliceId: 'other-account|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 }),
+    ).toThrow('belongs to account "other-account"')
   })
-})
+  })
 
 // ==================== stageModifyOrder ====================
 
@@ -417,11 +417,10 @@ describe('UTA — stageClosePosition', () => {
     expect(op.quantity!.toNumber()).toBe(5)
   })
 
-  it('stages with undefined quantity for full close', () => {
-    uta.stageClosePosition({ aliceId: 'mock-paper|AAPL' })
-    const staged = uta.status().staged
-    const op = staged[0] as Extract<Operation, { action: 'closePosition' }>
-    expect(op.quantity).toBeUndefined()
+  it('rejects stageClosePosition when aliceId belongs to another account', () => {
+    expect(() => uta.stageClosePosition({ aliceId: 'other-account|AAPL', qty: 1 })).toThrow(
+      'belongs to account "other-account"',
+    )
   })
 })
 
@@ -505,6 +504,63 @@ describe('UTA — sync', () => {
     expect(result.updates[0].currentStatus).toBe('filled')
   })
 
+  it('treats an immediate second sync after fill as a no-op without growing history', async () => {
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: 10, lmtPrice: 150 })
+    uta.commit('limit buy')
+    const pushResult = await uta.push()
+    const orderId = pushResult.submitted[0]?.orderId
+    expect(orderId).toBeDefined()
+
+    broker.fillPendingOrder(orderId!, 149)
+
+    const firstSync = await uta.sync()
+    expect(firstSync.updatedCount).toBe(1)
+    expect(firstSync.updates).toHaveLength(1)
+    expect(firstSync.updates[0].orderId).toBe(orderId)
+    expect(firstSync.updates[0].currentStatus).toBe('filled')
+
+    const commitCountAfterFirstSync = uta.status().commitCount
+    const logLengthAfterFirstSync = uta.log().length
+
+    const secondSync = await uta.sync()
+    expect(secondSync.updatedCount).toBe(0)
+    expect(secondSync.updates).toEqual([])
+    expect(uta.status().commitCount).toBe(commitCountAfterFirstSync)
+    expect(uta.log().length).toBe(logLengthAfterFirstSync)
+    expect(uta.getPendingOrderIds()).toEqual([])
+  })
+
+  it('collapses duplicate pending order ids before querying the broker', async () => {
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: 10, lmtPrice: 150 })
+    uta.commit('limit buy')
+    const pushResult = await uta.push()
+    const orderId = pushResult.submitted[0]?.orderId
+    expect(orderId).toBeDefined()
+
+    broker.fillPendingOrder(orderId!, 149)
+
+    vi.spyOn(uta.git, 'getPendingOrderIds').mockReturnValue([
+      { orderId: orderId!, symbol: 'AAPL' },
+      { orderId: orderId!, symbol: 'AAPL' },
+    ])
+    const getOrderSpy = vi.spyOn(broker, 'getOrder')
+    const getOrdersSpy = vi.spyOn(broker, 'getOrders')
+    getOrderSpy.mockClear()
+    getOrdersSpy.mockClear()
+
+    const result = await uta.sync()
+
+    expect(result.updatedCount).toBe(1)
+    expect(result.updates).toHaveLength(1)
+    expect(result.updates[0].orderId).toBe(orderId)
+    expect(getOrderSpy).toHaveBeenCalledTimes(2)
+    expect(getOrdersSpy).toHaveBeenCalledWith([orderId])
+  })
+
   it('does not update when pending order not found in broker', async () => {
     const { uta, broker } = createUTA()
 
@@ -551,6 +607,33 @@ describe('UTA — guards', () => {
     await uta.push()
 
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies guards before buildExecuteOperation bridges mapped execution', async () => {
+    const bridgeExecute = vi.fn().mockResolvedValue({ success: true, bridged: true })
+    const { uta } = createUTA(undefined, {
+      guards: [{ type: 'symbol-whitelist', options: { symbols: ['AAPL'] } }],
+      buildExecuteOperation: (_fallback) => async (operation) => {
+        if (operation.action === 'placeOrder') {
+          return bridgeExecute(operation)
+        }
+        return { success: true }
+      },
+    })
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|TSLA',
+      symbol: 'TSLA',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: 10,
+    })
+    uta.commit('buy TSLA through bridge (should be blocked)')
+    const result = await uta.push()
+
+    expect(result.rejected).toHaveLength(1)
+    expect(result.rejected[0].error).toContain('guard')
+    expect(bridgeExecute).not.toHaveBeenCalled()
   })
 })
 

@@ -310,7 +310,7 @@ export class MockBroker implements IBroker {
     order.orderType = 'MKT'
     order.totalQuantity = quantity ?? pos.quantity
 
-    return this.placeOrder(pos.contract, order, { reduceOnly: true })
+    return this.placeOrder(pos.contract, order)
   }
 
   // ---- Queries ----
