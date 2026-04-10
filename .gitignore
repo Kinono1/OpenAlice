@@ -31,3 +31,13 @@ packages/ibkr/ref/source/cppclient/
 packages/ibkr/ref/samples/Java/
 packages/ibkr/ref/samples/Cpp/
 packages/ibkr/ref/CMakeLists.txt
+
+# Local research artifacts
+research/cache/
+research/**/__pycache__/
+scripts/**/__pycache__/
+
+# Local planning scratch files
+task_plan.md
+findings.md
+progress.md

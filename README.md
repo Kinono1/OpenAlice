@@ -194,6 +194,25 @@ Persona and heartbeat prompts use a **default + user override** pattern:
 
 On first run, defaults are auto-copied to the user override path. Edit the user files to customize without touching version control.
 
+## Branch Workflow
+
+This checkout currently uses a forward-port workflow while `work/kino-mainline` is being rebuilt on top of the latest `master` architecture.
+
+- `master`: official upstream sync branch
+- `work/kino-mainline`: primary product development branch
+- `integrate/master-forward-port-20260403`: forward-port and validation branch
+
+Policy commands:
+
+```bash
+pnpm branch:policy:show
+pnpm branch:policy:check
+pnpm branch:policy:can-merge -- --source work/kino-mainline --target integrate/master-forward-port-20260403
+pnpm branch:policy:install-hooks
+```
+
+See [docs/branch-workflow-policy.md](docs/branch-workflow-policy.md) for the full policy.
+
 ## Project Structure
 
 ```

@@ -13,7 +13,12 @@
     "start": "node dist/main.js",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "branch:policy:show": "node scripts/branch_policy.mjs --show",
+    "branch:policy:check": "node scripts/branch_policy.mjs --check-current",
+    "branch:policy:can-merge": "node scripts/branch_policy.mjs --check-merge",
+    "branch:policy:enforce-push": "node scripts/branch_policy_enforce_push.mjs",
+    "branch:policy:install-hooks": "bash scripts/branch_policy_install_hooks.sh"
   },
   "keywords": [
     "trading",
