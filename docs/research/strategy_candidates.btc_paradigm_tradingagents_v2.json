@@ -1,23 +1,18 @@
 {
   "schemaVersion": "strategy_candidates.v1",
-  "generatedAt": "2026-04-01T05:18:45.114Z",
+  "generatedAt": "2026-04-11T06:34:54.299Z",
   "batchId": "btc_paradigm_tradingagents_v2",
   "batchGoal": "Materialize tradingagents_research_sidecar_v2 BTC candidate family for fixed-policy route comparison.",
   "notes": [
-    "source_run_id=20260303T113824Z",
-    "source_trial=0",
-    "source_template=baseline+baseline+baseline",
-    "source_id=btc_phaseb_baseline_neighborhood",
-    "neighborhood_seed_manifest=docs/research/strategy_candidates.route_batch8_btc_phaseb_baseline.v1.json",
-    "neighborhood_best_trial=34",
-    "mutation=HC001:34_65_ls->34_70_ls",
-    "mutation=HC002:34_75_ls->34_80_ls",
+    "source_id=btc_paradigm_clean_base",
+    "purpose=neutral_btc_paradigm_comparison_scaffold",
+    "protocol_profile=phaseb_native_v1",
     "multiple_testing_unit=candidate",
     "source_paradigm=tradingagents_research_sidecar_v2",
     "source_id=tradingagents_research_sidecar_v2",
     "input_artifact=/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/data/research/strategy/paradigms/tradingagents/btc_research_decision.latest.json",
-    "donor_action=bearish",
-    "donor_signal=-1",
+    "donor_action=bullish",
+    "donor_signal=1",
     "candidate_cap=1",
     "compiler_mode=single_donor_signal"
   ],
@@ -59,20 +54,21 @@
   },
   "candidates": [
     {
-      "strategyId": "TA_DONOR_SHORT_SIGNAL",
-      "strategyName": "ta_donor_short_signal",
+      "strategyId": "TA_DONOR_LONG_SIGNAL",
+      "strategyName": "ta_donor_long_signal",
       "strategy": "trend",
       "applicableSymbols": [
         "BTC/USD"
       ],
       "hypothesisFamily": "btc_usd_tradingagents_donor_signal_family",
-      "correlationBucket": "btc_usd_ta_donor_short_signal",
+      "correlationBucket": "btc_usd_ta_donor_long_signal",
+      "role": "donor",
       "params": {
         "trendFastPeriod": 21,
         "trendSlowPeriod": 70,
         "trendConfirmBars": 1,
         "trendMinDiffPct": 0.005,
-        "allowShort": true
+        "allowShort": false
       }
     }
   ]
