@@ -1,8 +1,8 @@
 import {
   BBANDS,
   RSI,
-} from "../analysis-kit/indicator/functions/technical.js";
-import { SMA } from "../analysis-kit/indicator/functions/statistics.js";
+} from "../../domain/analysis/indicator/functions/technical.js";
+import { SMA } from "../../domain/analysis/indicator/functions/statistics.js";
 import type { MarketData } from "../analysis-kit/data/interfaces.js";
 import type {
   PositionSignal,

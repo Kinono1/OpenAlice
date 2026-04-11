@@ -157,18 +157,23 @@ function classifyRegime(candles: MarketData[], index: number, params: ResolvedSt
   return { label, volatilityPct, trendStrengthPct }
 }
 
+function getRegimeClassificationMinimumBars(params: ResolvedStrategyParams): number {
+  return Math.max(
+    2,
+    params.regimeFastPeriod,
+    params.regimeSlowPeriod,
+    params.regimeAtrPeriod + 1,
+    params.regimeVolWindow + 1,
+  )
+}
+
 export function classifyStrategyRegimeSnapshot(input: {
   candles: MarketData[]
   index: number
   params?: StrategyParams
 }): StrategyRegimeSnapshot {
   const resolved = resolveStrategyParams(input.params)
-  const requiredBars = Math.max(
-    2,
-    resolved.regimeVolWindow + 1,
-    resolved.regimeAtrPeriod + 1,
-    resolved.regimeSlowPeriod,
-  )
+  const requiredBars = getRegimeClassificationMinimumBars(resolved)
   if (input.index + 1 < requiredBars) {
     return {
       label: 'LowVolCarry',
@@ -189,7 +194,11 @@ function evaluateRegimeTrend(
   currentPosition: PositionSignal,
   params: ResolvedStrategyParams,
 ): StrategyDecision {
-  const regime = classifyRegime(candles, index, params)
+  const regime = classifyStrategyRegimeSnapshot({
+    candles,
+    index,
+    params,
+  })
   const trend = evaluateTrend(candles, index, currentPosition, params)
   const regimeAllowed = params.allowedEntryRegimes.includes(regime.label)
 
@@ -273,7 +282,7 @@ function evaluateFactorMeanReversion(
   params: ResolvedStrategyParams,
 ): StrategyDecision {
   const series = closes(candles, index)
-  const requiredBars = 169
+  const requiredBars = Math.max(169, getRegimeClassificationMinimumBars(params))
   if (series.length < requiredBars) {
     return {
       strategy: 'factorMeanReversion',
@@ -283,7 +292,11 @@ function evaluateFactorMeanReversion(
     }
   }
 
-  const regime = classifyRegime(candles, index, params)
+  const regime = classifyStrategyRegimeSnapshot({
+    candles,
+    index,
+    params,
+  })
   const signal = weightedMeanReversionSignal(series)
   const latestClose = series[series.length - 1]
   const entryThreshold = params.factorEntryThreshold
@@ -465,9 +478,7 @@ export function getStrategyMinimumBars(
   const trendBars = resolved.trendSlowPeriod + resolved.trendConfirmBars - 1
   const regimeBars = Math.max(
     trendBars,
-    resolved.regimeVolWindow + 1,
-    resolved.regimeAtrPeriod + 1,
-    resolved.regimeSlowPeriod,
+    getRegimeClassificationMinimumBars(resolved),
   )
   const meanReversionBars = Math.max(resolved.rsiPeriod + 1, resolved.bbPeriod)
   const breakoutBars = Math.max(
@@ -483,7 +494,7 @@ export function getStrategyMinimumBars(
     case 'meanReversion':
       return meanReversionBars
     case 'factorMeanReversion':
-      return Math.max(169, resolved.regimeVolWindow + 1, resolved.regimeSlowPeriod)
+      return Math.max(169, getRegimeClassificationMinimumBars(resolved))
     case 'breakout':
       return breakoutBars
     case 'ensemble':

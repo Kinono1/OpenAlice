@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { runStrategyBacktest } from './backtest.js'
-import { evaluateStrategy } from './strategies.js'
+import { evaluateStrategy, getStrategyMinimumBars } from './strategies.js'
 import type { MarketData, StrategyRegimeLabel } from './types.js'
 
 function makeCandles(length: number): MarketData[] {
@@ -29,6 +29,38 @@ function toMillisecondCandles(candles: MarketData[]): MarketData[] {
 }
 
 describe('factorMeanReversion strategy', () => {
+  it('increases minimum bars when regime indicators require more history', () => {
+    const minimumBars = getStrategyMinimumBars('factorMeanReversion', {
+      regimeFastPeriod: 220,
+      regimeSlowPeriod: 180,
+      regimeAtrPeriod: 60,
+      regimeVolWindow: 80,
+    })
+
+    expect(minimumBars).toBe(220)
+  })
+
+  it('stays flat when factor mean reversion lacks enough bars for regime classification', () => {
+    const candles = makeCandles(200)
+    const decision = evaluateStrategy({
+      strategy: 'factorMeanReversion',
+      candles,
+      index: candles.length - 1,
+      currentPosition: 0,
+      params: {
+        regimeFastPeriod: 220,
+        regimeSlowPeriod: 180,
+        regimeAtrPeriod: 60,
+        regimeVolWindow: 80,
+      },
+    })
+
+    expect(decision.strategy).toBe('factorMeanReversion')
+    expect(decision.signal).toBe(0)
+    expect(decision.reason).toBe('Not enough bars for factor mean reversion signal.')
+    expect(decision.indicators.requiredBars).toBe(220)
+  })
+
   it('emits a contrarian signal once enough history is available', () => {
     const candles = makeCandles(220)
     const decision = evaluateStrategy({
