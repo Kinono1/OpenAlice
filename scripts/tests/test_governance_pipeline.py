@@ -264,6 +264,16 @@ class TestGovernancePipeline(unittest.TestCase):
                         .replace("+00:00", "Z"),
                         "allowPaperTrading": True,
                         "allowLiveTrading": True,
+                        "result": "GO",
+                        "reasonCodes": ["INFO_RELEASE_GATE_PASS"],
+                        "checks": [
+                            {
+                                "name": "wfo",
+                                "status": "pass",
+                                "summary": "all windows passed",
+                                "metrics": {"failedWindows": 0, "windowCount": 15},
+                            }
+                        ],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -375,6 +385,22 @@ class TestGovernancePipeline(unittest.TestCase):
             self.assertGreater(
                 float(measured.get("transferPassRatioRolling14d", 0.0)), 0.0
             )
+            release_status = evidence_pack.get("releaseGateStatus", {})
+            self.assertEqual("GO", release_status.get("result"))
+            self.assertEqual(
+                ["INFO_RELEASE_GATE_PASS"], release_status.get("reasonCodes")
+            )
+            self.assertEqual(
+                [
+                    {
+                        "name": "wfo",
+                        "status": "pass",
+                        "summary": "all windows passed",
+                        "metrics": {"failedWindows": 0, "windowCount": 15},
+                    }
+                ],
+                release_status.get("checks"),
+            )
 
             hard_checks = evidence_pack.get("hardGateChecks", [])
             self.assertIsInstance(hard_checks, list)
@@ -453,6 +479,8 @@ class TestGovernancePipeline(unittest.TestCase):
             gate_dir.mkdir(parents=True, exist_ok=True)
 
             now = datetime.now(timezone.utc)
+            experiment_verdict = tmp_dir / "experiment_verdict.v2.json"
+            validation_runs = tmp_dir / "runs.json"
             release_gate_status = tmp_dir / "release_gate_status.json"
             release_gate_status.write_text(
                 json.dumps(
@@ -461,8 +489,22 @@ class TestGovernancePipeline(unittest.TestCase):
                         "generatedAt": now_utc_iso(),
                         "allowPaperTrading": False,
                         "allowLiveTrading": False,
-                        "failedChecks": ["significance"],
+                        "failedChecks": [],
                         "warningChecks": [],
+                        "result": "NO_GO",
+                        "reasonCodes": [
+                            "HARD_MEAN_PBO_THRESHOLD_FAIL",
+                            "HARD_RELEASE_GATE_BLOCKED",
+                        ],
+                        "checks": [
+                            {"name": "wfo", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                            {"name": "significance", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                            {"name": "risk_simulation", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                            {"name": "execution_quality", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                            {"name": "ramp_up", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                            {"name": "regime_shift", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                        ],
+                        "sourceReportPath": str(validation_runs),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -471,7 +513,137 @@ class TestGovernancePipeline(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            experiment_verdict = tmp_dir / "experiment_verdict.v2.json"
+            freeze_manifest_path = tmp_dir / "freeze_manifest.json"
+            validation_runs.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "strategy_validation_runs.v1",
+                        "generatedAt": now_utc_iso(),
+                        "symbols": [
+                            {
+                                "symbol": "BTC/USD",
+                                "result": "NO_GO",
+                                "reasonCodes": [
+                                    "HARD_FDR_THRESHOLD_FAIL",
+                                    "HARD_NO_CANDIDATE_PASS",
+                                ],
+                                "leader": {
+                                    "strategyId": "S1",
+                                    "strategyName": "demo",
+                                    "status": "fail",
+                                    "failureReasons": [
+                                        "HARD_FDR_THRESHOLD_FAIL",
+                                        "HARD_RELEASE_GATE_BLOCKED",
+                                    ],
+                                    "blockerSummary": {
+                                        "primaryBlocker": "fdr",
+                                        "fdr": {
+                                            "passed": False,
+                                            "qValue": 0.4,
+                                            "threshold": 0.1,
+                                        },
+                                        "releaseGate": {
+                                            "allowPaperTrading": False,
+                                            "allowLiveTrading": False,
+                                            "failedChecks": ["wfo"],
+                                        },
+                                        "wfo": {
+                                            "passed": False,
+                                            "failedWindows": 11,
+                                            "windowCount": 15,
+                                            "failedWindowRatio": 11 / 15,
+                                        },
+                                    },
+                                },
+                                "candidates": [
+                                    {
+                                        "strategyId": "S1",
+                                        "strategyName": "demo",
+                                        "status": "fail",
+                                        "failureReasons": [
+                                            "HARD_FDR_THRESHOLD_FAIL",
+                                            "HARD_RELEASE_GATE_BLOCKED",
+                                        ],
+                                        "blockerSummary": {
+                                            "primaryBlocker": "fdr",
+                                            "fdr": {
+                                                "passed": False,
+                                                "qValue": 0.4,
+                                                "threshold": 0.1,
+                                            },
+                                            "releaseGate": {
+                                                "allowPaperTrading": False,
+                                                "allowLiveTrading": False,
+                                                "failedChecks": ["wfo"],
+                                            },
+                                            "wfo": {
+                                                "passed": False,
+                                                "failedWindows": 11,
+                                                "windowCount": 15,
+                                                "failedWindowRatio": 11 / 15,
+                                            },
+                                        },
+                                    },
+                                    {
+                                        "strategyId": "S2",
+                                        "strategyName": "demo2",
+                                        "status": "fail",
+                                        "failureReasons": ["HARD_FDR_THRESHOLD_FAIL"],
+                                        "blockerSummary": {
+                                            "primaryBlocker": "fdr",
+                                            "fdr": {
+                                                "passed": False,
+                                                "qValue": 0.4,
+                                                "threshold": 0.1,
+                                            },
+                                        },
+                                    },
+                                    {
+                                        "strategyId": "S3",
+                                        "strategyName": "demo3",
+                                        "status": "fail",
+                                        "failureReasons": ["HARD_RELEASE_GATE_BLOCKED"],
+                                        "blockerSummary": {
+                                            "primaryBlocker": "releaseGate",
+                                            "releaseGate": {
+                                                "allowPaperTrading": False,
+                                                "allowLiveTrading": False,
+                                                "failedChecks": ["wfo"],
+                                            },
+                                        },
+                                    },
+                                ],
+                            }
+                        ],
+                        "portfolio": {
+                            "result": "NO_GO",
+                            "reasonCodes": [
+                                "HARD_MEAN_PBO_THRESHOLD_FAIL",
+                                "HARD_RELEASE_GATE_BLOCKED",
+                            ],
+                            "championSet": [],
+                            "releaseGate": {
+                                "allowPaperTrading": False,
+                                "allowLiveTrading": False,
+                                "failedChecks": [],
+                                "warningChecks": [],
+                                "checks": [
+                                    {"name": "wfo", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                                    {"name": "significance", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                                    {"name": "risk_simulation", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                                    {"name": "execution_quality", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                                    {"name": "ramp_up", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                                    {"name": "regime_shift", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                                ],
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             experiment_verdict.write_text(
                 json.dumps(
                     {
@@ -511,7 +683,7 @@ class TestGovernancePipeline(unittest.TestCase):
                             }
                         ],
                         "outputPaths": {
-                            "validationRuns": str(tmp_dir / "runs.json"),
+                            "validationRuns": str(validation_runs),
                             "releaseGateStatus": str(release_gate_status),
                         },
                     },
@@ -553,13 +725,6 @@ class TestGovernancePipeline(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            freeze_manifest_path = tmp_dir / "freeze_manifest.json"
-            freeze_manifest_path.write_text(
-                json.dumps(self.make_freeze_manifest(), ensure_ascii=False, indent=2)
-                + "\n",
-                encoding="utf-8",
-            )
-
             build_proc = run_script(
                 [
                     sys.executable,
@@ -577,6 +742,97 @@ class TestGovernancePipeline(unittest.TestCase):
                 ]
             )
             self.assertEqual(0, build_proc.returncode, msg=build_proc.stderr)
+
+            evidence_pack = json.loads(
+                (packet_dir / "evidence_pack.json").read_text(encoding="utf-8")
+            )
+            experiment_section = evidence_pack.get("experimentVerdict", {})
+            self.assertEqual("NO_GO", experiment_section.get("result"))
+            self.assertEqual(
+                {"kind": "validation_runs", "path": str(validation_runs)},
+                experiment_section.get("symbolDiagnosticsSource"),
+            )
+            symbol_diagnostics = experiment_section.get("symbolDiagnostics", [])
+            self.assertEqual(1, len(symbol_diagnostics))
+            self.assertEqual("BTC/USD", symbol_diagnostics[0].get("symbol"))
+            self.assertEqual("fdr", symbol_diagnostics[0].get("primaryBlocker"))
+            top_release_gate = evidence_pack.get("releaseGateStatus", {})
+            self.assertEqual("packet/release_gate_status.json", top_release_gate.get("path"))
+            self.assertEqual("NO_GO", top_release_gate.get("result"))
+            self.assertEqual([], top_release_gate.get("failedChecks"))
+            self.assertEqual([], top_release_gate.get("warningChecks"))
+            self.assertEqual(
+                ["HARD_MEAN_PBO_THRESHOLD_FAIL", "HARD_RELEASE_GATE_BLOCKED"],
+                top_release_gate.get("reasonCodes"),
+            )
+            self.assertEqual(str(validation_runs), top_release_gate.get("sourceReportPath"))
+            self.assertEqual(
+                [
+                    {"name": "wfo", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "significance", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "risk_simulation", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "execution_quality", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "ramp_up", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "regime_shift", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                ],
+                top_release_gate.get("checks"),
+            )
+            blocker_diagnostics = evidence_pack.get("blockerDiagnostics", {})
+            self.assertEqual("NO_GO", blocker_diagnostics.get("summary", {}).get("result"))
+            self.assertEqual(1, blocker_diagnostics.get("summary", {}).get("blockedSymbolCount"))
+            self.assertGreaterEqual(
+                blocker_diagnostics.get("summary", {}).get("blockedCandidateCount", 0),
+                1,
+            )
+            self.assertEqual(
+                {
+                    "experimentVerdict": experiment_section.get("path"),
+                    "validationRuns": str(validation_runs),
+                    "releaseGateStatus": str(release_gate_status),
+                },
+                blocker_diagnostics.get("sourcePaths"),
+            )
+            portfolio_diagnostics = blocker_diagnostics.get("portfolio", {})
+            self.assertEqual(
+                ["HARD_MEAN_PBO_THRESHOLD_FAIL", "HARD_RELEASE_GATE_BLOCKED"],
+                blocker_diagnostics.get("summary", {}).get("reasonCodes"),
+            )
+            self.assertEqual(
+                ["HARD_MEAN_PBO_THRESHOLD_FAIL", "HARD_RELEASE_GATE_BLOCKED"],
+                portfolio_diagnostics.get("reasonCodes"),
+            )
+            release_gate = portfolio_diagnostics.get("releaseGate", {})
+            self.assertEqual([], release_gate.get("failedChecks"))
+            self.assertEqual(
+                [
+                    {"name": "wfo", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "significance", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "risk_simulation", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "execution_quality", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "ramp_up", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                    {"name": "regime_shift", "status": "skipped", "summary": "missing=BTC/USD | sources=0"},
+                ],
+                release_gate.get("blockingChecks"),
+            )
+            symbol_blockers = blocker_diagnostics.get("symbols", [])
+            self.assertEqual(1, len(symbol_blockers))
+            self.assertEqual("BTC/USD", symbol_blockers[0].get("symbol"))
+            self.assertEqual("leader", symbol_blockers[0].get("candidateSource"))
+            self.assertEqual("fdr", symbol_blockers[0].get("primaryCandidate", {}).get("primaryBlocker"))
+            self.assertEqual(
+                ["wfo"],
+                symbol_blockers[0]
+                .get("primaryCandidate", {})
+                .get("releaseGate", {})
+                .get("failedChecks"),
+            )
+            self.assertEqual(3, len(symbol_blockers[0].get("blockedCandidates", [])))
+
+            freeze_manifest_path.write_text(
+                json.dumps(self.make_freeze_manifest(), ensure_ascii=False, indent=2)
+                + "\n",
+                encoding="utf-8",
+            )
 
             validate_proc = run_script(
                 [
