@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "gate_checkpoint.v1",
+  "gateId": "G3",
+  "generatedAt": "2026-03-02T10:41:02Z",
+  "hardGate": true,
+  "status": "fail",
+  "summary": {
+    "total": 8,
+    "passed": 3,
+    "failed": 5,
+    "warned": 0
+  },
+  "checks": [
+    {
+      "name": "experiment_verdict_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_EXPERIMENT_VERDICT_MISSING",
+      "detail": "data/research/strategy/experiment_verdict.v2.json"
+    },
+    {
+      "name": "experiment_verdict_schema_valid",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_EXPERIMENT_VERDICT_SCHEMA_INVALID",
+      "detail": "schemaVersion=experiment_verdict.v2"
+    },
+    {
+      "name": "experiment_result_go",
+      "passed": false,
+      "severity": "hard",
+      "reasonCode": "HARD_EXPERIMENT_NO_GO",
+      "detail": "result=NO_GO"
+    },
+    {
+      "name": "mean_pbo_threshold",
+      "passed": false,
+      "severity": "hard",
+      "reasonCode": "HARD_MEAN_PBO_THRESHOLD_FAIL",
+      "detail": "meanPbo=1.0, threshold=0.2"
+    },
+    {
+      "name": "mean_dsr_probability_threshold",
+      "passed": false,
+      "severity": "hard",
+      "reasonCode": "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
+      "detail": "meanDsrProbability=0.0493492933392912, threshold=0.5"
+    },
+    {
+      "name": "fdr_q_threshold",
+      "passed": false,
+      "severity": "hard",
+      "reasonCode": "HARD_FDR_THRESHOLD_FAIL",
+      "detail": "fdrQ=1.0, threshold=0.1"
+    },
+    {
+      "name": "release_gate_status_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_RELEASE_GATE_STATUS_MISSING",
+      "detail": "data/runtime/release_gate_status.json"
+    },
+    {
+      "name": "release_gate_allows_live",
+      "passed": false,
+      "severity": "hard",
+      "reasonCode": "HARD_RELEASE_GATE_BLOCKED",
+      "detail": "allowLiveTrading=False"
+    }
+  ],
+  "reasonCodes": [
+    "HARD_EXPERIMENT_NO_GO",
+    "HARD_MEAN_PBO_THRESHOLD_FAIL",
+    "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
+    "HARD_FDR_THRESHOLD_FAIL",
+    "HARD_RELEASE_GATE_BLOCKED"
+  ],
+  "inputs": {
+    "experimentVerdict": {
+      "path": "data/research/strategy/experiment_verdict.v2.json",
+      "exists": true
+    },
+    "releaseGateStatus": {
+      "path": "data/runtime/release_gate_status.json",
+      "exists": true
+    }
+  }
+}

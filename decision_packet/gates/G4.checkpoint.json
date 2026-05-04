@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "gate_checkpoint.v1",
+  "gateId": "G4",
+  "generatedAt": "2026-03-02T10:41:02Z",
+  "hardGate": true,
+  "status": "fail",
+  "summary": {
+    "total": 3,
+    "passed": 2,
+    "failed": 1,
+    "warned": 0
+  },
+  "checks": [
+    {
+      "name": "upstream_hard_gates_passed",
+      "passed": false,
+      "severity": "hard",
+      "reasonCode": "HARD_UPSTREAM_GATE_FAILED",
+      "detail": "failed gates=G3"
+    },
+    {
+      "name": "decision_inputs_experiment_verdict_present",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_EXPERIMENT_VERDICT_MISSING",
+      "detail": "data/research/strategy/experiment_verdict.v2.json"
+    },
+    {
+      "name": "decision_inputs_release_gate_status_present",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_RELEASE_GATE_STATUS_MISSING",
+      "detail": "data/runtime/release_gate_status.json"
+    }
+  ],
+  "reasonCodes": [
+    "HARD_UPSTREAM_GATE_FAILED"
+  ],
+  "inputs": {
+    "checkpointSources": {
+      "G0": "pass",
+      "G1": "pass",
+      "G2": "pass",
+      "G3": "fail"
+    },
+    "experimentVerdictPath": "data/research/strategy/experiment_verdict.v2.json",
+    "releaseGateStatusPath": "data/runtime/release_gate_status.json"
+  }
+}

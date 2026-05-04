@@ -26,6 +26,7 @@ import {
 } from '../types.js'
 import '../../contract-ext.js'
 import { CCXT_CREDENTIAL_FIELDS, type CcxtBrokerConfig, type CcxtMarket, type FundingRate, type OrderBook, type OrderBookLevel } from './ccxt-types.js'
+import type { OpenInterestSnapshot, LiquidationSummary } from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
 import {
   ccxtTypeToSecType,
@@ -35,6 +36,10 @@ import {
   contractToCcxt,
 } from './ccxt-contracts.js'
 import { fuzzyRankContracts } from '../fuzzy-rank.js'
+import {
+  normalizeOpenInterestPayload,
+  summarizeLiquidationRows,
+} from './ccxt-normalizers.js'
 import {
   type CcxtExchangeOverrides,
   exchangeOverrides,
@@ -147,6 +152,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private exchangeName: string
   private initialized = false
   private overrides: CcxtExchangeOverrides
+  private readonly sandboxMode: boolean
+  private readonly demoTradingMode: boolean
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
@@ -154,6 +161,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.exchangeName = config.exchange
     this.meta = { exchange: config.exchange }
     this.overrides = exchangeOverrides[config.exchange] ?? {}
+    this.sandboxMode = config.sandbox
+    this.demoTradingMode = config.demoTrading ?? false
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
 
@@ -183,6 +192,11 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     if (config.demoTrading) {
       (this.exchange as unknown as { enableDemoTrading: (enable: boolean) => void }).enableDemoTrading(true)
     }
+  }
+
+  isPaperEnvironment(): boolean {
+    const exchangeRecord = this.exchange as unknown as Record<string, unknown>
+    return Boolean(this.sandboxMode || this.demoTradingMode || exchangeRecord['sandbox'] || exchangeRecord['demoTrading'])
   }
 
   // ---- Helpers ----
@@ -774,6 +788,45 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     }
   }
 
+  async findOrderIdByClientOrderId(symbol: string, clientOrderId: string): Promise<string | null> {
+    this.ensureInit()
+    const contract = this.resolveNativeKey(symbol)
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName) ?? symbol
+    const candidates: CcxtOrder[] = []
+    const exchangeAny = this.exchange as Exchange & {
+      fetchOpenOrders?: (symbol?: string) => Promise<CcxtOrder[]>
+      fetchClosedOrders?: (symbol?: string) => Promise<CcxtOrder[]>
+    }
+
+    try {
+      candidates.push(...await exchangeAny.fetchOpenOrders?.(ccxtSymbol) ?? [])
+    } catch { /* best effort */ }
+    try {
+      candidates.push(...await exchangeAny.fetchClosedOrders?.(ccxtSymbol) ?? [])
+    } catch { /* best effort */ }
+
+    const matchesClientId = (order: CcxtOrder): boolean => {
+      const record = order as unknown as Record<string, unknown>
+      const info = typeof record.info === 'object' && record.info !== null
+        ? record.info as Record<string, unknown>
+        : {}
+      const values = [
+        record.clientOrderId,
+        record.clientOrderID,
+        record.clientOid,
+        info.clientOrderId,
+        info.clientOrderID,
+        info.clientOid,
+        info.orderLinkId,
+        info.clOrdId,
+      ]
+      return values.some((value) => value === clientOrderId)
+    }
+
+    const found = candidates.find(matchesClientId)
+    return found?.id ?? null
+  }
+
   private convertCcxtOrder(o: CcxtOrder): OpenOrder | null {
     const market = this.markets[o.symbol]
     if (!market) return null
@@ -887,6 +940,74 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         nextFundingTime: funding.fundingDatetime ? new Date(funding.fundingDatetime) : undefined,
         previousFundingRate: funding.previousFundingRate ?? undefined,
         timestamp: new Date(funding.timestamp ?? Date.now()),
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
+  }
+
+  async getOpenInterest(contract: Contract): Promise<OpenInterestSnapshot> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
+    if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
+
+    const exchangeAny = this.exchange as Exchange & {
+      fetchOpenInterest?: (symbol: string, params?: Record<string, unknown>) => Promise<unknown>
+    }
+    if (typeof exchangeAny.fetchOpenInterest !== 'function') {
+      throw new BrokerError('EXCHANGE', `${this.exchangeName} does not support fetchOpenInterest`)
+    }
+
+    try {
+      const snapshot = normalizeOpenInterestPayload(await exchangeAny.fetchOpenInterest(ccxtSymbol, {}))
+      const market = this.markets[ccxtSymbol]
+      return {
+        contract: market ? marketToContract(market, this.exchangeName) : contract,
+        openInterest: snapshot.openInterest,
+        openInterestValue: snapshot.openInterestValue,
+        timestamp: new Date(snapshot.timestamp ?? Date.now()),
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
+  }
+
+  async getLiquidationSummary(
+    contract: Contract,
+    sinceMs: number,
+    limit: number,
+  ): Promise<LiquidationSummary> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
+    if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
+
+    const exchangeAny = this.exchange as Exchange & {
+      fetchLiquidations?: (
+        symbol: string,
+        since?: number,
+        limit?: number,
+        params?: Record<string, unknown>,
+      ) => Promise<unknown[]>
+    }
+    if (typeof exchangeAny.fetchLiquidations !== 'function') {
+      throw new BrokerError('EXCHANGE', `${this.exchangeName} does not support fetchLiquidations`)
+    }
+
+    try {
+      const summary = summarizeLiquidationRows(
+        await exchangeAny.fetchLiquidations(ccxtSymbol, sinceMs, limit, {}),
+      )
+      const market = this.markets[ccxtSymbol]
+      return {
+        contract: market ? marketToContract(market, this.exchangeName) : contract,
+        count: summary.count,
+        totalContracts: summary.totalContracts,
+        totalNotional: summary.totalNotional,
+        sinceMs,
+        limit,
+        timestamp: new Date(summary.latestTimestamp ?? Date.now()),
       }
     } catch (err) {
       throw BrokerError.from(err)

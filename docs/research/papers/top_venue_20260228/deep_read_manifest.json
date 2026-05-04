@@ -1,0 +1,106 @@
+[
+  {
+    "paper": "CQR_NeurIPS2019",
+    "venue": "NeurIPS 2019",
+    "targets": [
+      "gate_pass_robust_ci",
+      "error_ratio"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/CQR_NeurIPS2019.md"
+  },
+  {
+    "paper": "AdaptiveConformal_TS_2022",
+    "venue": "2022",
+    "targets": [
+      "transfer_false_ratio",
+      "gate_pass_robust_delta"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/AdaptiveConformal_TS_2022.md"
+  },
+  {
+    "paper": "Conformal_CovariateShift_ICML2020",
+    "venue": "ICML 2020",
+    "targets": [
+      "gate_pass_robust_delta"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/Conformal_CovariateShift_ICML2020.md"
+  },
+  {
+    "paper": "CalibratedSharpUncertainty_ICML2022",
+    "venue": "ICML 2022",
+    "targets": [
+      "gate_pass_robust_ci"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/CalibratedSharpUncertainty_ICML2022.md"
+  },
+  {
+    "paper": "iTransformer_ICLR2024",
+    "venue": "ICLR 2024",
+    "targets": [
+      "gate_pass_robust_uplift",
+      "gate_pass_robust_ci"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/iTransformer_ICLR2024.md"
+  },
+  {
+    "paper": "PatchTST_ICLR2023",
+    "venue": "ICLR 2023",
+    "targets": [
+      "gate_pass_robust_uplift"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/PatchTST_ICLR2023.md"
+  },
+  {
+    "paper": "NonstationaryTransformer_NeurIPS2022",
+    "venue": "NeurIPS 2022",
+    "targets": [
+      "gate_pass_robust_uplift",
+      "transfer_false_ratio"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/NonstationaryTransformer_NeurIPS2022.md"
+  },
+  {
+    "paper": "Autoformer_NeurIPS2021",
+    "venue": "NeurIPS 2021",
+    "targets": [
+      "gate_pass_robust_uplift"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/Autoformer_NeurIPS2021.md"
+  },
+  {
+    "paper": "DeepLOB_2018",
+    "venue": "IEEE/2018",
+    "targets": [
+      "cost_execution",
+      "net_trim10"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/DeepLOB_2018.md"
+  },
+  {
+    "paper": "EmpiricalAssetPricing_GuKellyXiu_w25398",
+    "venue": "NBER w25398 (RFS对应工作稿)",
+    "targets": [
+      "protocol_validity",
+      "out_of_sample_stability"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/EmpiricalAssetPricing_GuKellyXiu_w25398.md"
+  },
+  {
+    "paper": "VirtueComplexity_NBER30217",
+    "venue": "NBER w30217",
+    "targets": [
+      "model_capacity",
+      "out_of_sample_sharpe"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/VirtueComplexity_NBER30217.md"
+  },
+  {
+    "paper": "HFTPredictability_NBER30366",
+    "venue": "NBER w30366",
+    "targets": [
+      "regime_detection",
+      "cost_execution"
+    ],
+    "note_file": "docs/research/papers/top_venue_20260228/notes/HFTPredictability_NBER30366.md"
+  }
+]

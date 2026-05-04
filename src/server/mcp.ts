@@ -6,6 +6,17 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
 import { extractMcpShape, wrapToolExecute } from '../core/mcp-export.js'
+import type { Tool } from 'ai'
+
+export function buildMcpToolRegistration(name: string, tool: {
+  description?: string
+  inputSchema?: unknown
+}) {
+  return {
+    description: tool.description ?? name,
+    inputSchema: extractMcpShape(tool as Tool),
+  }
+}
 
 /**
  * MCP Plugin — exposes tools via Streamable HTTP.
@@ -32,10 +43,7 @@ export class McpPlugin implements Plugin {
       for (const [name, t] of Object.entries(tools)) {
         if (!t.execute) continue
 
-        mcp.registerTool(name, {
-          description: t.description,
-          inputSchema: extractMcpShape(t),
-        }, wrapToolExecute(t))
+        mcp.registerTool(name, buildMcpToolRegistration(name, t), wrapToolExecute(t))
       }
 
       return mcp

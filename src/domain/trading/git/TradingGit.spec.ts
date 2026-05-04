@@ -89,6 +89,12 @@ describe('TradingGit', () => {
       expect(status.staged).toHaveLength(1)
       expect(status.pendingMessage).toBeNull()
     })
+
+    it('rejects adding operations after commit until review set is cleared', () => {
+      git.add(buyOp())
+      git.commit('Buy AAPL')
+      expect(() => git.add(buyOp('GOOG'))).toThrow('Cannot add operations after commit')
+    })
   })
 
   // ==================== commit ====================
@@ -118,16 +124,22 @@ describe('TradingGit', () => {
   // ==================== push ====================
 
   describe('push', () => {
-    it('executes operations and returns PushResult', async () => {
-      git.add(buyOp())
-      git.commit('Buy AAPL')
-      const result = await git.push()
+    it('uses the committed snapshot, not later staging mutations', async () => {
+      const executeOperation = vi.fn().mockResolvedValue({
+        success: true,
+        orderId: 'order-1',
+      })
+      const gitFrozen = new TradingGit(makeConfig({ executeOperation }))
 
-      expect(result.hash).toHaveLength(8)
-      expect(result.message).toBe('Buy AAPL')
-      expect(result.operationCount).toBe(1)
-      expect(result.submitted).toHaveLength(1)
-      expect(result.rejected).toHaveLength(0)
+      gitFrozen.add(buyOp('AAPL'))
+      gitFrozen.commit('Buy AAPL')
+      await gitFrozen.push()
+
+      expect(executeOperation).toHaveBeenCalledTimes(1)
+      expect(executeOperation).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'placeOrder',
+        contract: expect.objectContaining({ symbol: 'AAPL' }),
+      }))
     })
 
     it('calls executeOperation for each staged op', async () => {
@@ -138,6 +150,7 @@ describe('TradingGit', () => {
 
       expect(config.executeOperation).toHaveBeenCalledTimes(2)
     })
+
 
     it('calls getGitState after execution', async () => {
       git.add(buyOp())
@@ -539,6 +552,79 @@ describe('TradingGit', () => {
       expect(result.updatedCount).toBe(1)
       expect(result.hash).toHaveLength(8)
       expect(git.status().commitCount).toBe(1)
+    })
+
+    it('skips a repeat sync when the latest persisted status is unchanged', async () => {
+      const state = makeGitState()
+      const first = await git.sync(
+        [
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'filled',
+            filledPrice: 155,
+            filledQty: 10,
+          },
+        ],
+        state,
+      )
+
+      expect(first.updatedCount).toBe(1)
+      expect(git.status().commitCount).toBe(1)
+
+      const second = await git.sync(
+        [
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'filled',
+            filledPrice: 155,
+            filledQty: 10,
+          },
+        ],
+        state,
+      )
+
+      expect(second.updatedCount).toBe(0)
+      expect(second.hash).toBe(first.hash)
+      expect(second.updates).toEqual([])
+      expect(git.status().commitCount).toBe(1)
+      expect(git.status().head).toBe(first.hash)
+    })
+
+    it('collapses duplicate orderIds within a single sync batch', async () => {
+      const state = makeGitState()
+      const result = await git.sync(
+        [
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'cancelled',
+          },
+          {
+            orderId: 'order-1',
+            symbol: 'AAPL',
+            previousStatus: 'submitted',
+            currentStatus: 'filled',
+            filledPrice: 155,
+            filledQty: 10,
+          },
+        ],
+        state,
+      )
+
+      expect(result.updatedCount).toBe(1)
+      expect(result.updates).toHaveLength(1)
+      expect(result.updates[0].currentStatus).toBe('filled')
+
+      const commit = git.show(result.hash)
+      expect(commit).not.toBeNull()
+      expect(commit!.results).toHaveLength(1)
+      expect(commit!.results[0].orderId).toBe('order-1')
+      expect(commit!.results[0].status).toBe('filled')
     })
 
     it('returns empty result for no updates', async () => {

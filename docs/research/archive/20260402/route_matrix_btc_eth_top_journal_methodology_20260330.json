@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "route_matrix_spec.v1",
+  "matrixId": "route_matrix_btc_eth_top_journal_methodology_20260330",
+  "sourceId": "btc_phaseb_baseline_neighborhood+eth_phaseb_r3_trial33_neighborhood",
+  "manifest": "docs/research/strategy_candidates.route_batch16_btc_eth_phaseb_combo_dual_neighborhood.v1.json",
+  "defaultMultipleTestingUnit": "candidate",
+  "rankingObjective": "min(hardGap.totalGap) -> min(wfoFailureDensity) -> min(hardGap.fdrGap) -> max(meanSharpe)",
+  "summaryOutput": "data/research/strategy/analysis/route_matrix_btc_eth_top_journal_methodology_20260330.json",
+  "markdownOutput": "data/research/strategy/analysis/route_matrix_btc_eth_top_journal_methodology_20260330.md",
+  "profiles": [
+    {
+      "id": "phaseb_native_bh_v1",
+      "fdrMethod": "bh",
+      "notes": [
+        "baseline_bh_on_current_best_combo_v4=true"
+      ]
+    },
+    {
+      "id": "phaseb_native_by_v1",
+      "fdrMethod": "by",
+      "notes": [
+        "finance_baseline_conservative_dependency_control=true"
+      ]
+    },
+    {
+      "id": "phaseb_native_cv_storey_v1",
+      "fdrMethod": "cv_storey_bh",
+      "notes": [
+        "cross_validation_storey_baseline=true"
+      ]
+    },
+    {
+      "id": "phaseb_native_stepc_v1",
+      "fdrMethod": "stepc",
+      "notes": [
+        "stepwise_cauchy_combination_top_journal_approximation=true"
+      ]
+    },
+    {
+      "id": "phaseb_native_spa_v1",
+      "fdrMethod": "spa",
+      "notes": [
+        "benchmark_aware_superior_predictive_ability_approximation=true"
+      ],
+      "overrides": {
+        "significance": {
+          "benchmarkStrategyIdBySymbol": {
+            "BTC/USD": "BTC_HC001_COS_N1",
+            "ETH/USD": "ETH_PB033_1N"
+          },
+          "spaBootstrapSamples": 400,
+          "spaBlockSize": 12
+        }
+      }
+    }
+  ]
+}

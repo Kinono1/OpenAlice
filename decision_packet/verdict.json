@@ -1,0 +1,172 @@
+{
+  "version": "v1",
+  "generatedAt": "2026-03-02T10:41:16Z",
+  "packetDir": "decision_packet",
+  "evidencePackPath": "decision_packet/evidence_pack.json",
+  "verdict": "NO_GO",
+  "ciStatus": "failed",
+  "reasonCodes": {
+    "all": [
+      "HARD_HARD_GATE_CHECK_FAILED",
+      "HARD_RELEASE_GATE_BLOCKED",
+      "HARD_THRESHOLD_BREACH"
+    ],
+    "hard": [
+      "HARD_HARD_GATE_CHECK_FAILED",
+      "HARD_RELEASE_GATE_BLOCKED",
+      "HARD_THRESHOLD_BREACH"
+    ],
+    "warn": [],
+    "info": []
+  },
+  "checks": [
+    {
+      "name": "evidence_pack_exists",
+      "passed": true
+    },
+    {
+      "name": "freeze_manifest_valid",
+      "passed": true,
+      "detail": []
+    },
+    {
+      "name": "required_artifacts_present",
+      "passed": true,
+      "detail": []
+    },
+    {
+      "name": "hard_gate_checks",
+      "passed": false,
+      "detail": [
+        {
+          "name": "experiment_verdict_result",
+          "reason": "result=NO_GO; reasonCodes=HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED,HARD_NO_CANDIDATE_PASS"
+        },
+        {
+          "name": "gate_checkpoint_G3",
+          "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+        },
+        {
+          "name": "gate_checkpoint_G4",
+          "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+        },
+        {
+          "name": "gate_checkpoints_hard_pass",
+          "reason": "hard-failed=G3,G4"
+        }
+      ]
+    },
+    {
+      "name": "gate_checkpoint_traceability",
+      "passed": true,
+      "detail": [
+        {
+          "name": "gate_checkpoint_G3",
+          "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+        },
+        {
+          "name": "gate_checkpoint_G4",
+          "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+        }
+      ]
+    },
+    {
+      "name": "release_gate_status",
+      "passed": false,
+      "detail": [
+        "allowLiveTrading=false"
+      ]
+    },
+    {
+      "name": "thresholds",
+      "passed": false,
+      "detail": [
+        {
+          "thresholdKey": "meanPboMax",
+          "measuredKey": "meanPbo",
+          "operator": "<=",
+          "threshold": 0.2,
+          "measured": 1,
+          "passed": false,
+          "missingMeasured": false
+        },
+        {
+          "thresholdKey": "meanDsrProbabilityMin",
+          "measuredKey": "meanDsrProbability",
+          "operator": ">=",
+          "threshold": 0.5,
+          "measured": 0.0493492933392912,
+          "passed": false,
+          "missingMeasured": false
+        },
+        {
+          "thresholdKey": "fdrQMax",
+          "measuredKey": "fdrQ",
+          "operator": "<=",
+          "threshold": 0.1,
+          "measured": 1,
+          "passed": false,
+          "missingMeasured": false
+        },
+        {
+          "thresholdKey": "releaseGateStatusAgeHoursMax",
+          "measuredKey": "releaseGateStatusAgeHours",
+          "operator": "<=",
+          "threshold": 24,
+          "measured": 0.005569448888888889,
+          "passed": true,
+          "missingMeasured": false
+        }
+      ]
+    }
+  ],
+  "thresholdResults": [
+    {
+      "thresholdKey": "meanPboMax",
+      "measuredKey": "meanPbo",
+      "operator": "<=",
+      "threshold": 0.2,
+      "measured": 1,
+      "passed": false,
+      "missingMeasured": false
+    },
+    {
+      "thresholdKey": "meanDsrProbabilityMin",
+      "measuredKey": "meanDsrProbability",
+      "operator": ">=",
+      "threshold": 0.5,
+      "measured": 0.0493492933392912,
+      "passed": false,
+      "missingMeasured": false
+    },
+    {
+      "thresholdKey": "fdrQMax",
+      "measuredKey": "fdrQ",
+      "operator": "<=",
+      "threshold": 0.1,
+      "measured": 1,
+      "passed": false,
+      "missingMeasured": false
+    },
+    {
+      "thresholdKey": "releaseGateStatusAgeHoursMax",
+      "measuredKey": "releaseGateStatusAgeHours",
+      "operator": "<=",
+      "threshold": 24,
+      "measured": 0.005569448888888889,
+      "passed": true,
+      "missingMeasured": false
+    }
+  ],
+  "hardGateFailureTrace": [
+    {
+      "name": "gate_checkpoint_G3",
+      "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+    },
+    {
+      "name": "gate_checkpoint_G4",
+      "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+    }
+  ],
+  "v5Mode": true
+}

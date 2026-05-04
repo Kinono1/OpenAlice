@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import {
   loadConfig, writeConfigSection, readAIProviderConfig, validSections,
   writeProfile, deleteProfile, setActiveProfile,
@@ -10,11 +10,23 @@ import { BUILTIN_PRESETS } from '../../../ai-providers/presets.js'
 interface ConfigRouteOpts {
   ctx?: EngineContext
   onConnectorsChange?: () => Promise<void>
+  requireAuth?: MiddlewareHandler
+}
+
+interface MarketDataRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
+function isMarketDataContext(value: EngineContext | MarketDataRouteOpts): value is EngineContext {
+  return 'bbEngine' in value
 }
 
 /** Config routes: GET /, PUT /:section, profile CRUD, presets, test */
 export function createConfigRoutes(opts?: ConfigRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.get('/', async (c) => {
     try {
@@ -152,7 +164,12 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
 }
 
 /** Market data routes: POST /test-provider */
-export function createMarketDataRoutes(ctx: EngineContext) {
+export function createMarketDataRoutes(
+  ctxOrOpts: EngineContext | MarketDataRouteOpts,
+  opts?: MarketDataRouteOpts,
+) {
+  const ctx = isMarketDataContext(ctxOrOpts) ? ctxOrOpts : undefined
+  const routeOpts: MarketDataRouteOpts | undefined = isMarketDataContext(ctxOrOpts) ? opts : ctxOrOpts
   const TEST_ENDPOINTS: Record<string, { credField: string; provider: string; model: string; params: Record<string, unknown> }> = {
     fred:             { credField: 'fred_api_key',             provider: 'fred',             model: 'FredSearch',              params: { query: 'GDP' } },
     bls:              { credField: 'bls_api_key',              provider: 'bls',              model: 'BlsSearch',               params: { query: 'unemployment' } },
@@ -165,9 +182,15 @@ export function createMarketDataRoutes(ctx: EngineContext) {
   }
 
   const app = new Hono()
+  if (routeOpts?.requireAuth) {
+    app.use('*', routeOpts.requireAuth)
+  }
 
   app.post('/test-provider', async (c) => {
     try {
+      if (!ctx) {
+        return c.json({ ok: false, error: 'Market data engine unavailable' }, 503)
+      }
       const { provider, key } = await c.req.json<{ provider: string; key: string }>()
       const endpoint = TEST_ENDPOINTS[provider]
       if (!endpoint) return c.json({ ok: false, error: `Unknown provider: ${provider}` }, 400)

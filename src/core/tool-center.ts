@@ -16,25 +16,32 @@ interface ToolEntry {
 
 export class ToolCenter {
   private tools: Record<string, ToolEntry> = {}
+  private disabledCache: { disabled: string[]; ts: number } | null = null
+  private static CACHE_TTL_MS = 5_000
 
   /** Batch-register tool definitions under a group. Later registrations overwrite same-name tools. */
   register(tools: Record<string, Tool>, group: string): void {
     for (const [name, tool] of Object.entries(tools)) {
       this.tools[name] = { tool, group }
     }
+    this.disabledCache = null // invalidate on register
   }
 
-  /** Vercel AI SDK format — returns only enabled tools (reads disabled list from disk). */
+  /** Vercel AI SDK format — returns only enabled tools (reads disabled list from disk, cached with TTL). */
   async getVercelTools(): Promise<Record<string, Tool>> {
-    const { disabled } = await readToolsConfig()
+    const now = Date.now()
+    if (!this.disabledCache || (now - this.disabledCache.ts) > ToolCenter.CACHE_TTL_MS) {
+      const { disabled } = await readToolsConfig()
+      this.disabledCache = { disabled, ts: now }
+    }
     const result: Record<string, Tool> = {}
-    if (disabled.length === 0) {
+    if (this.disabledCache.disabled.length === 0) {
       for (const [name, entry] of Object.entries(this.tools)) {
         result[name] = entry.tool
       }
       return result
     }
-    const disabledSet = new Set(disabled)
+    const disabledSet = new Set(this.disabledCache.disabled)
     for (const [name, entry] of Object.entries(this.tools)) {
       if (!disabledSet.has(name)) result[name] = entry.tool
     }

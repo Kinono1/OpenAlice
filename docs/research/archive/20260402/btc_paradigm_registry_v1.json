@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "btc_paradigm_registry.v1",
+  "comparisonId": "btc_paradigm_comparison_20260331",
+  "policy": {
+    "symbol": "BTC/USD",
+    "protocolProfile": "phaseb_native_v1",
+    "multipleTestingUnit": "candidate",
+    "fdrMethod": "bh",
+    "wfoProfile": "stable",
+    "incumbentMetrics": {
+      "totalGap": 0.9,
+      "fdrGap": 0.9,
+      "wfoFailureDensity": 0.666667,
+      "meanSharpe": 2.36229
+    }
+  },
+  "summaryOutput": "data/research/strategy/analysis/btc_paradigm_comparison_20260331.json",
+  "markdownOutput": "data/research/strategy/analysis/btc_paradigm_comparison_20260331.md",
+  "paradigms": [
+    {
+      "paradigmId": "tradingagents_research_sidecar",
+      "donorRepo": "/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/TradingAgents",
+      "compilerScript": "scripts/materialize_tradingagents_btc_manifest.ts",
+      "inputArtifact": "data/research/strategy/paradigms/tradingagents/btc_research_decision.latest.json",
+      "baseManifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+      "manifestOutput": "docs/research/strategy_candidates.btc_paradigm_tradingagents.v1.json",
+      "provenanceOutput": "data/research/strategy/analysis/btc_paradigm_tradingagents_provenance_20260331.json",
+      "noteOutput": "data/research/strategy/analysis/btc_paradigm_tradingagents_20260331.md",
+      "routeTag": "btc_paradigm_tradingagents_20260331",
+      "routeStatusOutput": "data/runtime/route_af_status.btc_paradigm_tradingagents_20260331.latest.json",
+      "phaseReadinessOutput": "data/runtime/phase_readiness.btc_paradigm_tradingagents_20260331.latest.json",
+      "candidateCap": 4,
+      "promotionEligibility": "winner_only"
+    },
+    {
+      "paradigmId": "alphaswarm_execution_context",
+      "donorRepo": "/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/alphaswarm",
+      "compilerScript": "scripts/materialize_alphaswarm_btc_manifest.ts",
+      "inputArtifact": "data/research/strategy/paradigms/alphaswarm/btc_execution_context.latest.json",
+      "baseManifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+      "manifestOutput": "docs/research/strategy_candidates.btc_paradigm_alphaswarm.v1.json",
+      "provenanceOutput": "data/research/strategy/analysis/btc_paradigm_alphaswarm_provenance_20260331.json",
+      "noteOutput": "data/research/strategy/analysis/btc_paradigm_alphaswarm_20260331.md",
+      "routeTag": "btc_paradigm_alphaswarm_20260331",
+      "routeStatusOutput": "data/runtime/route_af_status.btc_paradigm_alphaswarm_20260331.latest.json",
+      "phaseReadinessOutput": "data/runtime/phase_readiness.btc_paradigm_alphaswarm_20260331.latest.json",
+      "candidateCap": 3,
+      "promotionEligibility": "winner_only"
+    },
+    {
+      "paradigmId": "cryptotrade_reflection_narrative",
+      "donorRepo": "/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/CryptoTrade",
+      "compilerScript": "scripts/materialize_cryptotrade_btc_manifest.ts",
+      "inputArtifact": "data/research/strategy/paradigms/cryptotrade/btc_reflection_context.latest.json",
+      "baseManifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+      "manifestOutput": "docs/research/strategy_candidates.btc_paradigm_cryptotrade.v1.json",
+      "provenanceOutput": "data/research/strategy/analysis/btc_paradigm_cryptotrade_provenance_20260331.json",
+      "noteOutput": "data/research/strategy/analysis/btc_paradigm_cryptotrade_20260331.md",
+      "routeTag": "btc_paradigm_cryptotrade_20260331",
+      "routeStatusOutput": "data/runtime/route_af_status.btc_paradigm_cryptotrade_20260331.latest.json",
+      "phaseReadinessOutput": "data/runtime/phase_readiness.btc_paradigm_cryptotrade_20260331.latest.json",
+      "candidateCap": 3,
+      "promotionEligibility": "winner_only"
+    }
+  ]
+}

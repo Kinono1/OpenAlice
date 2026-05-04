@@ -1,0 +1,157 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-30T10:05:00Z",
+  "batchId": "route_batch16_btc_eth_phaseb_combo_dual_neighborhood_v1",
+  "batchGoal": "Quantify whether combining the improved BTC and ETH neighborhood frontiers further reduces combo damage against the current portfolio gates.",
+  "notes": [
+    "btc_source_id=btc_phaseb_baseline_neighborhood",
+    "btc_recommended_profile=phaseb_native_v1",
+    "btc_mutation=34_65_ls->34_70_ls",
+    "btc_mutation=34_75_ls->34_80_ls",
+    "eth_source_id=eth_phaseb_r3_trial33_neighborhood",
+    "eth_recommended_profile=route_strict_v1",
+    "eth_mutation=28_75_ls->28_80_ls",
+    "damage_test=true",
+    "multiple_testing_unit=candidate"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3600,
+    "symbols": [
+      {
+        "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+        "symbol": "BTC/USD",
+        "lookbackBars": 3600
+      },
+      {
+        "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+        "symbol": "ETH/USD",
+        "lookbackBars": 3000
+      }
+    ]
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 840,
+    "testBars": 120,
+    "stepBars": 180,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0,
+    "multipleTestingUnit": "candidate"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 1500,
+    "horizonBars": 240,
+    "blockSize": 12,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0004,
+    "slippageBps": 3,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "BTC_HC001_COS_N1",
+      "strategyName": "btc_trend_cost_neighborhood_34_70_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_cost_family_34_70_ls",
+      "correlationBucket": "btc_usd_cost_34_70_ls",
+      "params": {
+        "trendFastPeriod": 34,
+        "trendSlowPeriod": 70,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "BTC_HC002_COS_N1",
+      "strategyName": "btc_trend_cost_neighborhood_34_80_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_cost_family_34_80_ls",
+      "correlationBucket": "btc_usd_cost_34_80_ls",
+      "params": {
+        "trendFastPeriod": 34,
+        "trendSlowPeriod": 80,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "BTC_HC003_REG",
+      "strategyName": "btc_trend_regime_2602.07018v2",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_usd_regime_family_18_80_ls",
+      "correlationBucket": "btc_usd_regime_18_80_ls",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 80,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "ETH_PB033_1N",
+      "strategyName": "eth_trend_28_80_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_usd_trend_family_28_80_ls",
+      "correlationBucket": "eth_usd_trend_28_80_ls",
+      "params": {
+        "trendFastPeriod": 28,
+        "trendSlowPeriod": 80,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "ETH_PB033_2",
+      "strategyName": "eth_trend_22_100_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_usd_trend_family_22_100_ls",
+      "correlationBucket": "eth_usd_trend_22_100_ls",
+      "params": {
+        "trendFastPeriod": 22,
+        "trendSlowPeriod": 100,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "ETH_PB033_3",
+      "strategyName": "eth_trend_18_95_ls",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_usd_trend_family_18_95_ls",
+      "correlationBucket": "eth_usd_trend_18_95_ls",
+      "params": {
+        "trendFastPeriod": 18,
+        "trendSlowPeriod": 95,
+        "allowShort": true
+      }
+    }
+  ]
+}

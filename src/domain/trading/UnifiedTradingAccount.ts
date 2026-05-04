@@ -39,6 +39,9 @@ export interface UnifiedTradingAccountOptions {
   onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   onPostPush?: (accountId: string) => void | Promise<void>
   onPostReject?: (accountId: string) => void | Promise<void>
+  buildExecuteOperation?: (
+    fallback: (operation: Operation) => Promise<unknown>,
+  ) => (operation: Operation) => Promise<unknown>
 }
 
 // ==================== Stage param types ====================
@@ -163,7 +166,8 @@ export class UnifiedTradingAccount {
       }
     }
     const guards = resolveGuards(options.guards ?? [])
-    const guardedDispatcher = createGuardPipeline(dispatcher, broker, guards)
+    const wrappedDispatcher = options.buildExecuteOperation?.(dispatcher) ?? dispatcher
+    const guardedDispatcher = createGuardPipeline(wrappedDispatcher, broker, guards)
 
     const gitConfig = {
       executeOperation: guardedDispatcher,

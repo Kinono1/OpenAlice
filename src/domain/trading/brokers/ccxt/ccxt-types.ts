@@ -8,6 +8,7 @@ export interface CcxtBrokerConfig {
   // CCXT standard credential fields (all optional — each exchange requires a different subset)
   apiKey?: string
   secret?: string
+  apiSecret?: string
   uid?: string
   accountId?: string
   login?: string
@@ -57,6 +58,23 @@ export interface FundingRate {
   fundingRate: number
   nextFundingTime?: Date
   previousFundingRate?: number
+  timestamp: Date
+}
+
+export interface OpenInterestSnapshot {
+  contract: Contract
+  openInterest: number
+  openInterestValue?: number
+  timestamp: Date
+}
+
+export interface LiquidationSummary {
+  contract: Contract
+  count: number
+  totalContracts: number
+  totalNotional?: number
+  sinceMs?: number
+  limit?: number
   timestamp: Date
 }
 

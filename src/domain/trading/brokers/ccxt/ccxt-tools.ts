@@ -52,6 +52,46 @@ Use searchContracts first to get the aliceId.`,
       },
     }),
 
+    getOpenInterest: tool({
+      description: `Query the current open interest for a derivatives contract (CCXT/crypto accounts only).`,
+      inputSchema: z.object({
+        aliceId: z.string().describe('Contract identifier from searchContracts'),
+        source: z.string().optional().describe(sourceDesc),
+      }),
+      execute: async ({ aliceId, source }) => {
+        const resolved = resolveCcxtOne(source)
+        if ('error' in resolved) return resolved
+        const { broker, id } = resolved
+        const contract = new Contract()
+        contract.aliceId = aliceId
+        const result = await broker.getOpenInterest(contract)
+        return { source: id, ...result }
+      },
+    }),
+
+    getLiquidationSummary: tool({
+      description: `Query recent liquidation summary for a derivatives contract (CCXT/crypto accounts only).`,
+      inputSchema: z.object({
+        aliceId: z.string().describe('Contract identifier from searchContracts'),
+        sinceMs: z.number().int().optional().describe('Earliest timestamp in ms (default: last 24h)'),
+        limit: z.number().int().min(1).max(500).optional().describe('Max liquidation rows to aggregate'),
+        source: z.string().optional().describe(sourceDesc),
+      }),
+      execute: async ({ aliceId, sinceMs, limit, source }) => {
+        const resolved = resolveCcxtOne(source)
+        if ('error' in resolved) return resolved
+        const { broker, id } = resolved
+        const contract = new Contract()
+        contract.aliceId = aliceId
+        const result = await broker.getLiquidationSummary(
+          contract,
+          sinceMs ?? (Date.now() - 24 * 3600_000),
+          limit ?? 100,
+        )
+        return { source: id, ...result }
+      },
+    }),
+
     getOrderBook: tool({
       description: `Query the order book (market depth) for a contract (CCXT/crypto accounts only).
 

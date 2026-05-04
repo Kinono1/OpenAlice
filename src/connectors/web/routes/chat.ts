@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -18,11 +18,23 @@ interface ChatDeps {
   ctx: EngineContext
   sessions: Map<string, SessionStore>
   sseByChannel: Map<string, Map<string, SSEClient>>
+  maxSseClients: number
+  sseMaxDurationMs: number
+}
+
+interface ChatRouteOpts {
+  requireAuth?: MiddlewareHandler
 }
 
 /** Chat routes: POST /, GET /history, GET /events (SSE) */
-export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
+export function createChatRoutes(
+  { ctx, sessions, sseByChannel, maxSseClients, sseMaxDurationMs }: ChatDeps,
+  opts?: ChatRouteOpts,
+) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   app.post('/', async (c) => {
     const body = await c.req.json() as { message?: string; channelId?: string }
@@ -120,9 +132,21 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
     // Create SSE client map for this channel if it doesn't exist yet
     if (!sseByChannel.has(channelId)) sseByChannel.set(channelId, new Map())
     const channelClients = sseByChannel.get(channelId)!
+    if (channelClients.size >= maxSseClients) {
+      return c.json({ error: 'too many SSE clients' }, 429)
+    }
 
     return streamSSE(c, async (stream) => {
       const clientId = randomUUID()
+      let finished = false
+      let finish!: () => void
+      const completion = new Promise<void>((resolve) => {
+        finish = () => {
+          if (finished) return
+          finished = true
+          resolve()
+        }
+      })
       channelClients.set(clientId, {
         id: clientId,
         send: (data) => { stream.writeSSE({ data }).catch(() => {}) },
@@ -132,12 +156,23 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
         stream.writeSSE({ event: 'ping', data: '' }).catch(() => {})
       }, 30_000)
 
+      const maxDurationTimer = setTimeout(() => {
+        void (async () => {
+          await stream.writeSSE({ event: 'closing', data: 'max-duration-reached' }).catch(() => {})
+          clearInterval(pingInterval)
+          channelClients.delete(clientId)
+          finish()
+        })()
+      }, sseMaxDurationMs)
+
       stream.onAbort(() => {
         clearInterval(pingInterval)
+        clearTimeout(maxDurationTimer)
         channelClients.delete(clientId)
+        finish()
       })
 
-      await new Promise<void>(() => {})
+      await completion
     })
   })
 
@@ -145,8 +180,11 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
 }
 
 /** Media routes: GET /:name — serves from data/media/ */
-export function createMediaRoutes() {
+export function createMediaRoutes(opts?: ChatRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
 
   const MIME: Record<string, string> = {
     '.png': 'image/png',
@@ -159,6 +197,17 @@ export function createMediaRoutes() {
 
   app.get('/:date/:name', async (c) => {
     const { date, name } = c.req.param()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return c.json({ error: 'invalid media path' }, 400)
+    }
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)
+      || name.includes('..')
+      || name.includes('/')
+      || name.includes('\\')
+    ) {
+      return c.json({ error: 'invalid media path' }, 400)
+    }
     const filePath = resolveMediaPath(join(date, name))
 
     try {

@@ -1,0 +1,191 @@
+{
+  "schemaVersion": "btc_frontier_batch_registry.v1",
+  "description": "Canonical BTC frontier recovery loop for batches 24 through 40.",
+  "frontier": {
+    "btcIncumbentManifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+    "ethIncumbentManifest": "docs/research/strategy_candidates.route_batch13_eth_phaseb_r3_trial33_neighborhood_base.v1.json",
+    "comparisonNote": "A new BTC branch only advances if it is frontier-competitive on hard metrics and improves secondary WFO ranking."
+  },
+  "defaults": {
+    "symbol": "BTC/USD",
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "lookbackBars": 3600,
+    "baseManifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+    "protocolProfile": "phaseb_native_v1",
+    "multipleTestingUnit": "candidate",
+    "fdrMethod": "bh",
+    "wfoProfile": "stable"
+  },
+  "batches": [
+    {
+      "batch": 24,
+      "kind": "memo",
+      "enabled": true,
+      "description": "Malformed 20260302T202020Z archive is salvageable but is a duplicate of the phaseb-r2 cluster, so it should not consume an independent discovery run.",
+      "summaryOutput": "data/research/strategy/analysis/batch24_duplicate_malformed_cluster_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch24_duplicate_malformed_cluster_20260331.md",
+      "importedReason": "salvageable_duplicate_of_phaseb_r2_cluster"
+    },
+    {
+      "batch": 25,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Full BTC sweep of phaseb-r1 under fixed native BTC policy.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/phaseb-r1/phaseb_family_search.json",
+      "sourceId": "phaseb-r1",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_r1_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_r1_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 26,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Canonical BTC sweep of the phaseb-r2 duplicate cluster.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/phaseb-r2/phaseb_family_search.json",
+      "sourceId": "phaseb-r2",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_r2_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_r2_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 27,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Full BTC sweep of distinct archive cluster 20260303T034851Z.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/20260303T034851Z/phaseb_family_search.json",
+      "sourceId": "20260303T034851Z",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_20260303T034851Z_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_20260303T034851Z_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 28,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Full BTC sweep of distinct archive cluster 20260303T035600Z.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/20260303T035600Z/phaseb_family_search.json",
+      "sourceId": "20260303T035600Z",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_20260303T035600Z_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_20260303T035600Z_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 29,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Full BTC sweep of distinct archive cluster 20260303T040008Z.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/20260303T040008Z/phaseb_family_search.json",
+      "sourceId": "20260303T040008Z",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_20260303T040008Z_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_20260303T040008Z_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 30,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Full BTC sweep of distinct archive cluster 20260303T040836Z.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/20260303T040836Z/phaseb_family_search.json",
+      "sourceId": "20260303T040836Z",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_20260303T040836Z_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_20260303T040836Z_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 31,
+      "kind": "full_sweep",
+      "enabled": true,
+      "description": "Canonical BTC sweep of the 20260303T113824Z baseline cluster.",
+      "searchJson": "data/research/strategy/analysis/g3g4/archive/20260303T113824Z/phaseb_family_search.json",
+      "sourceId": "20260303T113824Z",
+      "summaryOutput": "data/research/strategy/analysis/phaseb_20260303T113824Z_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/phaseb_20260303T113824Z_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 32,
+      "kind": "import_sweep",
+      "enabled": true,
+      "description": "Import the already-completed full BTC phaseb-r3 sweep as canonical prior evidence.",
+      "importedSummary": "data/research/strategy/analysis/phaseb_r3_btc_native_full_20260331.json",
+      "importedMarkdown": "data/research/strategy/analysis/phaseb_r3_btc_native_full_20260331.md",
+      "summaryOutput": "data/research/strategy/analysis/batch32_import_phaseb_r3_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch32_import_phaseb_r3_btc_native_full_20260331.md",
+      "importedReason": "canonical_prior_evidence"
+    },
+    {
+      "batch": 33,
+      "kind": "import_sweep",
+      "enabled": true,
+      "description": "Imported refinement result for the phaseb-r3 trial 0 BTC winner.",
+      "importedSummary": "data/research/strategy/analysis/batch33_btc_phaseb_r3_trial0_refine_20260331.json",
+      "importedMarkdown": "data/research/strategy/analysis/batch33_btc_phaseb_r3_trial0_refine_20260331.md",
+      "summaryOutput": "data/research/strategy/analysis/batch33_import_btc_phaseb_r3_trial0_refine_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch33_import_btc_phaseb_r3_trial0_refine_20260331.md",
+      "importedReason": "refinement_completed_but_not_frontier_replacing"
+    },
+    {
+      "batch": 34,
+      "kind": "import_sweep",
+      "enabled": true,
+      "description": "Imported refinement result for the 20260303T113824Z trial 0 BTC winner.",
+      "importedSummary": "data/research/strategy/analysis/batch34_btc_20260303T113824Z_trial0_refine_20260331.json",
+      "importedMarkdown": "data/research/strategy/analysis/batch34_btc_20260303T113824Z_trial0_refine_20260331.md",
+      "summaryOutput": "data/research/strategy/analysis/batch34_import_btc_20260303T113824Z_trial0_refine_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch34_import_btc_20260303T113824Z_trial0_refine_20260331.md",
+      "importedReason": "refinement_completed_but_not_frontier_replacing"
+    },
+    {
+      "batch": 35,
+      "kind": "import_sweep",
+      "enabled": true,
+      "description": "Imported refinement result for the strongest pure-trend winner from 20260303T034851Z.",
+      "importedSummary": "data/research/strategy/analysis/batch35_btc_20260303T034851Z_trial9_refine_20260331.json",
+      "importedMarkdown": "data/research/strategy/analysis/batch35_btc_20260303T034851Z_trial9_refine_20260331.md",
+      "summaryOutput": "data/research/strategy/analysis/batch35_import_btc_20260303T034851Z_trial9_refine_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch35_import_btc_20260303T034851Z_trial9_refine_20260331.md",
+      "importedReason": "refinement_completed_but_not_frontier_replacing"
+    },
+    {
+      "batch": 36,
+      "kind": "import_sweep",
+      "enabled": true,
+      "description": "Imported refinement result for the strongest non-baseline phaseb-r1 BTC winner.",
+      "importedSummary": "data/research/strategy/analysis/batch36_btc_phaseb_r1_trial17_refine_20260331.json",
+      "importedMarkdown": "data/research/strategy/analysis/batch36_btc_phaseb_r1_trial17_refine_20260331.md",
+      "summaryOutput": "data/research/strategy/analysis/batch36_import_btc_phaseb_r1_trial17_refine_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch36_import_btc_phaseb_r1_trial17_refine_20260331.md",
+      "importedReason": "refinement_completed_but_not_frontier_replacing"
+    },
+    {
+      "batch": 37,
+      "kind": "pending",
+      "enabled": true,
+      "description": "Promote only the strongest refinement winner into formal BTC route validation if it becomes frontier-competitive.",
+      "summaryOutput": "data/research/strategy/analysis/batch37_pending_route_promotion_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch37_pending_route_promotion_20260331.md",
+      "importedReason": "not_activated_no_refinement_winner_beat_btc_incumbent"
+    },
+    {
+      "batch": 38,
+      "kind": "pending",
+      "enabled": true,
+      "description": "Run formal matrix only if batch37 produces a promotable BTC route candidate.",
+      "summaryOutput": "data/research/strategy/analysis/batch38_pending_matrix_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch38_pending_matrix_20260331.md",
+      "importedReason": "not_activated_batch37_not_triggered"
+    },
+    {
+      "batch": 39,
+      "kind": "pending",
+      "enabled": true,
+      "description": "Run combo replacement against the ETH incumbent only if batch38 still supports BTC promotion.",
+      "summaryOutput": "data/research/strategy/analysis/batch39_pending_combo_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch39_pending_combo_20260331.md",
+      "importedReason": "not_activated_batch38_not_triggered"
+    },
+    {
+      "batch": 40,
+      "kind": "pending",
+      "enabled": true,
+      "description": "Final decision packet: either promote the new BTC frontier or record current BTC source-regime exhaustion.",
+      "summaryOutput": "data/research/strategy/analysis/batch40_pending_final_decision_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch40_pending_final_decision_20260331.md",
+      "importedReason": "current_batch24_36_loop_did_not_produce_a_promotable_btc_replacement"
+    }
+  ]
+}

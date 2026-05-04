@@ -1,24 +1,36 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import { SessionStore } from '../../../core/session.js'
 import { readWebSubchannels, writeWebSubchannels } from '../../../core/config.js'
 import type { WebChannel } from '../../../core/types.js'
 import type { SSEClient } from './chat.js'
+import { sanitizeSecretsSection, unmaskSecrets } from './security.js'
 
 interface ChannelsDeps {
   sessions: Map<string, SessionStore>
   sseByChannel: Map<string, Map<string, SSEClient>>
 }
 
+interface ChannelRouteOpts {
+  requireAuth?: MiddlewareHandler
+}
+
 /** Channels CRUD: GET /, POST /, PUT /:id, DELETE /:id */
-export function createChannelsRoutes({ sessions, sseByChannel }: ChannelsDeps) {
+export function createChannelsRoutes({ sessions, sseByChannel }: ChannelsDeps, opts?: ChannelRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
+
+  function sanitizeChannel(channel: WebChannel) {
+    return sanitizeSecretsSection({ ...channel })
+  }
 
   /** GET / — list all channels (default first, then sub-channels) */
   app.get('/', async (c) => {
     const subChannels = await readWebSubchannels()
     const channels = [
       { id: 'default', label: 'Alice' },
-      ...subChannels,
+      ...subChannels.map((channel) => sanitizeChannel(channel)),
     ]
     return c.json({ channels })
   })
@@ -64,7 +76,7 @@ export function createChannelsRoutes({ sessions, sseByChannel }: ChannelsDeps) {
     sessions.set(body.id, session)
     sseByChannel.set(body.id, new Map())
 
-    return c.json({ channel: newChannel }, 201)
+    return c.json({ channel: sanitizeChannel(newChannel) }, 201)
   })
 
   /** PUT /:id — update a sub-channel */
@@ -82,6 +94,7 @@ export function createChannelsRoutes({ sessions, sseByChannel }: ChannelsDeps) {
     const existing = await readWebSubchannels()
     const idx = existing.findIndex((ch) => ch.id === id)
     if (idx === -1) return c.json({ error: 'channel not found' }, 404)
+    unmaskSecrets(body as Record<string, unknown>, existing[idx] as unknown as Record<string, unknown>)
 
     const updated: WebChannel = {
       ...existing[idx],
@@ -93,7 +106,7 @@ export function createChannelsRoutes({ sessions, sseByChannel }: ChannelsDeps) {
     existing[idx] = updated
     await writeWebSubchannels(existing)
 
-    return c.json({ channel: updated })
+    return c.json({ channel: sanitizeChannel(updated) })
   })
 
   /** DELETE /:id — delete a sub-channel */

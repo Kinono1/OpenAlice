@@ -196,16 +196,29 @@ const activeHoursSchema = z.object({
   timezone: z.string().default('local'),
 }).nullable().default(null)
 
+const authSchema = z.object({
+  /** If true, auth is enforced even if env tokens are not set (rejects all). */
+  enforceAuth: z.boolean().default(true),
+  /** Token TTL for session tokens (future use). */
+  sessionTtlMs: z.number().int().positive().default(86_400_000),
+})
 
 const connectorsSchema = z.object({
-  web: z.object({ port: z.number().int().positive().default(3002) }).default({ port: 3002 }),
+  web: z.object({
+    port: z.number().int().positive().default(3002),
+    allowOrigins: z.array(z.string()).default([]),
+    maxSseClients: z.number().int().positive().max(1000).default(100),
+    sseMaxDurationMs: z.number().int().positive().max(86_400_000).default(900_000),
+  }).default({ port: 3002, allowOrigins: [], maxSseClients: 100, sseMaxDurationMs: 900_000 }),
   mcp: z.object({
     port: z.number().int().positive().default(3001),
-  }).default({ port: 3001 }),
+    allowOrigins: z.array(z.string()).default([]),
+  }).default({ port: 3001, allowOrigins: [] }),
   mcpAsk: z.object({
     enabled: z.boolean().default(false),
     port: z.number().int().positive().optional(),
-  }).default({ enabled: false }),
+    allowOrigins: z.array(z.string()).default([]),
+  }).default({ enabled: false, allowOrigins: [] }),
   telegram: z.object({
     enabled: z.boolean().default(false),
     botToken: z.string().optional(),
@@ -230,6 +243,200 @@ export const toolsSchema = z.object({
   /** Tool names that are disabled. Tools not listed are enabled by default. */
   disabled: z.array(z.string()).default([]),
 })
+
+const strategyFactorConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  weight: z.number().nonnegative().default(1),
+})
+
+const strategyCompositeFactorConfigSchema = strategyFactorConfigSchema.extend({
+  componentWeights: z.object({
+    first: z.number().nonnegative(),
+    second: z.number().nonnegative(),
+    third: z.number().nonnegative(),
+  }).optional(),
+})
+
+const strategyLayerConfigSchema = z.object({
+  layer: z.enum(['core', 'extended', 'watch-only']),
+  maxPositions: z.number().int().nonnegative(),
+  maxPositionPctOfEquity: z.number().nonnegative(),
+  minActionStatusToTrade: z.enum(['attack', 'attack-lite', 'probe', 'hold', 'reduce', 'exit', 'no-trade']),
+  requiresCoreNotRiskOff: z.boolean(),
+})
+
+const strategyFreezeRuleSchema = z.object({
+  preFreezeHours: z.number().nonnegative().default(2),
+  postFreezeHours: z.number().nonnegative().default(0.5),
+  maxActionDuringFreeze: z.enum(['reduce', 'exit', 'no-trade', 'hold']).default('reduce'),
+})
+
+const strategyMacroEventSchema = z.object({
+  name: z.string().min(1),
+  releaseTimeUtc: z.number().int(),
+  severity: z.enum(['high', 'medium', 'low']),
+  marketScope: z.array(z.enum(['crypto', 'a-share'])).min(1),
+  freezeRule: strategyFreezeRuleSchema,
+})
+
+const strategyRegimeHmmSchema = z.object({
+  enabled: z.boolean().default(false),
+  minObservations: z.number().int().positive().default(30),
+  seedObservations: z.number().int().positive().default(168),
+  stableObservations: z.number().int().positive().default(500),
+  trainingLookback: z.number().int().positive().default(720),
+  maxIterations: z.number().int().positive().default(24),
+  tolerance: z.number().positive().default(1e-3),
+  regularization: z.number().nonnegative().default(1e-4),
+  confidenceFloor: z.number().min(0).max(1).default(0.4),
+  anomalyZScore: z.number().positive().default(3),
+  zScoreWindow: z.number().int().positive().default(48),
+  realizedVolWindow: z.number().int().positive().default(24),
+  volumeBaselineWindow: z.number().int().positive().default(24),
+})
+
+const strategyResearchIcSchema = z.object({
+  enabled: z.boolean().default(false),
+  minMeanIc: z.number().default(0.03),
+  minIcIr: z.number().default(0.5),
+  minWinRate: z.number().default(0.55),
+  quantiles: z.number().int().min(3).max(10).default(5),
+  decayHorizons: z.array(z.number().int().positive()).default([1, 6, 24, 72, 168]),
+})
+
+const strategyMlSchema = z.object({
+  enabled: z.boolean().default(false),
+  architecture: z.enum(['lstm', 'patchtst']).default('lstm'),
+  modelPath: z.string().optional(),
+  lookbackSteps: z.number().int().positive().default(48),
+  forecastHorizonHours: z.number().int().positive().default(24),
+  decisionThreshold: z.number().positive().default(0.05),
+})
+
+const strategyMetaLabelingSchema = z.object({
+  enabled: z.boolean().default(false),
+  upperBarrierPct: z.number().positive().default(2),
+  lowerBarrierPct: z.number().positive().default(1),
+  maxHoldingBars: z.number().int().positive().default(24),
+  minConfidenceToTrade: z.number().min(0).max(1).default(0.55),
+})
+
+export const strategySchema = z.object({
+  enabled: z.boolean().default(true),
+  governance: z.object({
+    useGovernanceGate: z.boolean().default(true),
+    staleDataCapsExecution: z.boolean().default(true),
+    preferReduceOnWeakSignal: z.boolean().default(false),
+  }).default({
+    useGovernanceGate: true,
+    staleDataCapsExecution: true,
+    preferReduceOnWeakSignal: false,
+  }),
+  runtime: z.object({
+    marketScope: z.enum(['crypto', 'a-share']).default('crypto'),
+    runtimeIntegrationEnabled: z.boolean().default(false),
+  }).default({
+    marketScope: 'crypto',
+    runtimeIntegrationEnabled: false,
+  }),
+  eventCalendar: z.object({
+    enabled: z.boolean().default(true),
+    events: z.array(strategyMacroEventSchema).default([]),
+  }).default({
+    enabled: true,
+    events: [],
+  }),
+  regime: z.object({
+    hmm: strategyRegimeHmmSchema.optional(),
+  }).optional(),
+  factors: z.object({
+    fundingRate: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    basis: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    volumeSurge: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    momentumComposite: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    meanReversion: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    volatilityRegime: strategyCompositeFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    liquidationPressure: strategyCompositeFactorConfigSchema.default({ enabled: true, weight: 1 }),
+    crossTimeframeDivergence: strategyFactorConfigSchema.default({ enabled: true, weight: 1 }),
+  }).default({
+    fundingRate: { enabled: true, weight: 1 },
+    basis: { enabled: true, weight: 1 },
+    volumeSurge: { enabled: true, weight: 1 },
+    momentumComposite: { enabled: true, weight: 1 },
+    meanReversion: { enabled: true, weight: 1 },
+    volatilityRegime: { enabled: true, weight: 1 },
+    liquidationPressure: { enabled: true, weight: 1 },
+    crossTimeframeDivergence: { enabled: true, weight: 1 },
+  }),
+  positionSizing: z.object({
+    enabled: z.boolean().default(true),
+    method: z.enum(['fixed', 'kelly', 'volTarget']).default('fixed'),
+    defaultAssetLayer: z.enum(['core', 'extended', 'watch-only']).default('core'),
+    targetVolPct: z.number().positive().default(10),
+    maxPctOfEquity: z.number().positive().default(0.3),
+    kellyFraction: z.number().positive().default(0.15),
+    layerConfigs: z.array(strategyLayerConfigSchema).default([
+      {
+        layer: 'core',
+        maxPositions: 5,
+        maxPositionPctOfEquity: 0.3,
+        minActionStatusToTrade: 'probe',
+        requiresCoreNotRiskOff: false,
+      },
+      {
+        layer: 'extended',
+        maxPositions: 3,
+        maxPositionPctOfEquity: 0.15,
+        minActionStatusToTrade: 'attack-lite',
+        requiresCoreNotRiskOff: true,
+      },
+      {
+        layer: 'watch-only',
+        maxPositions: 1,
+        maxPositionPctOfEquity: 0.05,
+        minActionStatusToTrade: 'attack',
+        requiresCoreNotRiskOff: true,
+      },
+    ]),
+  }).default({
+    enabled: true,
+    method: 'fixed',
+    defaultAssetLayer: 'core',
+    targetVolPct: 10,
+    maxPctOfEquity: 0.3,
+    kellyFraction: 0.15,
+    layerConfigs: [
+      {
+        layer: 'core',
+        maxPositions: 5,
+        maxPositionPctOfEquity: 0.3,
+        minActionStatusToTrade: 'probe',
+        requiresCoreNotRiskOff: false,
+      },
+      {
+        layer: 'extended',
+        maxPositions: 3,
+        maxPositionPctOfEquity: 0.15,
+        minActionStatusToTrade: 'attack-lite',
+        requiresCoreNotRiskOff: true,
+      },
+      {
+        layer: 'watch-only',
+        maxPositions: 1,
+        maxPositionPctOfEquity: 0.05,
+        minActionStatusToTrade: 'attack',
+        requiresCoreNotRiskOff: true,
+      },
+    ],
+  }),
+  research: z.object({
+    ic: strategyResearchIcSchema.optional(),
+  }).optional(),
+  ml: strategyMlSchema.optional(),
+  metaLabeling: strategyMetaLabelingSchema.optional(),
+})
+
+export type StrategyConfig = z.infer<typeof strategySchema>
 
 const webhookTokenSchema = z.object({
   /** Human-readable label (used in logs / admin UI; not a secret). */
@@ -303,8 +510,10 @@ export type Config = {
   marketData: z.infer<typeof marketDataSchema>
   compaction: z.infer<typeof compactionSchema>
   aiProvider: z.infer<typeof aiProviderSchema>
+  auth: z.infer<typeof authSchema>
   heartbeat: z.infer<typeof heartbeatSchema>
   snapshot: z.infer<typeof snapshotSchema>
+  strategy: z.infer<typeof strategySchema>
   connectors: z.infer<typeof connectorsSchema>
   news: z.infer<typeof newsCollectorSchema>
   tools: z.infer<typeof toolsSchema>
@@ -341,7 +550,7 @@ async function parseAndSeed<T>(filename: string, schema: z.ZodType<T>, raw: unkn
 }
 
 export async function loadConfig(): Promise<Config> {
-  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'heartbeat.json', 'snapshot.json', 'connectors.json', 'news.json', 'tools.json', 'webhook.json'] as const
+  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'auth.json', 'heartbeat.json', 'snapshot.json', 'strategy.json', 'connectors.json', 'news.json', 'tools.json', 'webhook.json'] as const
   const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
 
   // TODO: remove all migration blocks before v1.0 — no stable release yet, breaking changes are fine
@@ -474,7 +683,7 @@ export async function loadConfig(): Promise<Config> {
   }
 
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
-  const connectorsRaw = raws[9] as Record<string, unknown> | undefined
+  const connectorsRaw = raws[11] as Record<string, unknown> | undefined
   if (connectorsRaw === undefined) {
     const oldTelegram = await loadJsonFile('telegram.json')
     const oldEngine = raws[0] as Record<string, unknown> | undefined
@@ -491,7 +700,7 @@ export async function loadConfig(): Promise<Config> {
       await mkdir(CONFIG_DIR, { recursive: true })
       await writeFile(resolve(CONFIG_DIR, 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
     }
-    raws[9] = Object.keys(migrated).length > 0 ? migrated : undefined
+    raws[11] = Object.keys(migrated).length > 0 ? migrated : undefined
   }
 
   return {
@@ -502,12 +711,14 @@ export async function loadConfig(): Promise<Config> {
     marketData:    await parseAndSeed(files[4], marketDataSchema, raws[4]),
     compaction:    await parseAndSeed(files[5], compactionSchema, raws[5]),
     aiProvider:    await parseAndSeed(files[6], aiProviderSchema, raws[6]),
-    heartbeat:     await parseAndSeed(files[7], heartbeatSchema, raws[7]),
-    snapshot:      await parseAndSeed(files[8], snapshotSchema, raws[8]),
-    connectors:    await parseAndSeed(files[9], connectorsSchema, raws[9]),
-    news:          await parseAndSeed(files[10], newsCollectorSchema, raws[10]),
-    tools:         await parseAndSeed(files[11], toolsSchema, raws[11]),
-    webhook:       await parseAndSeed(files[12], webhookSchema, raws[12]),
+    auth:          await parseAndSeed(files[7], authSchema, raws[7]),
+    heartbeat:     await parseAndSeed(files[8], heartbeatSchema, raws[8]),
+    snapshot:      await parseAndSeed(files[9], snapshotSchema, raws[9]),
+    strategy:      await parseAndSeed(files[10], strategySchema, raws[10]),
+    connectors:    await parseAndSeed(files[11], connectorsSchema, raws[11]),
+    news:          await parseAndSeed(files[12], newsCollectorSchema, raws[12]),
+    tools:         await parseAndSeed(files[13], toolsSchema, raws[13]),
+    webhook:       await parseAndSeed(files[14], webhookSchema, raws[14]),
   }
 }
 
@@ -740,6 +951,16 @@ export async function readWebhookConfig() {
   }
 }
 
+/** Read strategy config from disk (called per-request for hot-reload). */
+export async function readStrategyConfig(): Promise<StrategyConfig> {
+  try {
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'strategy.json'), 'utf-8'))
+    return strategySchema.parse(raw)
+  } catch {
+    return strategySchema.parse({})
+  }
+}
+
 // ==================== Profile Helpers ====================
 
 /** Resolved profile — all fields needed by providers. */
@@ -806,8 +1027,10 @@ const sectionSchemas: Record<ConfigSection, z.ZodTypeAny> = {
   marketData: marketDataSchema,
   compaction: compactionSchema,
   aiProvider: aiProviderSchema,
+  auth: authSchema,
   heartbeat: heartbeatSchema,
   snapshot: snapshotSchema,
+  strategy: strategySchema,
   connectors: connectorsSchema,
   news: newsCollectorSchema,
   tools: toolsSchema,
@@ -822,8 +1045,10 @@ const sectionFiles: Record<ConfigSection, string> = {
   marketData: 'market-data.json',
   compaction: 'compaction.json',
   aiProvider: 'ai-provider-manager.json',
+  auth: 'auth.json',
   heartbeat: 'heartbeat.json',
   snapshot: 'snapshot.json',
+  strategy: 'strategy.json',
   connectors: 'connectors.json',
   news: 'news.json',
   tools: 'tools.json',

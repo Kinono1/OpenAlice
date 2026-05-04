@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-29T19:50:00Z",
+  "batchId": "route_batch5_eth_v1",
+  "batchGoal": "Run an ETH-only family-representative search after batch4 failed, preserving one strong confirmed candidate and one long-memory decorrelator with a single control.",
+  "notes": [
+    "batch5_mode=single_symbol",
+    "symbol=ETH/USD",
+    "one_representative_per_family=true"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+    "symbol": "ETH/USD",
+    "lookbackBars": 3000,
+    "symbols": [
+      {
+        "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+        "symbol": "ETH/USD",
+        "lookbackBars": 3000
+      }
+    ]
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 2000,
+    "horizonBars": 240,
+    "blockSize": 24,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "B5-ETH-CTRL",
+      "strategyName": "trend_eth_control_20_55",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "role": "control",
+      "hypothesisFamily": "eth_control",
+      "correlationBucket": "eth_baseline",
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 55,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B5-ETH-PRIMARY",
+      "strategyName": "trend_eth_30_55_confirm3_band020",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "role": "primary",
+      "hypothesisFamily": "eth_confirmed_band",
+      "correlationBucket": "eth_confirm3_band020",
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 55,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.2,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B5-ETH-DECORR",
+      "strategyName": "trend_eth_16_120",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "role": "diversifier",
+      "hypothesisFamily": "eth_long_memory",
+      "correlationBucket": "eth_long_memory",
+      "params": {
+        "trendFastPeriod": 16,
+        "trendSlowPeriod": 120,
+        "allowShort": true
+      }
+    }
+  ]
+}

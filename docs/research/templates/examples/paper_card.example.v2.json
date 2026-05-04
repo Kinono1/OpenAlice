@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "paper_card.v2",
+  "paperId": "CQR_NeurIPS2019",
+  "title": "Conformalized Quantile Regression",
+  "venue": "NeurIPS 2019",
+  "source": {
+    "notePath": "docs/research/papers/top_venue_20260228/notes/CQR_NeurIPS2019.md",
+    "textPath": "docs/research/papers/top_venue_20260228/text/CQR_NeurIPS2019.txt"
+  },
+  "targets": ["gate_pass_robust_ci", "error_ratio"],
+  "sections": {
+    "problem": "Construct adaptive prediction intervals with finite-sample validity.",
+    "method": "Combine quantile regression with conformal calibration.",
+    "evidence": "Empirical interval length reduction with maintained coverage.",
+    "limitations": "Coverage is marginal and depends on exchangeability assumptions.",
+    "adaptation": "Use calibrated uncertainty intervals as decision thresholds."
+  },
+  "claims": [
+    {
+      "claimId": "CQR_NeurIPS2019_C1",
+      "text": "CQR yields shorter intervals while preserving coverage.",
+      "targetTags": ["gate_pass_robust_ci"],
+      "evidenceRefs": ["CQR_NeurIPS2019_E1"],
+      "confidence": 0.82
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "CQR_NeurIPS2019_E1",
+      "text": "Average interval length is shorter than split conformal in benchmark datasets.",
+      "source": "Section 6, empirical comparisons."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "interval_length_reduction_pct",
+      "value": 31.0,
+      "unit": "pct",
+      "context": "simulated example in the paper"
+    }
+  ],
+  "trace": {
+    "generatedAt": "2026-03-02T16:15:00Z",
+    "generator": "example-template",
+    "inputManifest": "docs/research/papers/top_venue_20260228/deep_read_manifest.json"
+  }
+}

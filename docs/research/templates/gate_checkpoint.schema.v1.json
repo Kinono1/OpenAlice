@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice/gate_checkpoint.schema.v1.json",
+  "title": "OpenAlice Gate Checkpoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "gateId",
+    "generatedAt",
+    "hardGate",
+    "status",
+    "summary",
+    "checks",
+    "reasonCodes",
+    "inputs"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "gate_checkpoint.v1"
+    },
+    "gateId": {
+      "type": "string",
+      "pattern": "^G[0-9]+$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hardGate": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "warn", "fail", "skipped"]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "failed", "warned"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "warned": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "passed", "severity", "reasonCode", "detail"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "passed": { "type": "boolean" },
+          "severity": {
+            "type": "string",
+            "enum": ["hard", "warn", "info"]
+          },
+          "reasonCode": { "type": "string", "minLength": 1 },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "reasonCodes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "inputs": {
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "gate_checkpoint.v1",
+  "gateId": "G0",
+  "generatedAt": "2026-03-02T10:41:02Z",
+  "hardGate": true,
+  "status": "pass",
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "warned": 0
+  },
+  "checks": [
+    {
+      "name": "env_verify_report_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_ENV_REPORT_MISSING",
+      "detail": "data/runtime/environment_verify_report.json"
+    },
+    {
+      "name": "env_verify_passed",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_ENV_VERIFY_FAIL",
+      "detail": "env:verify passed"
+    },
+    {
+      "name": "freeze_verify_report_exists",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_FREEZE_REPORT_MISSING",
+      "detail": "data/runtime/freeze_verify_report.json"
+    },
+    {
+      "name": "freeze_verify_passed",
+      "passed": true,
+      "severity": "hard",
+      "reasonCode": "HARD_FREEZE_VERIFY_FAIL",
+      "detail": "freeze:verify passed"
+    }
+  ],
+  "reasonCodes": [],
+  "inputs": {
+    "envVerifyReport": {
+      "path": "data/runtime/environment_verify_report.json",
+      "exists": true
+    },
+    "freezeVerifyReport": {
+      "path": "data/runtime/freeze_verify_report.json",
+      "exists": true
+    }
+  }
+}

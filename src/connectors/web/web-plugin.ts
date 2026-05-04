@@ -19,6 +19,9 @@ import { createDiaryRoutes } from './routes/diary.js'
 import { createBrainRoutes } from './routes/brain.js'
 import { createTradingRoutes } from './routes/trading.js'
 import { createTradingConfigRoutes } from './routes/trading-config.js'
+import { createHealthRoutes } from './routes/health.js'
+import { createSignalRoutes } from './routes/signals.js'
+import { createStrategyRoutes } from './routes/strategy.js'
 import { createDevRoutes } from './routes/dev.js'
 import { createToolsRoutes } from './routes/tools.js'
 import { createAgentStatusRoutes } from './routes/agent-status.js'
@@ -90,7 +93,15 @@ export class WebPlugin implements Plugin {
     })
 
     // ==================== Mount route modules ====================
-    app.route('/api/chat', createChatRoutes({ ctx, sessions, sseByChannel: this.sseByChannel }))
+    const webConfig = ctx.config.connectors.web
+
+    app.route('/api/chat', createChatRoutes({
+      ctx,
+      sessions,
+      sseByChannel: this.sseByChannel,
+      maxSseClients: webConfig.maxSseClients,
+      sseMaxDurationMs: webConfig.sseMaxDurationMs,
+    }))
     app.route('/api/channels', createChannelsRoutes({ sessions, sseByChannel: this.sseByChannel }))
     app.route('/api/media', createMediaRoutes())
     app.route('/api/config', createConfigRoutes({
@@ -104,11 +115,17 @@ export class WebPlugin implements Plugin {
     app.route('/api/heartbeat', createHeartbeatRoutes(ctx))
     app.route('/api/diary', createDiaryRoutes(ctx))
     app.route('/api/brain', createBrainRoutes())
+    app.route('/api', createHealthRoutes(ctx))
+    app.route('/api/signals', createSignalRoutes(ctx))
+    app.route('/api/strategy', createStrategyRoutes(ctx))
     app.route('/api/trading/config', createTradingConfigRoutes(ctx))
     app.route('/api/trading', createTradingRoutes(ctx))
     app.route('/api/dev', createDevRoutes(ctx.connectorCenter))
     app.route('/api/tools', createToolsRoutes(ctx.toolCenter))
-    app.route('/api/agent-status', createAgentStatusRoutes(ctx))
+    app.route('/api/agent-status', createAgentStatusRoutes(ctx, {
+      maxSseClients: webConfig.maxSseClients,
+      sseMaxDurationMs: webConfig.sseMaxDurationMs,
+    }))
     app.route('/api/news', createNewsRoutes(ctx))
     app.route('/api/market', createMarketRoutes(ctx))
     app.route('/api/persona', createPersonaRoutes())

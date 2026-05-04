@@ -1,0 +1,271 @@
+{
+  "schemaVersion": "btc_frontier_loop_registry.v1",
+  "loopId": "btc_frontier_loop_24_40_v1",
+  "generatedAt": "2026-03-31T03:30:00Z",
+  "frontier": {
+    "batchId": "route_batch15_btc_phaseb_neighborhood_base_v1",
+    "manifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+    "metrics": {
+      "meanPbo": 0.18571428571428572,
+      "meanDsrProbability": 0.5969,
+      "fdrQ": 1.0,
+      "wfoFailureDensity": 0.666667,
+      "totalGap": 0.9
+    }
+  },
+  "defaults": {
+    "symbol": "BTC/USD",
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "lookbackBars": 3600,
+    "baseManifest": "docs/research/strategy_candidates.route_batch15_btc_phaseb_neighborhood_base.v1.json",
+    "protocolProfile": "phaseb_native_v1",
+    "multipleTestingUnit": "candidate",
+    "fdrMethod": "bh",
+    "wfoProfile": "stable",
+    "currentEthBestManifest": "docs/research/strategy_candidates.route_batch13_eth_phaseb_r3_trial33_neighborhood_base.v1.json",
+    "refinement": {
+      "fastDeltas": [-4, -2, 0, 2, 4],
+      "slowDeltas": [-10, -5, 0, 5, 10],
+      "confirmBarsDeltas": [-1, 0, 1],
+      "minDiffDeltas": [-0.01, -0.005, 0, 0.005],
+      "maxMutatedSlots": 2,
+      "maxTrials": 80,
+      "perSeedLimit": 6,
+      "minGap": 20,
+      "minPairDistance": 8
+    },
+    "matrixProfiles": [
+      {
+        "id": "phaseb_native_v1",
+        "fdrMethod": "bh",
+        "wfoProfile": "stable"
+      },
+      {
+        "id": "route_strict_v1",
+        "fdrMethod": "bh",
+        "wfoProfile": "stable"
+      },
+      {
+        "id": "route_robust_v1",
+        "fdrMethod": "bh",
+        "wfoProfile": "stable"
+      }
+    ]
+  },
+  "duplicateClusters": [
+    {
+      "clusterId": "cluster_8d5d7e0f",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/phaseb-r2/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/20260302T173430Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260302T173645Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260302T181754Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260302T202020Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260302T204445Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260302T213348Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/phaseb-r2/phaseb_family_search.json"
+      ],
+      "salvage": {
+        "archive": "data/research/strategy/analysis/g3g4/archive/20260302T202020Z/phaseb_family_search.json",
+        "strategy": "replace -Infinity with null before JSON parse"
+      }
+    },
+    {
+      "clusterId": "cluster_7bc76395",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/20260303T034851Z/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/20260303T034851Z/phaseb_family_search.json"
+      ]
+    },
+    {
+      "clusterId": "cluster_59be6ef4",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/20260303T035600Z/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/20260303T035600Z/phaseb_family_search.json"
+      ]
+    },
+    {
+      "clusterId": "cluster_feaa73fa",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/20260303T040008Z/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/20260303T040008Z/phaseb_family_search.json"
+      ]
+    },
+    {
+      "clusterId": "cluster_ac3031ad",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/20260303T040836Z/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/20260303T040836Z/phaseb_family_search.json"
+      ]
+    },
+    {
+      "clusterId": "cluster_62d18ab7",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/20260303T113824Z/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/20260303T070341Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260303T071313Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260303T091332Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260303T100244Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260303T102457Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260303T103126Z/phaseb_family_search.json",
+        "data/research/strategy/analysis/g3g4/archive/20260303T113824Z/phaseb_family_search.json"
+      ]
+    },
+    {
+      "clusterId": "cluster_f2ba5284",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/phaseb-r1/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/phaseb-r1/phaseb_family_search.json"
+      ]
+    },
+    {
+      "clusterId": "cluster_16a11aa8",
+      "canonicalArchive": "data/research/strategy/analysis/g3g4/archive/phaseb-r3/phaseb_family_search.json",
+      "duplicateArchives": [
+        "data/research/strategy/analysis/g3g4/archive/phaseb-r3/phaseb_family_search.json"
+      ],
+      "importedEvidence": {
+        "summary": "data/research/strategy/analysis/phaseb_r3_btc_native_full_20260331.json",
+        "markdown": "data/research/strategy/analysis/phaseb_r3_btc_native_full_20260331.md"
+      }
+    }
+  ],
+  "batches": [
+    {
+      "batch": 24,
+      "kind": "salvage_duplicate_cluster",
+      "clusterId": "cluster_8d5d7e0f",
+      "archive": "data/research/strategy/analysis/g3g4/archive/20260302T202020Z/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch24_salvage_duplicate_cluster_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch24_salvage_duplicate_cluster_20260331.md"
+    },
+    {
+      "batch": 25,
+      "kind": "full_sweep",
+      "clusterId": "cluster_f2ba5284",
+      "archive": "data/research/strategy/analysis/g3g4/archive/phaseb-r1/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch25_phaseb_r1_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch25_phaseb_r1_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 26,
+      "kind": "full_sweep",
+      "clusterId": "cluster_8d5d7e0f",
+      "archive": "data/research/strategy/analysis/g3g4/archive/phaseb-r2/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch26_phaseb_r2_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch26_phaseb_r2_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 27,
+      "kind": "full_sweep",
+      "clusterId": "cluster_7bc76395",
+      "archive": "data/research/strategy/analysis/g3g4/archive/20260303T034851Z/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch27_cluster_7bc76395_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch27_cluster_7bc76395_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 28,
+      "kind": "full_sweep",
+      "clusterId": "cluster_59be6ef4",
+      "archive": "data/research/strategy/analysis/g3g4/archive/20260303T035600Z/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch28_cluster_59be6ef4_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch28_cluster_59be6ef4_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 29,
+      "kind": "full_sweep",
+      "clusterId": "cluster_feaa73fa",
+      "archive": "data/research/strategy/analysis/g3g4/archive/20260303T040008Z/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch29_cluster_feaa73fa_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch29_cluster_feaa73fa_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 30,
+      "kind": "full_sweep",
+      "clusterId": "cluster_ac3031ad",
+      "archive": "data/research/strategy/analysis/g3g4/archive/20260303T040836Z/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch30_cluster_ac3031ad_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch30_cluster_ac3031ad_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 31,
+      "kind": "full_sweep",
+      "clusterId": "cluster_62d18ab7",
+      "archive": "data/research/strategy/analysis/g3g4/archive/20260303T113824Z/phaseb_family_search.json",
+      "summaryOutput": "data/research/strategy/analysis/batch31_cluster_62d18ab7_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch31_cluster_62d18ab7_btc_native_full_20260331.md"
+    },
+    {
+      "batch": 32,
+      "kind": "import_existing_sweep",
+      "clusterId": "cluster_16a11aa8",
+      "summaryOutput": "data/research/strategy/analysis/batch32_import_phaseb_r3_btc_native_full_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch32_import_phaseb_r3_btc_native_full_20260331.md",
+      "importedSummary": "data/research/strategy/analysis/phaseb_r3_btc_native_full_20260331.json",
+      "importedMarkdown": "data/research/strategy/analysis/phaseb_r3_btc_native_full_20260331.md",
+      "archive": "data/research/strategy/analysis/g3g4/archive/phaseb-r3/phaseb_family_search.json"
+    },
+    {
+      "batch": 33,
+      "kind": "refine_top_upstream",
+      "rank": 1,
+      "summaryOutput": "data/research/strategy/analysis/batch33_refine_rank1_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch33_refine_rank1_20260331.md",
+      "seedManifestOutput": "docs/research/strategy_candidates.route_batch33_btc_upstream_rank1_seed.v1.json",
+      "bestManifestOutput": "docs/research/strategy_candidates.route_batch33_btc_upstream_rank1_refine_best.v1.json"
+    },
+    {
+      "batch": 34,
+      "kind": "refine_top_upstream",
+      "rank": 2,
+      "summaryOutput": "data/research/strategy/analysis/batch34_refine_rank2_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch34_refine_rank2_20260331.md",
+      "seedManifestOutput": "docs/research/strategy_candidates.route_batch34_btc_upstream_rank2_seed.v1.json",
+      "bestManifestOutput": "docs/research/strategy_candidates.route_batch34_btc_upstream_rank2_refine_best.v1.json"
+    },
+    {
+      "batch": 35,
+      "kind": "refine_top_upstream",
+      "rank": 3,
+      "summaryOutput": "data/research/strategy/analysis/batch35_refine_rank3_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch35_refine_rank3_20260331.md",
+      "seedManifestOutput": "docs/research/strategy_candidates.route_batch35_btc_upstream_rank3_seed.v1.json",
+      "bestManifestOutput": "docs/research/strategy_candidates.route_batch35_btc_upstream_rank3_refine_best.v1.json"
+    },
+    {
+      "batch": 36,
+      "kind": "refine_top_upstream",
+      "rank": 4,
+      "summaryOutput": "data/research/strategy/analysis/batch36_refine_rank4_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch36_refine_rank4_20260331.md",
+      "seedManifestOutput": "docs/research/strategy_candidates.route_batch36_btc_upstream_rank4_seed.v1.json",
+      "bestManifestOutput": "docs/research/strategy_candidates.route_batch36_btc_upstream_rank4_refine_best.v1.json"
+    },
+    {
+      "batch": 37,
+      "kind": "route_promote_best",
+      "summaryOutput": "data/research/strategy/analysis/batch37_route_promote_best_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch37_route_promote_best_20260331.md",
+      "routeManifestOutput": "docs/research/strategy_candidates.route_batch37_btc_promotion_candidate.v1.json"
+    },
+    {
+      "batch": 38,
+      "kind": "matrix_best",
+      "summaryOutput": "data/research/strategy/analysis/batch38_matrix_best_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch38_matrix_best_20260331.md"
+    },
+    {
+      "batch": 39,
+      "kind": "combo_best",
+      "summaryOutput": "data/research/strategy/analysis/batch39_combo_best_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch39_combo_best_20260331.md",
+      "comboManifestOutput": "docs/research/strategy_candidates.route_batch39_btc_eth_combo_candidate.v1.json"
+    },
+    {
+      "batch": 40,
+      "kind": "final_decision",
+      "summaryOutput": "data/research/strategy/analysis/batch40_final_decision_20260331.json",
+      "markdownOutput": "data/research/strategy/analysis/batch40_final_decision_20260331.md"
+    }
+  ]
+}

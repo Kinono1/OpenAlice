@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "generatedAt": "2026-03-02T10:40:55.970Z",
+  "allowPaperTrading": false,
+  "allowLiveTrading": false,
+  "failedChecks": [
+    "wfo",
+    "significance",
+    "risk_simulation"
+  ],
+  "warningChecks": [],
+  "sourceReportPath": "/Users/kino/Files/work_projects/code/expCode/effeciency/OpenAlice/data/research/strategy/strategy_validation_runs.json"
+}

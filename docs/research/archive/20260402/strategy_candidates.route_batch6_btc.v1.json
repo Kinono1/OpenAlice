@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-30T08:00:00Z",
+  "batchId": "route_batch6_btc_v1",
+  "batchGoal": "Run a BTC-only family repair loop with one control, one best-current trend representative, and one genuinely different breakout family representative.",
+  "notes": [
+    "batch6_mode=single_symbol_family_repair",
+    "symbol=BTC/USD",
+    "multiple_testing_unit=family",
+    "control_plus_best_trend_plus_breakout=true"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3000,
+    "symbols": [
+      {
+        "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+        "symbol": "BTC/USD",
+        "lookbackBars": 3000
+      }
+    ]
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0,
+    "multipleTestingUnit": "family"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 2000,
+    "horizonBars": 240,
+    "blockSize": 24,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "B6-BTC-CTRL",
+      "strategyName": "trend_btc_control_20_55",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_control",
+      "correlationBucket": "btc_baseline",
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 55,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B6-BTC-TREND",
+      "strategyName": "trend_btc_24_72_confirm3_band035",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_confirmed_trend",
+      "correlationBucket": "btc_confirm3_band035",
+      "params": {
+        "trendFastPeriod": 24,
+        "trendSlowPeriod": 72,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.35,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B6-BTC-BREAKOUT",
+      "strategyName": "breakout_btc_72_12_ls",
+      "strategy": "breakout",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "hypothesisFamily": "btc_breakout_family",
+      "correlationBucket": "btc_breakout_72_12",
+      "params": {
+        "breakoutPeriod": 72,
+        "breakoutExitPeriod": 12,
+        "allowShort": true
+      }
+    }
+  ]
+}

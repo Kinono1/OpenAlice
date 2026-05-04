@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-30T09:00:00Z",
+  "batchId": "route_batch7_eth_v1",
+  "batchGoal": "Run an ETH-only family repair loop after breakout failure, retaining control plus best-current trend and replacing breakout with an ensemble family representative.",
+  "notes": [
+    "batch7_mode=single_symbol_family_repair",
+    "symbol=ETH/USD",
+    "multiple_testing_unit=family",
+    "control_plus_best_trend_plus_ensemble=true"
+  ],
+  "dataset": {
+    "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+    "symbol": "ETH/USD",
+    "lookbackBars": 3000,
+    "symbols": [
+      {
+        "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+        "symbol": "ETH/USD",
+        "lookbackBars": 3000
+      }
+    ]
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0,
+    "multipleTestingUnit": "family"
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 2000,
+    "horizonBars": 240,
+    "blockSize": 24,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "B7-ETH-CTRL",
+      "strategyName": "trend_eth_control_20_55",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_control",
+      "correlationBucket": "eth_baseline",
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 55,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B7-ETH-TREND",
+      "strategyName": "trend_eth_30_55_confirm3_band020",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_confirmed_trend",
+      "correlationBucket": "eth_confirm3_band020",
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 55,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.2,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "B7-ETH-ENSEMBLE",
+      "strategyName": "ensemble_eth_t0.4_211_ls",
+      "strategy": "ensemble",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "hypothesisFamily": "eth_ensemble_family",
+      "correlationBucket": "eth_ensemble_t04_211",
+      "params": {
+        "allowShort": true,
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 60,
+        "rsiPeriod": 14,
+        "rsiOversold": 30,
+        "rsiOverbought": 70,
+        "bbPeriod": 20,
+        "bbStdDev": 2,
+        "breakoutPeriod": 40,
+        "breakoutExitPeriod": 12,
+        "ensembleThreshold": 0.4,
+        "ensembleWeights": {
+          "trend": 2,
+          "meanReversion": 1,
+          "breakout": 1
+        }
+      }
+    }
+  ]
+}

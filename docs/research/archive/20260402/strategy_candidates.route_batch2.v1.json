@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "strategy_candidates.v1",
+  "generatedAt": "2026-03-29T06:10:00Z",
+  "dataset": {
+    "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+    "symbol": "BTC/USD",
+    "lookbackBars": 3000,
+    "symbols": [
+      {
+        "inputCsv": "data/market/okx/BTC_USDT_USDT_1h.csv",
+        "symbol": "BTC/USD",
+        "lookbackBars": 3000
+      },
+      {
+        "inputCsv": "data/market/okx/ETH_USDT_USDT_1h.csv",
+        "symbol": "ETH/USD",
+        "lookbackBars": 3000
+      }
+    ]
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1
+  },
+  "wfo": {
+    "trainBars": 960,
+    "testBars": 240,
+    "stepBars": 240,
+    "degradationThreshold": 0.4
+  },
+  "significance": {
+    "partitions": 8,
+    "pboThreshold": 0.2,
+    "dsrMin": 0.0
+  },
+  "riskSimulation": {
+    "method": "moving_block_bootstrap",
+    "simulations": 2000,
+    "horizonBars": 240,
+    "blockSize": 24,
+    "ruinDrawdownPct": 30,
+    "maxRuinProbability": 0.02,
+    "minProfitProbability": 0.55
+  },
+  "costModel": {
+    "feeRate": 0.0006,
+    "slippageBps": 8,
+    "latencyBars": 1
+  },
+  "candidates": [
+    {
+      "strategyId": "C1",
+      "strategyName": "trend_btc_24_72_confirm3_band035",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 24,
+        "trendSlowPeriod": 72,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.35,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "C2",
+      "strategyName": "trend_btc_36_90_confirm2_band020",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 36,
+        "trendSlowPeriod": 90,
+        "trendConfirmBars": 2,
+        "trendMinDiffPct": 0.2,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "C3",
+      "strategyName": "trend_btc_30_55_band020",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "BTC/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 55,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0.2,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "C4",
+      "strategyName": "trend_eth_30_55_confirm3_band020",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 55,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0.2,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "C5",
+      "strategyName": "trend_eth_30_90_confirm2_band035",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 30,
+        "trendSlowPeriod": 90,
+        "trendConfirmBars": 2,
+        "trendMinDiffPct": 0.35,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "C6",
+      "strategyName": "trend_eth_20_90_confirm3",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 20,
+        "trendSlowPeriod": 90,
+        "trendConfirmBars": 3,
+        "trendMinDiffPct": 0,
+        "allowShort": true
+      }
+    },
+    {
+      "strategyId": "C7",
+      "strategyName": "trend_eth_36_90_band035",
+      "strategy": "trend",
+      "applicableSymbols": [
+        "ETH/USD"
+      ],
+      "params": {
+        "trendFastPeriod": 36,
+        "trendSlowPeriod": 90,
+        "trendConfirmBars": 1,
+        "trendMinDiffPct": 0.35,
+        "allowShort": true
+      }
+    }
+  ]
+}

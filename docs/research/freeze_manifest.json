@@ -1,0 +1,48 @@
+{
+  "manifestVersion": "v1",
+  "frozenAt": "2026-03-02T16:08:00Z",
+  "versions": {
+    "sm": "sm-v1",
+    "stats": "stats-v1",
+    "hash": "hash-v1",
+    "evidence": "evidence-v1"
+  },
+  "thresholds": {
+    "transferPassRatio_rolling14d_min": 0.25,
+    "winnerEligibleRatio_rolling14d_min": 0.35,
+    "meanPbo_max": 0.2,
+    "meanDsrProbability_min": 0.5,
+    "fdrQ_max": 0.1,
+    "quoteAgeP95Ms_max": 2000,
+    "decisionToSubmitP95Ms_max": 800,
+    "decisionToFirstFillP95Ms_max": 2500,
+    "releaseGateStatusAgeHours_max": 24
+  },
+  "raciSnapshot": {
+    "E7": {
+      "dri": "kino.e7.dri",
+      "backup": "kino.e7.backup",
+      "nightOnCall": "kino.e7.oncall"
+    },
+    "E8": {
+      "dri": "kino.e8.dri",
+      "backup": "kino.e8.backup",
+      "nightOnCall": "kino.e8.oncall"
+    },
+    "E9": {
+      "dri": "kino.e9.dri",
+      "backup": "kino.e9.backup",
+      "nightOnCall": "kino.e9.oncall"
+    }
+  },
+  "incidentCommander": "kino.incident.commander",
+  "l2OverrideAllowlist": [
+    "kino.mainline.override"
+  ],
+  "signOff": {
+    "approvedBy": [
+      "kino.owner"
+    ],
+    "approvedAt": "2026-03-02T16:09:00Z"
+  }
+}

@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { EngineContext } from '../../../core/types.js'
 import { isExternalEventType, validateEventPayload } from '../../../core/agent-event.js'
@@ -13,9 +13,23 @@ interface EventsDeps {
   ingestProducer: ProducerHandle<readonly ['task.requested']>
 }
 
+interface EventsRouteOpts {
+  requireAuth?: MiddlewareHandler
+  maxSseClients?: number
+  sseMaxDurationMs?: number
+}
+
 /** Event log routes: GET /, GET /recent, GET /stream (SSE), POST /ingest, GET /auth-status */
-export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
+export function createEventsRoutes(deps: EventsDeps | EngineContext, opts?: EventsRouteOpts) {
   const app = new Hono()
+  const ctx = 'ctx' in deps ? deps.ctx : deps
+  const ingestProducer = 'ingestProducer' in deps ? deps.ingestProducer : undefined
+  if (opts?.requireAuth) {
+    app.use('*', opts.requireAuth)
+  }
+  const maxDurationMs = opts?.sseMaxDurationMs ?? Number(process.env.WEB_SSE_MAX_DURATION_MS ?? 15 * 60_000)
+  const maxSseClients = opts?.maxSseClients ?? Number(process.env.WEB_SSE_MAX_CLIENTS ?? 100)
+  let activeStreams = 0
 
   // Auth status — surfaces configuration state to the UI without leaking secrets.
   app.get('/auth-status', async (c) => {
@@ -92,6 +106,10 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
       return c.json({ error: msg }, 400)
     }
 
+    if (!ingestProducer) {
+      return c.json({ error: 'Event ingestion producer not available' }, 503)
+    }
+
     const entry = await (
       ingestProducer.emit as unknown as (
         t: string,
@@ -120,21 +138,54 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
   })
 
   app.get('/stream', (c) => {
+    if (activeStreams >= maxSseClients) {
+      return c.json({ error: 'too many SSE clients' }, 429)
+    }
+
     return streamSSE(c, async (stream) => {
+      activeStreams += 1
       const unsub = ctx.eventLog.subscribe((entry) => {
         stream.writeSSE({ data: JSON.stringify(entry) }).catch(() => {})
+      })
+      let cleanedUp = false
+      let finished = false
+      let finish!: () => void
+      const completion = new Promise<void>((resolve) => {
+        finish = () => {
+          if (finished) return
+          finished = true
+          resolve()
+        }
       })
 
       const pingInterval = setInterval(() => {
         stream.writeSSE({ event: 'ping', data: '' }).catch(() => {})
       }, 30_000)
 
-      stream.onAbort(() => {
+      const cleanup = () => {
+        if (cleanedUp) return
+        cleanedUp = true
         clearInterval(pingInterval)
+        clearTimeout(maxDurationTimer)
         unsub()
-      })
+        activeStreams = Math.max(0, activeStreams - 1)
+        finish()
+      }
 
-      await new Promise<void>(() => {})
+      const maxDurationTimer = setTimeout(() => {
+        void (async () => {
+          await stream.writeSSE({ event: 'closing', data: 'max-duration-reached' }).catch(() => {})
+          cleanup()
+        })()
+      }, maxDurationMs)
+
+      stream.onAbort(cleanup)
+
+      try {
+        await completion
+      } finally {
+        cleanup()
+      }
     })
   })
 

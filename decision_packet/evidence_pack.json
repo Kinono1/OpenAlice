@@ -1,0 +1,212 @@
+{
+  "evidencePackVersion": "v1",
+  "decisionDate": "2026-02-28",
+  "campaignId": "cvar24-campaign-001",
+  "generatedAt": "2026-03-02T10:41:07Z",
+  "protocolHash": "phash:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "datasetSnapshotId": "dsnap:v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+  "releaseGateStatus": {
+    "path": "decision_packet/release_gate_status.json",
+    "generatedAt": "2026-03-02T10:40:55.970Z",
+    "expiresAt": null,
+    "allowPaperTrading": false,
+    "allowLiveTrading": false
+  },
+  "artifacts": {
+    "manifest": "decision_packet/manifest.json",
+    "evidencePack": "decision_packet/evidence_pack.json",
+    "protocolSpec": "decision_packet/protocol_spec.json",
+    "protocolHashFile": "decision_packet/protocol_hash.txt",
+    "comparabilityReport": "decision_packet/comparability_report.json",
+    "championRegistrySnapshot": "decision_packet/champion_registry_snapshot.json",
+    "releaseGateStatus": "decision_packet/release_gate_status.json",
+    "offlineMetrics": "decision_packet/offline_metrics.json",
+    "liveShadowMetrics14d": "decision_packet/live_shadow_metrics_14d.json",
+    "stateMachineLog": "decision_packet/state_machine_log.jsonl",
+    "decisionMarkdown": "decision_packet/decision.md",
+    "experimentVerdict": "decision_packet/experiment_verdict.v2.json",
+    "gateCheckpointG0": "decision_packet/gates/G0.checkpoint.json",
+    "gateCheckpointG1": "decision_packet/gates/G1.checkpoint.json",
+    "gateCheckpointG2": "decision_packet/gates/G2.checkpoint.json",
+    "gateCheckpointG3": "decision_packet/gates/G3.checkpoint.json",
+    "gateCheckpointG4": "decision_packet/gates/G4.checkpoint.json",
+    "gateCheckpointsIndex": "decision_packet/gates/gate_checkpoints_index.v1.json"
+  },
+  "thresholds": {
+    "meanPboMax": 0.2,
+    "meanDsrProbabilityMin": 0.5,
+    "fdrQMax": 0.1,
+    "releaseGateStatusAgeHoursMax": 24
+  },
+  "measured": {
+    "meanPbo": 1,
+    "meanDsrProbability": 0.0493492933392912,
+    "fdrQ": 1,
+    "releaseGateStatusAgeHours": 0.0032743311111111113
+  },
+  "hardGateChecks": [
+    {
+      "name": "comparability_all_runs_valid",
+      "passed": true,
+      "reason": "comparability report missing (ignored in v5 mode)"
+    },
+    {
+      "name": "protocol_hash_matches_runtime",
+      "passed": true,
+      "reason": "protocol hash missing (ignored in v5 mode)"
+    },
+    {
+      "name": "champion_registry_schema_valid",
+      "passed": true,
+      "reason": "champion registry snapshot missing (ignored in v5 mode)"
+    },
+    {
+      "name": "state_machine_drill_passed",
+      "passed": true,
+      "reason": "state machine log missing (ignored in v5 mode)"
+    },
+    {
+      "name": "experiment_verdict_available",
+      "passed": true,
+      "reason": "experiment verdict artifact loaded"
+    },
+    {
+      "name": "experiment_verdict_result",
+      "passed": false,
+      "reason": "result=NO_GO; reasonCodes=HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED,HARD_NO_CANDIDATE_PASS"
+    },
+    {
+      "name": "gate_checkpoint_G0",
+      "passed": true,
+      "reason": "status=pass; reasonCodes="
+    },
+    {
+      "name": "gate_checkpoint_G1",
+      "passed": true,
+      "reason": "status=pass; reasonCodes="
+    },
+    {
+      "name": "gate_checkpoint_G2",
+      "passed": true,
+      "reason": "status=pass; reasonCodes="
+    },
+    {
+      "name": "gate_checkpoint_G3",
+      "passed": false,
+      "reason": "status=fail; reasonCodes=HARD_EXPERIMENT_NO_GO,HARD_MEAN_PBO_THRESHOLD_FAIL,HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL,HARD_FDR_THRESHOLD_FAIL,HARD_RELEASE_GATE_BLOCKED"
+    },
+    {
+      "name": "gate_checkpoint_G4",
+      "passed": false,
+      "reason": "status=fail; reasonCodes=HARD_UPSTREAM_GATE_FAILED"
+    },
+    {
+      "name": "gate_checkpoints_complete",
+      "passed": true,
+      "reason": "all checkpoints available"
+    },
+    {
+      "name": "gate_checkpoints_hard_pass",
+      "passed": false,
+      "reason": "hard-failed=G3,G4"
+    }
+  ],
+  "decision": {
+    "result": "NO_GO",
+    "mode": "hard_gate",
+    "verdictReasonCodes": [],
+    "notes": [],
+    "constraints": [],
+    "rollbackTriggers": [],
+    "expiryAt": null,
+    "maxDurationHours": null
+  },
+  "approvals": {
+    "dri": "",
+    "backup": "",
+    "onCall": "",
+    "techLead": "",
+    "riskLead": "",
+    "incidentCommander": ""
+  },
+  "experimentVerdict": {
+    "path": "decision_packet/experiment_verdict.v2.json",
+    "schemaVersion": "experiment_verdict.v2",
+    "result": "NO_GO",
+    "reasonCodes": [
+      "HARD_MEAN_PBO_THRESHOLD_FAIL",
+      "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
+      "HARD_FDR_THRESHOLD_FAIL",
+      "HARD_RELEASE_GATE_BLOCKED",
+      "HARD_NO_CANDIDATE_PASS"
+    ],
+    "aggregateMetrics": {
+      "meanPbo": 1,
+      "meanDsrProbability": 0.0493492933392912,
+      "fdrQ": 1
+    },
+    "thresholds": {
+      "meanPboMax": 0.2,
+      "meanDsrProbabilityMin": 0.5,
+      "fdrQMax": 0.1
+    },
+    "generatedAt": "2026-03-02T10:40:55.970Z"
+  },
+  "gateCheckpoints": {
+    "dir": "decision_packet/gates",
+    "checkpoints": [
+      {
+        "gateId": "G0",
+        "path": "decision_packet/gates/G0.checkpoint.json",
+        "status": "pass",
+        "hardGate": true,
+        "reasonCodes": []
+      },
+      {
+        "gateId": "G1",
+        "path": "decision_packet/gates/G1.checkpoint.json",
+        "status": "pass",
+        "hardGate": true,
+        "reasonCodes": []
+      },
+      {
+        "gateId": "G2",
+        "path": "decision_packet/gates/G2.checkpoint.json",
+        "status": "pass",
+        "hardGate": true,
+        "reasonCodes": []
+      },
+      {
+        "gateId": "G3",
+        "path": "decision_packet/gates/G3.checkpoint.json",
+        "status": "fail",
+        "hardGate": true,
+        "reasonCodes": [
+          "HARD_EXPERIMENT_NO_GO",
+          "HARD_MEAN_PBO_THRESHOLD_FAIL",
+          "HARD_MEAN_DSR_PROBABILITY_THRESHOLD_FAIL",
+          "HARD_FDR_THRESHOLD_FAIL",
+          "HARD_RELEASE_GATE_BLOCKED"
+        ]
+      },
+      {
+        "gateId": "G4",
+        "path": "decision_packet/gates/G4.checkpoint.json",
+        "status": "fail",
+        "hardGate": true,
+        "reasonCodes": [
+          "HARD_UPSTREAM_GATE_FAILED"
+        ]
+      }
+    ],
+    "summary": {
+      "total": 5,
+      "missing": [],
+      "hardFailed": [
+        "G3",
+        "G4"
+      ],
+      "overallHardPass": false
+    }
+  }
+}

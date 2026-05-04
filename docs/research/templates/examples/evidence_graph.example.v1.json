@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "evidence_graph.v1",
+  "generatedAt": "2026-03-02T16:15:00Z",
+  "sourceCardsDir": "data/research/paper_cards",
+  "nodes": [
+    {
+      "id": "paper:CQR_NeurIPS2019",
+      "type": "paper",
+      "label": "CQR_NeurIPS2019"
+    },
+    {
+      "id": "claim:CQR_NeurIPS2019_C1",
+      "type": "claim",
+      "label": "CQR yields shorter intervals",
+      "paperId": "CQR_NeurIPS2019"
+    },
+    {
+      "id": "evidence:CQR_NeurIPS2019_E1",
+      "type": "evidence",
+      "label": "Empirical interval length reduction",
+      "paperId": "CQR_NeurIPS2019"
+    }
+  ],
+  "edges": [
+    {
+      "source": "claim:CQR_NeurIPS2019_C1",
+      "target": "evidence:CQR_NeurIPS2019_E1",
+      "type": "supports"
+    },
+    {
+      "source": "claim:CQR_NeurIPS2019_C1",
+      "target": "paper:CQR_NeurIPS2019",
+      "type": "derived_from"
+    }
+  ],
+  "stats": {
+    "paperCount": 1,
+    "claimCount": 1,
+    "evidenceCount": 1,
+    "edgeCount": 2,
+    "evidenceLinkRate": 1.0,
+    "isolatedClaimCount": 0
+  },
+  "quality": {
+    "passed": true,
+    "thresholds": {
+      "minEvidenceLinkRate": 0.9
+    }
+  }
+}

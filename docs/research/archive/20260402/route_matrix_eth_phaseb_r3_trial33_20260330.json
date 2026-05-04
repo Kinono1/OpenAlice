@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "route_matrix_spec.v1",
+  "matrixId": "route_matrix_eth_phaseb_r3_trial33_20260330",
+  "sourceId": "eth_phaseb_r3_trial33",
+  "manifest": "docs/research/strategy_candidates.route_batch11_eth_phaseb_r3_trial33.v1.json",
+  "defaultMultipleTestingUnit": "candidate",
+  "rankingObjective": "min(hardGap.totalGap) -> min(wfoFailureDensity) -> min(hardGap.fdrGap) -> max(meanSharpe)",
+  "summaryOutput": "data/research/strategy/analysis/route_matrix_eth_phaseb_r3_trial33_20260330.json",
+  "markdownOutput": "data/research/strategy/analysis/route_matrix_eth_phaseb_r3_trial33_20260330.md",
+  "profiles": [
+    {
+      "id": "phaseb_native_v1",
+      "notes": [
+        "preserve_phaseb_r3_native_protocol=true"
+      ]
+    },
+    {
+      "id": "phaseb_hybrid_3000_v1",
+      "notes": [
+        "retain_native_wfo_cost_and_risk=true",
+        "shorten_eth_lookback_to_3000=true"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3000
+        }
+      }
+    },
+    {
+      "id": "route_robust_v1",
+      "notes": [
+        "intermediate_profile_between_phaseb_and_route_strict=true"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3300
+        },
+        "wfo": {
+          "trainBars": 900,
+          "testBars": 180,
+          "stepBars": 180,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 1800,
+          "blockSize": 18,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0005,
+          "slippageBps": 5,
+          "latencyBars": 1
+        }
+      }
+    },
+    {
+      "id": "route_strict_v1",
+      "notes": [
+        "normalize_upstream_source_into_current_route_strict_protocol=true"
+      ],
+      "overrides": {
+        "dataset": {
+          "lookbackBars": 3000
+        },
+        "wfo": {
+          "trainBars": 960,
+          "testBars": 240,
+          "stepBars": 240,
+          "degradationThreshold": 0.4
+        },
+        "riskSimulation": {
+          "simulations": 2000,
+          "blockSize": 24,
+          "horizonBars": 240,
+          "ruinDrawdownPct": 30,
+          "maxRuinProbability": 0.02,
+          "minProfitProbability": 0.55
+        },
+        "costModel": {
+          "feeRate": 0.0006,
+          "slippageBps": 8,
+          "latencyBars": 1
+        }
+      }
+    }
+  ]
+}

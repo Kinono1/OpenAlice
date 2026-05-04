@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "environment_lock.v1",
+  "generatedAt": "2026-03-02T16:10:00Z",
+  "runtime": {
+    "python": {
+      "versionSpec": "3.13.x",
+      "required": true
+    },
+    "node": {
+      "versionSpec": "22.x",
+      "required": true
+    },
+    "pnpm": {
+      "versionSpec": "10.29.x",
+      "required": true
+    }
+  },
+  "project": {
+    "packageJsonPath": "package.json",
+    "packageManager": {
+      "name": "pnpm",
+      "versionSpec": "10.29.x"
+    },
+    "criticalNodeDependencies": {
+      "vitest": "4.x",
+      "ccxt": "4.5.x",
+      "typescript": "5.9.x"
+    }
+  },
+  "pythonPackages": {
+    "jsonschema": {
+      "versionSpec": "4.x",
+      "required": false
+    }
+  }
+}

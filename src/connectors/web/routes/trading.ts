@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import type { Context } from 'hono'
 import { z } from 'zod'
 import type { EngineContext } from '../../../core/types.js'
@@ -134,14 +134,65 @@ async function queryAccount<T>(
   }
 }
 
-/** Unified trading routes — works with all account types via AccountManager */
-export function createTradingRoutes(ctx: EngineContext) {
+interface TradingRouteOpts {
+  requireAuth?: MiddlewareHandler
+  requireTrade?: MiddlewareHandler
+}
+
+function listAccounts(ctx: EngineContext): unknown[] {
+  const utaManager = (ctx as { utaManager?: { listUTAs?: () => unknown[] } }).utaManager
+  if (utaManager?.listUTAs) {
+    return utaManager.listUTAs()
+  }
+  const accountManager = (ctx as { accountManager?: { listAccounts?: () => unknown[] } }).accountManager
+  return accountManager?.listAccounts?.() ?? []
+}
+
+async function reconnectAccount(ctx: EngineContext, id: string): Promise<unknown> {
+  const utaManager = (ctx as { utaManager?: { reconnectUTA?: (id: string) => Promise<unknown> } }).utaManager
+  if (utaManager?.reconnectUTA) {
+    return utaManager.reconnectUTA(id)
+  }
+  const accountManager = (ctx as { accountManager?: { reconnectAccount?: (id: string) => Promise<unknown> } }).accountManager
+  if (accountManager?.reconnectAccount) {
+    return accountManager.reconnectAccount(id)
+  }
+  return { success: false, error: 'Trading account manager unavailable' }
+}
+
+function resultStatus(result: unknown): 200 | 500 {
+  return (result as { success?: boolean })?.success === false ? 500 : 200
+}
+
+function isTradeOnlyReconnectPath(path: string): boolean {
+  return /\/(?:uta|accounts)\/[^/]+\/reconnect$/.test(path)
+}
+
+/** Unified trading routes — works with all account types via UTAManager */
+export function createTradingRoutes(ctx: EngineContext, opts?: TradingRouteOpts) {
   const app = new Hono()
+  if (opts?.requireAuth) {
+    app.use('*', async (c, next) => {
+      if (c.req.method === 'POST' && opts.requireTrade && isTradeOnlyReconnectPath(c.req.path)) {
+        return next()
+      }
+      return opts.requireAuth!(c, next)
+    })
+  }
+  if (opts?.requireTrade) {
+    app.use('/uta/:id/reconnect', opts.requireTrade)
+    app.use('/accounts/:id/reconnect', opts.requireTrade)
+  }
 
   // ==================== UTA listing ====================
 
   app.get('/uta', (c) => {
-    return c.json({ utas: ctx.utaManager.listUTAs() })
+    return c.json({ utas: listAccounts(ctx) })
+  })
+
+  // Back-compat alias for older web tests/clients.
+  app.get('/accounts', (c) => {
+    return c.json({ accounts: listAccounts(ctx) })
   })
 
   // ==================== Aggregated equity ====================
@@ -203,8 +254,15 @@ export function createTradingRoutes(ctx: EngineContext) {
   // Reconnect
   app.post('/uta/:id/reconnect', async (c) => {
     const id = c.req.param('id')
-    const result = await ctx.utaManager.reconnectUTA(id)
-    return c.json(result, result.success ? 200 : 500)
+    const result = await reconnectAccount(ctx, id)
+    return c.json(result, resultStatus(result))
+  })
+
+  // Back-compat alias for older web tests/clients.
+  app.post('/accounts/:id/reconnect', async (c) => {
+    const id = c.req.param('id')
+    const result = await reconnectAccount(ctx, id)
+    return c.json(result, resultStatus(result))
   })
 
   // Account info

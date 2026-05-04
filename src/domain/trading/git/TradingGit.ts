@@ -41,6 +41,7 @@ export class TradingGit implements ITradingGit {
   private stagingArea: Operation[] = []
   private pendingMessage: string | null = null
   private pendingHash: CommitHash | null = null
+  private pendingOperations: Operation[] | null = null
   private commits: GitCommit[] = []
   private head: CommitHash | null = null
   private currentRound: number | undefined = undefined
@@ -53,6 +54,9 @@ export class TradingGit implements ITradingGit {
   // ==================== git add / commit / push ====================
 
   add(operation: Operation): AddResult {
+    if (this.pendingMessage !== null || this.pendingHash !== null || this.pendingOperations !== null) {
+      throw new Error('Cannot add operations after commit. Commit or reject has created a pending review set; recommit after clearing it.')
+    }
     this.stagingArea.push(operation)
     return {
       staged: true,
@@ -66,20 +70,22 @@ export class TradingGit implements ITradingGit {
       throw new Error('Nothing to commit: staging area is empty')
     }
 
+    const operations = [...this.stagingArea]
     const timestamp = new Date().toISOString()
     this.pendingHash = generateCommitHash({
       message,
-      operations: this.stagingArea,
+      operations,
       timestamp,
       parentHash: this.head,
     })
     this.pendingMessage = message
+    this.pendingOperations = operations
 
     return {
       prepared: true,
       hash: this.pendingHash,
       message,
-      operationCount: this.stagingArea.length,
+      operationCount: operations.length,
     }
   }
 
@@ -87,11 +93,11 @@ export class TradingGit implements ITradingGit {
     if (this.stagingArea.length === 0) {
       throw new Error('Nothing to push: staging area is empty')
     }
-    if (this.pendingMessage === null || this.pendingHash === null) {
+    if (this.pendingMessage === null || this.pendingHash === null || this.pendingOperations === null) {
       throw new Error('Nothing to push: please commit first')
     }
 
-    const operations = [...this.stagingArea]
+    const operations = this.pendingOperations
     const message = this.pendingMessage
     const hash = this.pendingHash
 
@@ -134,6 +140,7 @@ export class TradingGit implements ITradingGit {
     this.stagingArea = []
     this.pendingMessage = null
     this.pendingHash = null
+    this.pendingOperations = null
 
     const rejected = results.filter((r) => !r.success)
     const submitted = results.filter((r) => r.success)
@@ -145,11 +152,11 @@ export class TradingGit implements ITradingGit {
     if (this.stagingArea.length === 0) {
       throw new Error('Nothing to reject: staging area is empty')
     }
-    if (this.pendingMessage === null || this.pendingHash === null) {
+    if (this.pendingMessage === null || this.pendingHash === null || this.pendingOperations === null) {
       throw new Error('Nothing to reject: please commit first')
     }
 
-    const operations = [...this.stagingArea]
+    const operations = this.pendingOperations
     const message = `[rejected] ${this.pendingMessage}${reason ? ` — ${reason}` : ''}`
     const hash = this.pendingHash
 
@@ -181,6 +188,7 @@ export class TradingGit implements ITradingGit {
     this.stagingArea = []
     this.pendingMessage = null
     this.pendingHash = null
+    this.pendingOperations = null
 
     return { hash, message, operationCount: operations.length }
   }
@@ -376,13 +384,48 @@ export class TradingGit implements ITradingGit {
 
   // ==================== Sync ====================
 
+  private getLatestOrderStatuses(): Map<string, OperationStatus> {
+    const orderStatus = new Map<string, OperationStatus>()
+
+    for (let i = this.commits.length - 1; i >= 0; i--) {
+      for (const result of this.commits[i].results) {
+        if (result.orderId && !orderStatus.has(result.orderId)) {
+          orderStatus.set(result.orderId, result.status)
+        }
+      }
+    }
+
+    return orderStatus
+  }
+
+  private normalizeSyncUpdates(updates: OrderStatusUpdate[]): OrderStatusUpdate[] {
+    const latestByOrderId = new Map<string, OrderStatusUpdate>()
+
+    for (const update of updates) {
+      latestByOrderId.delete(update.orderId)
+      latestByOrderId.set(update.orderId, update)
+    }
+
+    return [...latestByOrderId.values()]
+  }
+
   async sync(updates: OrderStatusUpdate[], currentState: GitState): Promise<SyncResult> {
     if (updates.length === 0) {
       return { hash: this.head ?? '', updatedCount: 0, updates: [] }
     }
 
+    const normalizedUpdates = this.normalizeSyncUpdates(updates)
+    const latestStatuses = this.getLatestOrderStatuses()
+    const novelUpdates = normalizedUpdates.filter(
+      update => latestStatuses.get(update.orderId) !== update.currentStatus,
+    )
+
+    if (novelUpdates.length === 0) {
+      return { hash: this.head ?? '', updatedCount: 0, updates: [] }
+    }
+
     const hash = generateCommitHash({
-      updates,
+      updates: novelUpdates,
       timestamp: new Date().toISOString(),
       parentHash: this.head,
     })
@@ -390,15 +433,15 @@ export class TradingGit implements ITradingGit {
     const commit: GitCommit = {
       hash,
       parentHash: this.head,
-      message: `[sync] ${updates.length} order(s) updated`,
+      message: `[sync] ${novelUpdates.length} order(s) updated`,
       operations: [{ action: 'syncOrders' as const }],
-      results: updates.map((u) => ({
+      results: novelUpdates.map((u) => ({
         action: 'syncOrders' as const,
         success: true,
         orderId: u.orderId,
         status: u.currentStatus,
-        filledQty: u.filledQty,
-        filledPrice: u.filledPrice,
+        filledQty: u.filledQty == null ? undefined : String(u.filledQty),
+        filledPrice: u.filledPrice == null ? undefined : String(u.filledPrice),
       })),
       stateAfter: currentState,
       timestamp: new Date().toISOString(),
@@ -410,20 +453,11 @@ export class TradingGit implements ITradingGit {
 
     await this.config.onCommit?.(this.exportState())
 
-    return { hash, updatedCount: updates.length, updates }
+    return { hash, updatedCount: novelUpdates.length, updates: novelUpdates }
   }
 
   getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
-    // Scan newest→oldest to find latest known status per orderId
-    const orderStatus = new Map<string, string>()
-
-    for (let i = this.commits.length - 1; i >= 0; i--) {
-      for (const result of this.commits[i].results) {
-        if (result.orderId && !orderStatus.has(result.orderId)) {
-          orderStatus.set(result.orderId, result.status)
-        }
-      }
-    }
+    const orderStatus = this.getLatestOrderStatuses()
 
     // Collect orders still pending
     const pending: Array<{ orderId: string; symbol: string }> = []
