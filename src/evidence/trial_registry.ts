@@ -18,7 +18,7 @@ const TRIAL_PROVENANCE_VALUES = {
   fdrReportPathSource: ['generated_artifact', 'registry_metadata', 'artifact_link', 'manual_import'] as const,
   fdrPValuePromotionGradeSource: ['fdr_report', 'registry_metadata', 'manual_import'] as const,
   pitAuditSource: ['feature_availability_audit', 'registry_metadata', 'artifact_link', 'manual_import'] as const,
-  pitAuditPromotionGradeSource: ['feature_availability_audit', 'registry_metadata', 'artifact_link', 'manual_import', 'default_fail_closed'] as const,
+  pitAuditPromotionGradeSource: ['feature_availability_audit', 'promotion_grade_row_level_audit', 'registry_metadata', 'artifact_link', 'manual_import', 'default_fail_closed'] as const,
   promotionDecisionSource: ['fail_closed_validation_pipeline', 'manual_review', 'promotion_v2'] as const,
 }
 

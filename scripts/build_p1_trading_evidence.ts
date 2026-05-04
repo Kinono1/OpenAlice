@@ -4527,6 +4527,7 @@ function runtimeTrialRegistryRowToEntry(
   const featureAvailabilityAudit = artifactLinks.featureAvailabilityAudit
   const pitAuditBlockingCodes = pitAuditBlockingCodesFromArtifact(featureAvailabilityAudit)
   const pitProxyAudit = asRecord(featureAvailabilityAudit?.row_level_proxy_audit)
+  const promotionGradePitAudit = asRecord(featureAvailabilityAudit?.promotion_grade_row_level_audit)
   const artifactFdrReportPath = artifactLinks.fdrReportPath
   const artifactFeatureAvailabilityAuditPath = artifactLinks.featureAvailabilityAuditPath
   const registryPValue = numberOrNull(row.p_value)
@@ -4534,7 +4535,8 @@ function runtimeTrialRegistryRowToEntry(
   const metadataFdrReportPath = stringOrNull(metadata?.fdr_report_path ?? metadata?.fdrReportPath)
   const metadataPitAuditPath = stringOrNull(metadata?.pit_audit_path ?? metadata?.pitAuditPath ?? metadata?.feature_availability_audit_path ?? metadata?.featureAvailabilityAuditPath)
   const metadataPitPromotionGrade = booleanOrNull(metadata?.pit_audit_promotion_grade ?? metadata?.pitAuditPromotionGrade)
-  const artifactPitPromotionGrade = booleanOrNull(pitProxyAudit?.promotion_grade)
+  const artifactPromotionGradePitAuditGrade = booleanOrNull(promotionGradePitAudit?.promotion_grade)
+  const artifactPitPromotionGrade = artifactPromotionGradePitAuditGrade ?? booleanOrNull(pitProxyAudit?.promotion_grade)
   const explicitPValueSource = stringOrNull(metadata?.p_value_source ?? metadata?.pValueSource)
   const explicitFdrReportPathSource = stringOrNull(metadata?.fdr_report_path_source ?? metadata?.fdrReportPathSource)
   const explicitPitAuditSource = stringOrNull(metadata?.pit_audit_source ?? metadata?.pitAuditSource)
@@ -4592,8 +4594,10 @@ function runtimeTrialRegistryRowToEntry(
       pitAuditPromotionGrade: metadataPitPromotionGrade ?? artifactPitPromotionGrade ?? false,
       pitAuditPromotionGradeSource: explicitPitAuditPromotionGradeSource ?? (metadataPitPromotionGrade != null
         ? 'registry_metadata'
-        : artifactPitPromotionGrade != null
-          ? 'artifact'
+        : artifactPromotionGradePitAuditGrade != null
+          ? 'promotion_grade_row_level_audit'
+          : artifactPitPromotionGrade != null
+            ? 'artifact'
           : 'default_fail_closed'),
       sourcePathHash: hashString(path),
       artifactLinkedFdrReport: artifactFdrReportPath != null,

@@ -17,6 +17,8 @@ import type {
 } from '../src/backtest/strategy-validation/types.js'
 import {
   appendCompleteTrialUniverseMarkerIfReady,
+  buildFeatureAvailabilityAudit,
+  buildPromotionGradePitAudit,
   buildRecommendedCandidate,
   evaluateSignificanceGateForReport,
 } from './run_validation_pipeline.ts'
@@ -125,6 +127,37 @@ function makeArm(input: {
   }
 }
 
+function makePitAuditContract(input: {
+  requiredFeatures: Array<{
+    featureId: string
+    required: true
+    availableTimePolicy: 'available_time <= decision_time'
+    qualityStatusesAllowed: ['ok'] | ['ok', 'degraded']
+  }>
+  failureModes: Array<'PIT_PROXY_ONLY' | 'PIT_VIOLATION'>
+}) {
+  return {
+    familyId: 'unit_pit_contract',
+    role: 'alpha' as const,
+    requiredFeatures: input.requiredFeatures,
+    decisionHorizon: '1m',
+    labelHorizon: '5m',
+    allowedUniverse: ['BTC-USDT'],
+    maxTurnover: 1,
+    maxLeverage: 1,
+    promotionEligibility: 'paper_candidate' as const,
+    failureModes: input.failureModes,
+    nextMutationAllowed: 'retry_after_pit_fix' as const,
+    paperEvidenceRequirement: {
+      minLiveOnlyDays: 14,
+      minDecisionCount: 30,
+      minExecutedTradeCount: 10,
+      minEventCount: 0,
+      maxReportAgeSeconds: 900,
+    },
+  }
+}
+
 function runValidationPipeline(args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(
@@ -183,6 +216,157 @@ async function writeSyntheticMarketCsv(
 }
 
 describe('run_validation_pipeline', () => {
+  it('passes promotion-grade PIT audit only when every required feature is available before decision time', () => {
+    const strategyFamilyContract = makePitAuditContract({
+      requiredFeatures: [
+        {
+          featureId: 'spread_bps',
+          required: true,
+          availableTimePolicy: 'available_time <= decision_time',
+          qualityStatusesAllowed: ['ok'],
+        },
+        {
+          featureId: 'liquidity_usd',
+          required: true,
+          availableTimePolicy: 'available_time <= decision_time',
+          qualityStatusesAllowed: ['ok', 'degraded'],
+        },
+      ],
+      failureModes: ['PIT_PROXY_ONLY'],
+    })
+
+    const audit = buildPromotionGradePitAudit({
+      strategyFamilyContract,
+      rows: [
+        {
+          rowId: 'decision-1',
+          decisionTime: '2026-05-04T00:00:00.000Z',
+          features: [
+            {
+              featureId: 'spread_bps',
+              availableTime: '2026-05-03T23:59:59.900Z',
+              qualityStatus: 'ok',
+            },
+            {
+              featureId: 'liquidity_usd',
+              availableTime: '2026-05-04T00:00:00.000Z',
+              qualityStatus: 'degraded',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(audit).toMatchObject({
+      status: 'pass',
+      promotion_grade: true,
+      promotion_grade_source_available: true,
+      row_count: 1,
+      required_feature_count: 2,
+      checked_required_feature_count: 2,
+      available_after_decision_count: 0,
+      missing_required_feature_count: 0,
+      quality_status_violation_count: 0,
+      blocking_reasons: [],
+    })
+  })
+
+  it('blocks promotion-grade PIT audit when a feature arrives after decision time', () => {
+    const strategyFamilyContract = makePitAuditContract({
+      requiredFeatures: [
+        {
+          featureId: 'spread_bps',
+          required: true,
+          availableTimePolicy: 'available_time <= decision_time',
+          qualityStatusesAllowed: ['ok'],
+        },
+      ],
+      failureModes: ['PIT_VIOLATION'],
+    })
+
+    const audit = buildPromotionGradePitAudit({
+      strategyFamilyContract,
+      rows: [
+        {
+          rowId: 'decision-1',
+          decisionTime: '2026-05-04T00:00:00.000Z',
+          features: [
+            {
+              featureId: 'spread_bps',
+              availableTime: '2026-05-04T00:00:00.001Z',
+              qualityStatus: 'ok',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(audit.status).toBe('fail')
+    expect(audit.promotion_grade).toBe(false)
+    expect(audit.available_after_decision_count).toBe(1)
+    expect(audit.blocking_reasons).toContainEqual(expect.objectContaining({
+      code: 'FEATURE_AVAILABLE_TIME_AFTER_DECISION_TIME',
+      row_id: 'decision-1',
+      feature_id: 'spread_bps',
+    }))
+  })
+
+  it('keeps CSV-only feature availability audit blocked as proxy-only evidence', () => {
+    const strategyFamilyContract = makePitAuditContract({
+      requiredFeatures: [
+        {
+          featureId: 'spread_bps',
+          required: true,
+          availableTimePolicy: 'available_time <= decision_time',
+          qualityStatusesAllowed: ['ok'],
+        },
+      ],
+      failureModes: ['PIT_PROXY_ONLY'],
+    })
+    const audit = buildFeatureAvailabilityAudit({
+      meta: {
+        evidence_id: 'sha256:test',
+        strategy_family: 'unit_pit_contract',
+        candidate_id: 'candidate_test',
+        created_at: '2026-05-04T00:00:00.000Z',
+      },
+      dataLineageGraph: {
+        schemaVersion: DATA_LINEAGE_SCHEMA_VERSION,
+        generatedAt: '2026-05-04T00:00:00.000Z',
+        nodes: [
+          {
+            id: 'feature_node',
+            type: 'feature',
+            qualityStatus: 'ok',
+            availableTimePolicy: 'available_time <= decision_time',
+          },
+        ],
+      },
+      strategyFamilyContract,
+      holdoutCandles: [
+        { time: 1_777_852_800, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { time: 1_777_856_400, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+      ],
+    }) as {
+      status: string
+      row_level_proxy_audit: Record<string, unknown>
+      promotion_grade_row_level_audit: Record<string, unknown>
+      blocking_reasons: Array<{ code: string }>
+    }
+
+    expect(audit.status).toBe('blocked')
+    expect(audit.row_level_proxy_audit).toMatchObject({
+      proxy_status: 'pass',
+      promotion_grade: false,
+    })
+    expect(audit.promotion_grade_row_level_audit).toMatchObject({
+      status: 'not_available',
+      promotion_grade: false,
+      promotion_grade_source_available: false,
+    })
+    expect(audit.blocking_reasons.map((reason) => reason.code)).toContain('PIT_PROXY_ONLY')
+  })
+
   it('leaves p-value null when explanatory FDR p-value is uncomputable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-fdr-failclosed-'))
     const inputCsv = await writeSyntheticMarketCsv(root)
@@ -465,6 +649,97 @@ describe('run_validation_pipeline', () => {
       surviving_trial_count: 2,
     })
   })
+
+  it('reads explicit row-level PIT rows without using CSV proxy as promotion-grade evidence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-pit-rows-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const pitRowsPath = join(root, 'pit_rows.json')
+    await writeFile(pitRowsPath, JSON.stringify({
+      rows: Array.from({ length: 240 }, (_, index) => ({
+        row_id: `row-${index}`,
+        decision_time: new Date((1_700_000_000 + (1_600 - 240 + index) * 3_600) * 1000).toISOString(),
+        features: [
+          {
+            feature_id: 'trend_validation_features',
+            available_time: new Date((1_700_000_000 + (1_600 - 240 + index) * 3_600) * 1000 - 1).toISOString(),
+            quality_status: 'ok',
+          },
+        ],
+      })),
+    }), 'utf-8')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'trend',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--candidatesJson',
+      JSON.stringify([{ trendFastPeriod: 20, trendSlowPeriod: 50 }]),
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--promotionGradePitRowsPath',
+      pitRowsPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      evidenceOsV4: {
+        failureCodes: string[]
+        artifactPaths: {
+          featureAvailabilityAudit: string
+          validationResult: string
+        }
+      }
+    }
+    const featureAvailabilityAudit = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.featureAvailabilityAudit, 'utf-8'),
+    ) as {
+      status: string
+      row_level_proxy_audit: Record<string, unknown>
+      promotion_grade_row_level_audit: Record<string, unknown>
+      blocking_reasons: Array<{ code: string }>
+    }
+    const validationResult = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.validationResult, 'utf-8'),
+    ) as {
+      verdict: string
+      blocking_reasons: Array<{ code: string }>
+    }
+
+    expect(featureAvailabilityAudit.status).toBe('pass')
+    expect(featureAvailabilityAudit.row_level_proxy_audit).toMatchObject({
+      promotion_grade: false,
+      proxy_type: 'csv_bar_event_time_as_decision_time',
+    })
+    expect(featureAvailabilityAudit.promotion_grade_row_level_audit).toMatchObject({
+      status: 'pass',
+      promotion_grade: true,
+      promotion_grade_source_available: true,
+      row_count: 240,
+      available_after_decision_count: 0,
+    })
+    expect(featureAvailabilityAudit.blocking_reasons).toEqual([])
+    expect(report.evidenceOsV4.failureCodes).toEqual(['FDR_INPUTS_INCOMPLETE'])
+    expect(validationResult.verdict).toBe('blocked')
+    expect(validationResult.blocking_reasons.map((reason) => reason.code)).toContain('FDR_INPUTS_INCOMPLETE')
+  }, 15_000)
 
   it('emits additive regime-gate and meta-label quantile A/B outputs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-'))

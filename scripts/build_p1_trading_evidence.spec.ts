@@ -995,6 +995,144 @@ describe('build_p1_trading_evidence', () => {
     expect(coverage.runtimeRegistryDiagnostics.pitAuditPromotionGradeSourceCounts).toContainEqual({ source: 'feature_availability_audit', count: 1 })
   })
 
+  it('prefers promotion-grade row-level PIT audit evidence over proxy-only PIT audit evidence', async () => {
+    const root = makeRoot()
+    const paperDir = join(root, 'paper')
+    const dataDir = join(root, 'market')
+    const outputDir = join(root, 'out')
+    mkdirSync(paperDir, { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+
+    const trialRegistryPath = join(root, 'trial_registry.jsonl')
+    writeFileSync(join(root, 'candidate_registry.json'), JSON.stringify({ entries: [] }))
+    writeFileSync(join(root, 'graveyard.json'), JSON.stringify({ entries: [] }))
+    writeFileSync(join(root, 'best_config.json'), JSON.stringify({
+      assetCount: 2,
+      discoveredAt: '2026-05-04T00:00:00.000Z',
+      config: { lookbackHours: 72 },
+    }))
+    writeFileSync(trialRegistryPath, JSON.stringify({
+      trial_id: 'pit-row-audit-trial',
+      evidence_id: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      trial_type: 'alpha_candidate',
+      strategy_family: 'trend',
+      candidate_id: 'pit-row-audit-candidate',
+      hypothesis: 'promotion grade PIT row audit survives loader',
+      primary_metric: 'cost_adjusted_net_expectancy_bps',
+      secondary_metrics: [],
+      p_value: 0.25,
+      included_in_fdr: true,
+      fdr_family: '2026Q2_crypto_evidence_os_v4',
+      promotion_eligible: false,
+      status: 'failed_validation',
+      failure_codes: ['FDR_INPUTS_INCOMPLETE', 'PIT_PROXY_ONLY'],
+      batch_id: 'batch-pit-row',
+      created_at: '2026-05-04T00:00:00.000Z',
+      metadata: {
+        p_value_source: 'fdr_report',
+        fdr_report_path: '/tmp/fdr_report.json',
+        fdr_report_path_source: 'generated_artifact',
+        fdr_report_status: 'blocked_inputs_incomplete',
+        raw_m_complete: false,
+        includes_failed_trials: false,
+        fdr_p_values_available: true,
+        fdr_missing_p_value_count: 0,
+        fdr_p_value_method: 'spa_like',
+        fdr_p_value_scope: 'explanatory_selected_vs_holdout_benchmark',
+        fdr_p_value_is_promotion_grade: false,
+        fdr_p_value_promotion_grade_source: 'fdr_report',
+        pit_audit_path: '/tmp/feature_availability_audit.json',
+        pit_audit_source: 'feature_availability_audit',
+        pit_audit_status: 'blocked',
+        pit_audit_blocking_codes: ['PIT_PROXY_ONLY'],
+        pit_audit_promotion_grade: true,
+        pit_audit_promotion_grade_source: 'promotion_grade_row_level_audit',
+        promotion_decision_source: 'fail_closed_validation_pipeline',
+      },
+    }) + '\n')
+    const validationArtifactDir = join(root, 'runtime_research', 'validation', 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd')
+    mkdirSync(validationArtifactDir, { recursive: true })
+    writeFileSync(
+      join(validationArtifactDir, 'fdr_report.json'),
+      JSON.stringify({
+        evidence_id: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        status: 'blocked_inputs_incomplete',
+        promotion_allowed: false,
+        p_values_available: true,
+        missing_p_value_count: 0,
+        p_value: 0.25,
+        p_value_method: 'spa_like',
+        p_value_scope: 'explanatory_selected_vs_holdout_benchmark',
+        p_value_is_promotion_grade: false,
+        benchmark_candidate_index: 0,
+        p_adjusted_by_raw_m: 1,
+        p_adjusted_by_effective_m: 1,
+        p_adjusted_bh_secondary: 1,
+        blocking_reasons: [{ code: 'FDR_INPUTS_INCOMPLETE', source: 'validation_runner', observed: 'need_at_least_two_candidate_return_series' }],
+      }),
+      'utf-8',
+    )
+    writeFileSync(
+      join(validationArtifactDir, 'feature_availability_audit.json'),
+      JSON.stringify({
+        evidence_id: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        status: 'blocked',
+        row_level_proxy_audit: {
+          promotion_grade: false,
+          proxy_status: 'pass',
+          proxy_type: 'csv_bar_event_time_as_decision_time',
+        },
+        promotion_grade_row_level_audit: {
+          schema_version: 'evidence_os_v4_promotion_grade_pit_audit.v1',
+          status: 'pass',
+          observed: 'promotion_grade_row_level_available_time_audit_passed',
+          promotion_grade: true,
+          promotion_grade_source_available: true,
+          policy: 'available_time <= decision_time',
+          row_count: 1,
+          feature_observation_count: 1,
+          required_feature_count: 1,
+          checked_required_feature_count: 1,
+          invalid_timestamp_count: 0,
+          available_after_decision_count: 0,
+          missing_required_feature_count: 0,
+          quality_status_violation_count: 0,
+          first_decision_time_iso: '2026-05-04T00:00:00.000Z',
+          last_decision_time_iso: '2026-05-04T00:00:00.000Z',
+          blocking_reasons: [],
+          required_upgrade: null,
+        },
+        blocking_reasons: [{ code: 'PIT_PROXY_ONLY', source: 'validation_runner', required: 'promotion-grade per-row system arrival_time <= decision_time proof', observed: 'promotion_grade_row_level_available_time_audit_passed' }],
+      }),
+      'utf-8',
+    )
+
+    const index = await buildP1TradingEvidence({
+      paperDir,
+      dataDir,
+      oneSecondDataDir: dataDir,
+      oneHourDataDir: dataDir,
+      shadowLedgerPath: join(paperDir, 'missing_shadow.jsonl'),
+      outputDir,
+      candidateRegistryPath: join(root, 'candidate_registry.json'),
+      graveyardPath: join(root, 'graveyard.json'),
+      bestConfigPath: join(root, 'best_config.json'),
+      trialRegistryPath,
+      evidenceOutputRoot: join(root, 'runtime_research'),
+      optimizationDir: join(root, 'missing_optimization'),
+      validationDir: join(root, 'missing_validation'),
+      routeCostBudgetPath: join(root, 'missing_route_cost_budget.json'),
+      timeframe: '5m',
+      lookbackHours: null,
+      json: true,
+    })
+
+    const trialLedger = JSON.parse(await readFile(index.artifacts.trialLedger, 'utf-8'))
+    const entry = trialLedger.entries.find((item: any) => item.source === 'runtime_trial_registry')
+    expect(entry.metrics.pitAuditPromotionGradeSource).toBe('promotion_grade_row_level_audit')
+    expect(entry.metrics.pitAuditPromotionGrade).toBe(true)
+  })
+
   it('quarantines validation CLI test-harness leaks from runtime raw_m without rewriting registry rows', async () => {
     const root = makeRoot()
     const paperDir = join(root, 'paper')

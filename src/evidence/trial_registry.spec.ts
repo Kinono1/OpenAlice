@@ -139,6 +139,28 @@ describe('trial_registry', () => {
     })
   })
 
+  it('accepts promotion-grade row-level PIT audit provenance source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-trial-registry-'))
+    const path = join(root, 'trial_registry.jsonl')
+
+    await appendTrialRecord(makeTrialRecord({
+      metadata: {
+        ...(makeTrialRecord().metadata ?? {}),
+        pit_audit_status: 'pass',
+        pit_audit_blocking_codes: [],
+        pit_audit_promotion_grade: true,
+        pit_audit_promotion_grade_source: 'promotion_grade_row_level_audit',
+      },
+    }), path)
+
+    const registry = await readTrialRegistry(path)
+    expect(registry.hardBlockCodes).toEqual([])
+    expect(registry.records[0].metadata).toMatchObject({
+      pit_audit_promotion_grade: true,
+      pit_audit_promotion_grade_source: 'promotion_grade_row_level_audit',
+    })
+  })
+
   it('accepts legacy rows with absent explicit provenance source fields', () => {
     expect(() =>
       trialRecordFromJson(trialRecordToJson(makeTrialRecord({

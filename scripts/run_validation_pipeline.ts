@@ -181,6 +181,7 @@ interface CliArgs {
   alphaPoolPath: string
   evidenceOutputRoot: string
   trialRegistryPath: string | null
+  promotionGradePitRowsPath: string | null
   selfCheck: boolean
 }
 
@@ -537,6 +538,7 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
     riskSimulation,
     releaseGate,
     outputPath: resolve(args.output),
+    promotionGradePitRows: await readPromotionGradePitRows(args.promotionGradePitRowsPath),
   })
   const summaryBaseWithEvidence = {
     ...summaryBase,
@@ -642,6 +644,7 @@ function parseArgs(argv: string[]): CliArgs {
     alphaPoolPath: raw.get('alphaPoolPath') ?? 'data/research/alpha_pool/latest.json',
     evidenceOutputRoot: raw.get('evidenceOutputRoot') ?? 'runtime/research',
     trialRegistryPath: raw.get('trialRegistryPath') ?? null,
+    promotionGradePitRowsPath: raw.get('promotionGradePitRowsPath') ?? null,
     selfCheck: parseBoolArg(raw.get('selfCheck'), false),
   }
 }
@@ -663,6 +666,67 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out
 }
 
+async function readPromotionGradePitRows(
+  path: string | null,
+): Promise<PromotionGradePitAuditRow[] | null> {
+  if (!path) return null
+  const raw = JSON.parse(await readFile(resolve(path), 'utf-8')) as unknown
+  const rows = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>).rows)
+      ? (raw as Record<string, unknown>).rows
+      : null
+  if (!rows) throw new Error('promotionGradePitRowsPath must contain an array or an object with rows[]')
+  return rows.map((row, rowIndex) => promotionGradePitAuditRowFromJson(row, rowIndex))
+}
+
+function promotionGradePitAuditRowFromJson(value: unknown, rowIndex: number): PromotionGradePitAuditRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`promotion grade PIT row ${rowIndex} must be an object`)
+  }
+  const raw = value as Record<string, unknown>
+  const featuresRaw = raw.features
+  if (!Array.isArray(featuresRaw)) {
+    throw new Error(`promotion grade PIT row ${rowIndex} features must be an array`)
+  }
+  return {
+    rowId: typeof raw.rowId === 'string' ? raw.rowId : typeof raw.row_id === 'string' ? raw.row_id : `row_${rowIndex}`,
+    decisionTime: typeof raw.decisionTime === 'string' || typeof raw.decisionTime === 'number'
+      ? raw.decisionTime
+      : typeof raw.decision_time === 'string' || typeof raw.decision_time === 'number'
+        ? raw.decision_time
+        : null,
+    features: featuresRaw.map((featureRaw, featureIndex) =>
+      promotionGradePitFeatureFromJson(featureRaw, rowIndex, featureIndex),
+    ),
+  }
+}
+
+function promotionGradePitFeatureFromJson(
+  value: unknown,
+  rowIndex: number,
+  featureIndex: number,
+): PromotionGradePitFeatureObservation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`promotion grade PIT row ${rowIndex} feature ${featureIndex} must be an object`)
+  }
+  const raw = value as Record<string, unknown>
+  return {
+    featureId: typeof raw.featureId === 'string' ? raw.featureId : typeof raw.feature_id === 'string' ? raw.feature_id : '',
+    availableTime: typeof raw.availableTime === 'string' || typeof raw.availableTime === 'number'
+      ? raw.availableTime
+      : typeof raw.available_time === 'string' || typeof raw.available_time === 'number'
+        ? raw.available_time
+        : null,
+    qualityStatus: typeof raw.qualityStatus === 'string'
+      ? raw.qualityStatus
+      : typeof raw.quality_status === 'string'
+        ? raw.quality_status
+        : null,
+    source: typeof raw.source === 'string' ? raw.source : null,
+  }
+}
+
 interface EvidenceOsV4ArtifactsInput {
   args: CliArgs
   candles: MarketData[]
@@ -682,6 +746,7 @@ interface EvidenceOsV4ArtifactsInput {
   riskSimulation: ReturnType<typeof evaluateRiskSimulation>
   releaseGate: ReturnType<typeof evaluateReleaseGate>
   outputPath: string
+  promotionGradePitRows: PromotionGradePitAuditRow[] | null
 }
 
 interface EvidenceOsV4ArtifactsResult {
@@ -758,6 +823,58 @@ interface PitAuditCheck {
   required: string
   observed: string
   details: Record<string, unknown>
+}
+
+interface PromotionGradePitFeatureObservation {
+  featureId: string
+  availableTime: string | number | null
+  qualityStatus?: string | null
+  source?: string | null
+}
+
+interface PromotionGradePitAuditRow {
+  rowId: string
+  decisionTime: string | number | null
+  features: PromotionGradePitFeatureObservation[]
+}
+
+type PromotionGradePitAuditStatus = 'pass' | 'fail' | 'not_available'
+
+interface PromotionGradePitAuditBlockingReason {
+  code:
+    | 'ROW_LEVEL_PIT_ROWS_MISSING'
+    | 'ROW_DECISION_TIME_INVALID'
+    | 'FEATURE_ID_MISSING'
+    | 'FEATURE_AVAILABLE_TIME_INVALID'
+    | 'FEATURE_AVAILABLE_TIME_AFTER_DECISION_TIME'
+    | 'REQUIRED_FEATURE_MISSING'
+    | 'FEATURE_QUALITY_STATUS_BLOCKED'
+  severity: 'hard_block'
+  row_id: string | null
+  feature_id: string | null
+  required: string
+  observed: string
+}
+
+interface PromotionGradePitAuditResult {
+  schema_version: 'evidence_os_v4_promotion_grade_pit_audit.v1'
+  status: PromotionGradePitAuditStatus
+  observed: string
+  promotion_grade: boolean
+  promotion_grade_source_available: boolean
+  policy: typeof DATA_LINEAGE_PIT_POLICY
+  row_count: number
+  feature_observation_count: number
+  required_feature_count: number
+  checked_required_feature_count: number
+  invalid_timestamp_count: number
+  available_after_decision_count: number
+  missing_required_feature_count: number
+  quality_status_violation_count: number
+  first_decision_time_iso: string | null
+  last_decision_time_iso: string | null
+  blocking_reasons: PromotionGradePitAuditBlockingReason[]
+  required_upgrade: string | null
 }
 
 function buildValidationDataLineageGraph(input: {
@@ -1196,6 +1313,7 @@ function buildFeatureAvailabilityAudit(input: {
   dataLineageGraph: DataLineageGraph
   strategyFamilyContract: StrategyFamilyContract
   holdoutCandles: MarketData[]
+  promotionGradePitRows?: PromotionGradePitAuditRow[] | null
 }): Record<string, unknown> {
   const lineageValidation = validateDataLineageGraph(input.dataLineageGraph)
   const holdoutStart = input.holdoutCandles[0]?.time ?? null
@@ -1203,6 +1321,10 @@ function buildFeatureAvailabilityAudit(input: {
   const holdoutStartIso = holdoutStart == null ? null : marketTimeToIso(holdoutStart)
   const holdoutEndIso = holdoutEnd == null ? null : marketTimeToIso(holdoutEnd)
   const rowLevelProxyAudit = buildCsvRowLevelPitProxyAudit(input.holdoutCandles)
+  const promotionGradePitAudit = buildPromotionGradePitAudit({
+    rows: input.promotionGradePitRows ?? null,
+    strategyFamilyContract: input.strategyFamilyContract,
+  })
   const checks: PitAuditCheck[] = [
     ...input.dataLineageGraph.nodes.flatMap((node) =>
       pitChecksForLineageNode({
@@ -1227,13 +1349,13 @@ function buildFeatureAvailabilityAudit(input: {
     })),
     {
       id: 'row_level_available_time_audit',
-      status: 'blocked',
+      status: promotionGradePitAudit.status === 'pass' ? 'pass' : promotionGradePitAudit.status === 'fail' ? 'fail' : 'blocked',
       node_id: null,
       node_type: null,
       source: 'validation_runner',
       required: 'promotion-grade per-row system arrival_time <= decision_time proof',
-      observed: rowLevelProxyAudit.observed,
-      details: rowLevelProxyAudit,
+      observed: promotionGradePitAudit.observed,
+      details: promotionGradePitAudit,
     },
   ]
   const blockingReasons = [
@@ -1275,6 +1397,7 @@ function buildFeatureAvailabilityAudit(input: {
       blocking_reasons: lineageValidation.blockingReasons,
     },
     row_level_proxy_audit: rowLevelProxyAudit,
+    promotion_grade_row_level_audit: promotionGradePitAudit,
     checks,
     blocking_reasons: blockingReasons,
   }
@@ -1282,7 +1405,197 @@ function buildFeatureAvailabilityAudit(input: {
 
 function pitBlockingCodeForCheck(check: PitAuditCheck): EvidenceOsFailureCode {
   if (check.id !== 'row_level_available_time_audit') return 'PIT_VIOLATION'
-  return check.details.proxy_status === 'fail' ? 'PIT_VIOLATION' : 'PIT_PROXY_ONLY'
+  const details = check.details as Record<string, unknown> & { status?: unknown }
+  if (details.status === 'not_available') return 'PIT_PROXY_ONLY'
+  return 'PIT_VIOLATION'
+}
+
+function buildPromotionGradePitAudit(input: {
+  rows: PromotionGradePitAuditRow[] | null
+  strategyFamilyContract: StrategyFamilyContract
+}): PromotionGradePitAuditResult {
+  if (!Array.isArray(input.rows) || input.rows.length === 0) {
+    return emptyPromotionGradePitAudit('ROW_LEVEL_PIT_ROWS_MISSING', 'row-level available_time evidence missing')
+  }
+
+  const requiredFeatures = input.strategyFamilyContract.requiredFeatures
+    .filter((feature) => feature.required)
+    .map((feature) => feature.featureId)
+  const allowedQualityByFeature = new Map(
+    input.strategyFamilyContract.requiredFeatures.map((feature) => [
+      feature.featureId,
+      new Set(feature.qualityStatusesAllowed),
+    ]),
+  )
+  const blockingReasons: PromotionGradePitAuditBlockingReason[] = []
+  let featureObservationCount = 0
+  let checkedRequiredFeatureCount = 0
+  let invalidTimestampCount = 0
+  let availableAfterDecisionCount = 0
+  let missingRequiredFeatureCount = 0
+  let qualityStatusViolationCount = 0
+  const decisionTimes: number[] = []
+
+  for (const row of input.rows) {
+    const rowId = nonEmptyText(row.rowId) ?? 'missing_row_id'
+    const decisionMs = parsePitTimestampMs(row.decisionTime)
+    if (decisionMs == null) {
+      invalidTimestampCount += 1
+      blockingReasons.push({
+        code: 'ROW_DECISION_TIME_INVALID',
+        severity: 'hard_block',
+        row_id: rowId,
+        feature_id: null,
+        required: 'valid decisionTime timestamp',
+        observed: String(row.decisionTime ?? 'missing'),
+      })
+      continue
+    }
+    decisionTimes.push(decisionMs)
+    const featureById = new Map<string, PromotionGradePitFeatureObservation>()
+    for (const feature of row.features ?? []) {
+      featureObservationCount += 1
+      const featureId = nonEmptyText(feature.featureId)
+      if (!featureId) {
+        blockingReasons.push({
+          code: 'FEATURE_ID_MISSING',
+          severity: 'hard_block',
+          row_id: rowId,
+          feature_id: null,
+          required: 'non-empty featureId',
+          observed: 'missing',
+        })
+        continue
+      }
+      featureById.set(featureId, feature)
+    }
+
+    for (const requiredFeatureId of requiredFeatures) {
+      const feature = featureById.get(requiredFeatureId)
+      if (!feature) {
+        missingRequiredFeatureCount += 1
+        blockingReasons.push({
+          code: 'REQUIRED_FEATURE_MISSING',
+          severity: 'hard_block',
+          row_id: rowId,
+          feature_id: requiredFeatureId,
+          required: 'required feature observation present at decision time',
+          observed: 'missing',
+        })
+        continue
+      }
+      checkedRequiredFeatureCount += 1
+      const availableMs = parsePitTimestampMs(feature.availableTime)
+      if (availableMs == null) {
+        invalidTimestampCount += 1
+        blockingReasons.push({
+          code: 'FEATURE_AVAILABLE_TIME_INVALID',
+          severity: 'hard_block',
+          row_id: rowId,
+          feature_id: requiredFeatureId,
+          required: 'valid feature availableTime timestamp',
+          observed: String(feature.availableTime ?? 'missing'),
+        })
+        continue
+      }
+      if (availableMs > decisionMs) {
+        availableAfterDecisionCount += 1
+        blockingReasons.push({
+          code: 'FEATURE_AVAILABLE_TIME_AFTER_DECISION_TIME',
+          severity: 'hard_block',
+          row_id: rowId,
+          feature_id: requiredFeatureId,
+          required: 'availableTime <= decisionTime',
+          observed: `${new Date(availableMs).toISOString()} > ${new Date(decisionMs).toISOString()}`,
+        })
+      }
+      const allowedQualityStatuses = allowedQualityByFeature.get(requiredFeatureId)
+      const qualityStatus = nonEmptyText(feature.qualityStatus) ?? 'ok'
+      if (allowedQualityStatuses && !allowedQualityStatuses.has(qualityStatus)) {
+        qualityStatusViolationCount += 1
+        blockingReasons.push({
+          code: 'FEATURE_QUALITY_STATUS_BLOCKED',
+          severity: 'hard_block',
+          row_id: rowId,
+          feature_id: requiredFeatureId,
+          required: [...allowedQualityStatuses].sort().join('|'),
+          observed: qualityStatus,
+        })
+      }
+    }
+  }
+
+  const status: PromotionGradePitAuditStatus = blockingReasons.length === 0 ? 'pass' : 'fail'
+  return {
+    schema_version: 'evidence_os_v4_promotion_grade_pit_audit.v1',
+    status,
+    observed: status === 'pass'
+      ? 'promotion_grade_row_level_available_time_audit_passed'
+      : 'promotion_grade_row_level_available_time_audit_failed',
+    promotion_grade: status === 'pass',
+    promotion_grade_source_available: true,
+    policy: DATA_LINEAGE_PIT_POLICY,
+    row_count: input.rows.length,
+    feature_observation_count: featureObservationCount,
+    required_feature_count: requiredFeatures.length,
+    checked_required_feature_count: checkedRequiredFeatureCount,
+    invalid_timestamp_count: invalidTimestampCount,
+    available_after_decision_count: availableAfterDecisionCount,
+    missing_required_feature_count: missingRequiredFeatureCount,
+    quality_status_violation_count: qualityStatusViolationCount,
+    first_decision_time_iso: decisionTimes.length === 0 ? null : new Date(Math.min(...decisionTimes)).toISOString(),
+    last_decision_time_iso: decisionTimes.length === 0 ? null : new Date(Math.max(...decisionTimes)).toISOString(),
+    blocking_reasons: blockingReasons,
+    required_upgrade: null,
+  }
+}
+
+function emptyPromotionGradePitAudit(
+  code: PromotionGradePitAuditBlockingReason['code'],
+  observed: string,
+): PromotionGradePitAuditResult {
+  return {
+    schema_version: 'evidence_os_v4_promotion_grade_pit_audit.v1',
+    status: 'not_available',
+    observed,
+    promotion_grade: false,
+    promotion_grade_source_available: false,
+    policy: DATA_LINEAGE_PIT_POLICY,
+    row_count: 0,
+    feature_observation_count: 0,
+    required_feature_count: 0,
+    checked_required_feature_count: 0,
+    invalid_timestamp_count: 0,
+    available_after_decision_count: 0,
+    missing_required_feature_count: 0,
+    quality_status_violation_count: 0,
+    first_decision_time_iso: null,
+    last_decision_time_iso: null,
+    blocking_reasons: [{
+      code,
+      severity: 'hard_block',
+      row_id: null,
+      feature_id: null,
+      required: 'promotion-grade row-level available_time <= decision_time evidence',
+      observed,
+    }],
+    required_upgrade: 'persist per-feature available_time/arrival_time from the live data pipeline and prove available_time <= decision_time row by row',
+  }
+}
+
+function parsePitTimestampMs(value: string | number | null | undefined): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null
+    return value > 10_000_000_000 ? Math.floor(value) : Math.floor(value * 1000)
+  }
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed) return null
+  const parsed = Date.parse(trimmed)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function nonEmptyText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
 function pitChecksForLineageNode(input: {
@@ -1488,16 +1801,38 @@ async function writeEvidenceOsV4Artifacts(
     dataLineageGraph,
     strategyFamilyContract,
     holdoutCandles: input.holdoutCandles,
+    promotionGradePitRows: input.promotionGradePitRows,
   })
   const fdrBlockingReasons = fdrReport.blocking_reasons.map((reason) => reason.observed)
   const pitProxyAudit = asRecord(featureAvailabilityAudit.row_level_proxy_audit)
+  const promotionGradePitAudit = asRecord(featureAvailabilityAudit.promotion_grade_row_level_audit)
   const pitAuditBlockingCodes = featureAvailabilityAudit.blocking_reasons
     .map((reason) => reason.code)
     .filter((code): code is string => typeof code === 'string')
+  const pitAuditPromotionGrade = booleanOrNull(promotionGradePitAudit?.promotion_grade) ?? booleanOrNull(pitProxyAudit?.promotion_grade) ?? false
+  const pitAuditPromotionGradeSource = booleanOrNull(promotionGradePitAudit?.promotion_grade) != null
+    ? 'promotion_grade_row_level_audit'
+    : 'feature_availability_audit'
   const failureCodes: FailureCode[] = [...new Set([
     ...fdrReport.blocking_reasons.map((reason) => reason.code),
     ...pitAuditBlockingCodes,
   ])] as FailureCode[]
+  const validationBlockingReasons = [
+    ...fdrReport.blocking_reasons.map((reason) => ({
+      code: reason.code,
+      source: 'fdr_report',
+      severity: 'hard_block',
+      required: reason.required,
+      observed: reason.observed,
+    })),
+    ...featureAvailabilityAudit.blocking_reasons.map((reason) => ({
+      code: reason.code,
+      source: 'feature_availability_audit',
+      severity: 'hard_block',
+      required: reason.required,
+      observed: reason.observed,
+    })),
+  ]
 
   const fdrFamily = '2026Q2_crypto_evidence_os_v4'
   const batchId = `batch_${hashHex.slice(0, 12)}`
@@ -1555,8 +1890,8 @@ async function writeEvidenceOsV4Artifacts(
       pit_audit_status: featureAvailabilityAudit.status,
       pit_audit_blocking_codes: pitAuditBlockingCodes,
       pit_audit_proxy_type: stringOrNull(pitProxyAudit?.proxy_type),
-      pit_audit_promotion_grade: booleanOrNull(pitProxyAudit?.promotion_grade) ?? false,
-      pit_audit_promotion_grade_source: 'feature_availability_audit',
+      pit_audit_promotion_grade: pitAuditPromotionGrade,
+      pit_audit_promotion_grade_source: pitAuditPromotionGradeSource,
       promotion_decision_source: 'fail_closed_validation_pipeline',
     },
   }
@@ -1597,40 +1932,10 @@ async function writeEvidenceOsV4Artifacts(
       dsr_value: input.significance.dsrResult.dsrValue,
       risk_of_ruin: input.riskSimulation.riskOfRuin,
     },
-    blocking_reasons: [
-      {
-        code: 'FDR_INPUTS_INCOMPLETE',
-        source: 'fdr_report',
-        severity: 'hard_block',
-        required: 'complete trial universe with finite p-values before BY_raw_m FDR',
-        observed: fdrReport.status,
-      },
-      {
-        code: 'PIT_PROXY_ONLY',
-        source: 'feature_availability_audit',
-        severity: 'hard_block',
-        required: 'promotion-grade row-level system arrival_time <= decision_time audit',
-        observed: featureAvailabilityAudit.status,
-      },
-    ],
+    blocking_reasons: validationBlockingReasons,
   }
   const promotionProvenance = buildBlockedPromotionVerdictProvenance({
-    blockingReasons: [
-      {
-        code: 'FDR_INPUTS_INCOMPLETE',
-        source: 'fdr_report',
-        severity: 'hard_block',
-        required: 'complete trial universe and p-values for BY_raw_m FDR',
-        observed: fdrReport.status,
-      },
-      {
-        code: 'PIT_PROXY_ONLY',
-        source: 'feature_availability_audit',
-        severity: 'hard_block',
-        required: 'promotion-grade row-level system arrival_time <= decision_time audit',
-        observed: featureAvailabilityAudit.status,
-      },
-    ],
+    blockingReasons: validationBlockingReasons,
     supportingEvidenceIds: [],
     excludedEvidenceIds: [
       {
@@ -1642,12 +1947,12 @@ async function writeEvidenceOsV4Artifacts(
     missingEvidence: [
       'complete_trial_universe_marker',
       'finite_p_values_for_all_included_trials',
-      'promotion_grade_feature_availability_audit.pass',
+      ...(featureAvailabilityAudit.status === 'pass' ? [] : ['promotion_grade_feature_availability_audit.pass']),
     ],
     nextRequiredEvidence: [
       'register complete raw_m including failed and aborted trials',
       'emit finite p-values from validation statistics before BY_raw_m FDR',
-      'replace CSV proxy PIT audit with row-level system arrival_time evidence',
+      ...(featureAvailabilityAudit.status === 'pass' ? [] : ['replace CSV proxy PIT audit with row-level system arrival_time evidence']),
     ],
     generatedAt: createdAt,
   })
@@ -4049,6 +4354,8 @@ async function runSelfCheck(): Promise<void> {
 
 export {
   appendCompleteTrialUniverseMarkerIfReady,
+  buildFeatureAvailabilityAudit,
+  buildPromotionGradePitAudit,
   buildRecommendedCandidate,
   buildRegimeGateSweep,
   evaluateSignificanceGateForReport,
