@@ -377,6 +377,23 @@ export interface GateEffectivenessReport {
       acceptVsSkipDiagnosticNetDeltaPct: number | null
     }
   }
+  fillAdjusted: {
+    basis: 'fill_adjusted_cost_fields'
+    minimumCoveragePct: 95
+    acceptedTrades: number
+    skippedTrades: number
+    totalTrades: number
+    acceptedWithFillAdjustedCost: number
+    skippedWithFillAdjustedCost: number
+    totalWithFillAdjustedCost: number
+    acceptedFillAdjustedNetPnlPct: number | null
+    skippedFillAdjustedNetPnlPct: number | null
+    acceptVsSkipFillAdjustedDeltaPct: number | null
+    coveragePct: number | null
+    promotionEligible: false
+    promotionBlocked: boolean
+    blockedBy: string[]
+  }
   costCoverageAttribution: {
     diagnosticOnly: true
     promotionEligible: false
@@ -1449,6 +1466,7 @@ export function buildGateEffectivenessReport(input: {
     skippedTrades,
     [...shadowOpenById.values()],
   )
+  const fillAdjusted = buildGateFillAdjustedSummary(acceptedTrades, skippedTrades)
   const costCoverageAttribution = buildGateCostCoverageAttribution(
     acceptedTrades,
     skippedTrades,
@@ -1507,6 +1525,7 @@ export function buildGateEffectivenessReport(input: {
     skipCounterfactualPnlPct: skipStats.totalPnlPct,
     acceptVsSkipDeltaPct,
     costAdjusted,
+    fillAdjusted,
     costCoverageAttribution,
     acceptStats,
     skipStats,
@@ -1635,6 +1654,54 @@ function costAdjustedPnlPct(trade: NormalizedPaperTrade): number[] {
   const costBps = predictedCostBps(trade)
   if (costBps == null) return []
   return [trade.pnlPct - costBps / 100]
+}
+
+function buildGateFillAdjustedSummary(
+  acceptedTrades: NormalizedPaperTrade[],
+  skippedTrades: NormalizedPaperTrade[],
+): GateEffectivenessReport['fillAdjusted'] {
+  const accepted = acceptedTrades.flatMap(fillAdjustedPnlPct)
+  const skipped = skippedTrades.flatMap(fillAdjustedPnlPct)
+  const totalTrades = acceptedTrades.length + skippedTrades.length
+  const totalWithFillAdjustedCost = accepted.length + skipped.length
+  const acceptedAvg = accepted.length > 0 ? mean(accepted) : null
+  const skippedAvg = skipped.length > 0 ? mean(skipped) : null
+  const coveragePct = totalTrades > 0 ? totalWithFillAdjustedCost / totalTrades * 100 : null
+  const blockedBy = [
+    ...(coveragePct != null && coveragePct >= 95 ? [] : [`fill_adjusted_coverage_below_minimum:${coveragePct ?? 'missing'}<95`]),
+    ...(accepted.length > 0 ? [] : ['accepted_fill_adjusted_outcomes_missing']),
+    ...(skipped.length > 0 ? [] : ['skipped_fill_adjusted_outcomes_missing']),
+    ...(acceptedAvg != null && skippedAvg != null ? [] : ['fill_adjusted_accept_vs_skip_unavailable']),
+  ]
+  return {
+    basis: 'fill_adjusted_cost_fields',
+    minimumCoveragePct: 95,
+    acceptedTrades: acceptedTrades.length,
+    skippedTrades: skippedTrades.length,
+    totalTrades,
+    acceptedWithFillAdjustedCost: accepted.length,
+    skippedWithFillAdjustedCost: skipped.length,
+    totalWithFillAdjustedCost,
+    acceptedFillAdjustedNetPnlPct: accepted.length > 0 ? roundFinite(sum(accepted)) : null,
+    skippedFillAdjustedNetPnlPct: skipped.length > 0 ? roundFinite(sum(skipped)) : null,
+    acceptVsSkipFillAdjustedDeltaPct: acceptedAvg != null && skippedAvg != null ? roundFinite(acceptedAvg - skippedAvg) : null,
+    coveragePct,
+    promotionEligible: false,
+    promotionBlocked: blockedBy.length > 0,
+    blockedBy,
+  }
+}
+
+function fillAdjustedPnlPct(trade: NormalizedPaperTrade): number[] {
+  const costBps = fillAdjustedCostBps(trade)
+  if (costBps == null) return []
+  return [trade.pnlPct - costBps / 100]
+}
+
+function fillAdjustedCostBps(trade: NormalizedPaperTrade): number | null {
+  if (trade.fillAdjustedCostBps != null && trade.fillAdjustedCostBps >= 0) return trade.fillAdjustedCostBps
+  if (trade.fillAdjustedCostPct != null && trade.fillAdjustedCostPct >= 0) return trade.fillAdjustedCostPct * 100
+  return null
 }
 
 function buildGateCostCoverageAttribution(
