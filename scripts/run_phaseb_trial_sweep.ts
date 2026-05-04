@@ -2,7 +2,11 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
+import { z } from "zod";
 import { safePathComponent } from "../src/core/path-safety.js";
+import { RuntimeCheckpointStore } from "../src/runtime/runtime_checkpoint.js";
 import {
   appendExecutionJournal,
   extractSummaryMetrics,
@@ -88,21 +92,154 @@ interface CliArgs {
   trialList?: number[];
   summaryOutput?: string;
   markdownOutput?: string;
+  resume: boolean;
+  fresh: boolean;
+  runId?: string;
+  checkpointRoot?: string;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const runId = `${sanitizeTag(args.sweepId)}.${new Date().toISOString().replace(/[:.]/g, "")}`;
+type PhaseBTrialSweepStep =
+  | "started"
+  | "loaded_inputs"
+  | "trial_completed"
+  | "wrote_outputs";
+
+const PHASEB_TRIAL_SWEEP_STEPS = new Set<PhaseBTrialSweepStep>([
+  "started",
+  "loaded_inputs",
+  "trial_completed",
+  "wrote_outputs",
+]);
+
+interface PhaseBTrialSweepCheckpointState {
+  sweepId: string;
+  symbol: string;
+  cliConfigHash: string;
+  searchJson: string;
+  searchJsonHash: string;
+  baseManifest: string;
+  baseManifestHash: string;
+  overrideJson: string | null;
+  overrideJsonHash: string | null;
+  summaryOutput: string;
+  markdownOutput: string;
+  completedTrials: number[];
+  results: SweepResult[];
+}
+
+interface PhaseBTrialSweepRunnerDeps {
+  execNodeQuiet?: (args: string[]) => Promise<void>;
+  appendExecutionJournal?: typeof appendExecutionJournal;
+  now?: () => Date;
+}
+
+const PhaseBTrialSweepCheckpointStateSchema: z.ZodType<PhaseBTrialSweepCheckpointState> = z.object({
+  sweepId: z.string(),
+  symbol: z.string(),
+  cliConfigHash: z.string(),
+  searchJson: z.string(),
+  searchJsonHash: z.string(),
+  baseManifest: z.string(),
+  baseManifestHash: z.string(),
+  overrideJson: z.string().nullable(),
+  overrideJsonHash: z.string().nullable(),
+  summaryOutput: z.string(),
+  markdownOutput: z.string(),
+  completedTrials: z.array(z.number().int()),
+  results: z.array(z.custom<SweepResult>((value) => isPlainObject(value))),
+});
+
+export async function runPhaseBTrialSweep(
+  args: CliArgs,
+  deps: PhaseBTrialSweepRunnerDeps = {},
+): Promise<{
+  summaryOutput: string;
+  markdownOutput: string;
+  recommendedTrial: number | null;
+}> {
+  const now = deps.now ?? (() => new Date());
+  const executeNodeQuiet = deps.execNodeQuiet ?? execNodeQuiet;
+  const appendJournal = deps.appendExecutionJournal ?? appendExecutionJournal;
+  if (args.resume && args.fresh) {
+    throw new Error("--resume and --fresh are mutually exclusive.");
+  }
   const summaryOutput =
     args.summaryOutput ??
     `data/research/strategy/analysis/${sanitizeTag(args.sweepId)}.json`;
   const markdownOutput =
     args.markdownOutput ??
     `data/research/strategy/analysis/${sanitizeTag(args.sweepId)}.md`;
+  const searchJsonPath = resolve(args.searchJson);
+  const baseManifestPath = resolve(args.baseManifest);
+  const overrideJsonPath = args.overrideJson ? resolve(args.overrideJson) : null;
+  const [searchJsonRaw, baseManifestRaw, overrideJsonRaw] = await Promise.all([
+    readFile(searchJsonPath, "utf-8"),
+    readFile(baseManifestPath, "utf-8"),
+    overrideJsonPath ? readFile(overrideJsonPath, "utf-8") : Promise.resolve(null),
+  ]);
+  const searchJsonHash = hashString(searchJsonRaw);
+  const baseManifestHash = hashString(baseManifestRaw);
+  const overrideJsonHash = overrideJsonRaw ? hashString(overrideJsonRaw) : null;
+  const cliConfigHash = hashString(JSON.stringify({
+    searchJson: searchJsonPath,
+    baseManifest: baseManifestPath,
+    overrideJson: overrideJsonPath,
+    sweepId: args.sweepId,
+    symbol: args.symbol,
+    inputCsv: args.inputCsv ?? null,
+    lookbackBars: args.lookbackBars ?? null,
+    sourceId: args.sourceId ?? null,
+    protocolProfile: args.protocolProfile ?? null,
+    multipleTestingUnit: args.multipleTestingUnit ?? null,
+    fdrMethod: args.fdrMethod ?? null,
+    wfoProfile: args.wfoProfile ?? null,
+    storeyLambda: args.storeyLambda ?? null,
+    cvAggQuantile: args.cvAggQuantile ?? null,
+    trialList: args.trialList ?? null,
+    summaryOutput: resolve(summaryOutput),
+    markdownOutput: resolve(markdownOutput),
+  }));
+  const resolvedConfigHash = hashString(JSON.stringify({
+    cliConfigHash,
+    searchJsonHash,
+    baseManifestHash,
+    overrideJsonHash,
+  }));
+  const runId = args.runId
+    ? safePathComponent(args.runId, { kind: "phaseb sweep runId", maxLength: 128 })
+    : buildDefaultRunId(args, resolvedConfigHash);
+  const checkpointStore = new RuntimeCheckpointStore({
+    rootDir: args.checkpointRoot,
+    namespace: "phaseb_trial_sweep",
+  });
+  if (args.fresh) {
+    checkpointStore.clear(runId);
+  }
+  const checkpoint = checkpointStore.load(runId, PhaseBTrialSweepCheckpointStateSchema);
+  if (checkpoint.ok) {
+    if (!args.resume && !args.fresh) {
+      throw new Error(
+        [
+          `Checkpoint exists for phase-B trial sweep runId=${runId}.`,
+          "Use --resume to continue or --fresh to discard it.",
+        ].join(" ")
+      );
+    }
+    if (!PHASEB_TRIAL_SWEEP_STEPS.has(checkpoint.checkpoint.step as PhaseBTrialSweepStep)) {
+      throw new Error(
+        `Cannot resume phase-B trial sweep runId=${runId}: unknown checkpoint step ${checkpoint.checkpoint.step}.`
+      );
+    }
+  } else if (args.resume) {
+    const reason = checkpoint.diagnostic.kind === "missing"
+      ? "checkpoint missing"
+      : `checkpoint ${checkpoint.diagnostic.kind}`;
+    throw new Error(`Cannot resume phase-B trial sweep runId=${runId}: ${reason}.`);
+  }
   const journalInputs = {
-    searchJson: resolve(args.searchJson),
-    baseManifest: resolve(args.baseManifest),
-    overrideJson: args.overrideJson ? resolve(args.overrideJson) : null,
+    searchJson: searchJsonPath,
+    baseManifest: baseManifestPath,
+    overrideJson: overrideJsonPath,
     sweepId: args.sweepId,
     symbol: args.symbol,
     sourceId: args.sourceId ?? null,
@@ -117,7 +254,7 @@ async function main(): Promise<void> {
     markdown: resolve(markdownOutput),
   };
 
-  await appendExecutionJournal({
+  await appendJournal({
     runId,
     batchId: args.sweepId,
     stage: "sweep",
@@ -130,13 +267,11 @@ async function main(): Promise<void> {
   });
 
   try {
-    const [searchPayload, baseManifest, manifestOverride] = await Promise.all([
-      readJson<SearchPayload>(args.searchJson),
-      readJson<RouteManifest>(args.baseManifest),
-      args.overrideJson
-        ? readJson<Partial<RouteManifest>>(args.overrideJson)
-        : Promise.resolve(null),
-    ]);
+    const searchPayload = JSON.parse(searchJsonRaw) as SearchPayload;
+    const baseManifest = JSON.parse(baseManifestRaw) as RouteManifest;
+    const manifestOverride = overrideJsonRaw
+      ? JSON.parse(overrideJsonRaw) as Partial<RouteManifest>
+      : null;
 
   const allTrials = Array.isArray(searchPayload.allTrials) ? searchPayload.allTrials : [];
   if (allTrials.length === 0) {
@@ -160,19 +295,62 @@ async function main(): Promise<void> {
     args.protocolProfile ?? normalizeOptionalString(args.sweepId) ?? "phaseb_sweep";
   const tmpRoot = await mkdtemp(join(tmpdir(), "openalice-phaseb-trial-sweep-"));
 
-  const results: SweepResult[] = [];
+  const resumeState = checkpoint.ok ? checkpoint.checkpoint.state : null;
+  if (resumeState) {
+    validateResumeState({
+      runId,
+      state: resumeState,
+      sweepId: args.sweepId,
+      symbol: args.symbol,
+      cliConfigHash,
+      searchJson: searchJsonPath,
+      searchJsonHash,
+      baseManifest: baseManifestPath,
+      baseManifestHash,
+      overrideJson: overrideJsonPath,
+      overrideJsonHash,
+      summaryOutput: resolve(summaryOutput),
+      markdownOutput: resolve(markdownOutput),
+    });
+  }
+  const results: SweepResult[] = resumeState?.results ?? [];
+  const completedTrials = new Set(resumeState?.completedTrials ?? []);
+  checkpointStore.save<PhaseBTrialSweepCheckpointState>({
+    runId,
+    step: "loaded_inputs",
+    now: now(),
+    state: {
+      sweepId: args.sweepId,
+      symbol: args.symbol,
+      cliConfigHash,
+      searchJson: searchJsonPath,
+      searchJsonHash,
+      baseManifest: baseManifestPath,
+      baseManifestHash,
+      overrideJson: overrideJsonPath,
+      overrideJsonHash,
+      summaryOutput: resolve(summaryOutput),
+      markdownOutput: resolve(markdownOutput),
+      completedTrials: Array.from(completedTrials),
+      results,
+    },
+  });
+
   for (const trial of targetTrials) {
     if (!Array.isArray(trial.candidates) || trial.candidates.length === 0) {
       continue;
     }
     const trialNumber = trial.trial ?? -1;
+    if (completedTrials.has(trialNumber)) {
+      continue;
+    }
     const sourceId =
       args.sourceId ??
       `${searchPayload.run_id ?? "phaseb"}:trial${String(trialNumber).padStart(3, "0")}`;
     const tag = sanitizeTag(`${args.sweepId}.trial_${String(trialNumber).padStart(3, "0")}`);
     const manifest: RouteManifest = {
       ...resolvedBaseManifest,
-      generatedAt: new Date().toISOString(),
+      generatedAt: now().toISOString(),
       batchId: tag,
       batchGoal:
         resolvedBaseManifest.batchGoal ??
@@ -209,7 +387,7 @@ async function main(): Promise<void> {
       phaseReadiness: resolve(`data/runtime/phase_readiness.${tag}.latest.json`),
     };
 
-    await execNodeQuiet([
+    await executeNodeQuiet([
       "--import",
       "tsx",
       "./scripts/run_route_af.ts",
@@ -250,6 +428,27 @@ async function main(): Promise<void> {
       outputs,
     });
     results.push(result);
+    completedTrials.add(trialNumber);
+    checkpointStore.save<PhaseBTrialSweepCheckpointState>({
+      runId,
+      step: "trial_completed",
+      now: now(),
+      state: {
+        sweepId: args.sweepId,
+        symbol: args.symbol,
+        cliConfigHash,
+        searchJson: searchJsonPath,
+        searchJsonHash,
+        baseManifest: baseManifestPath,
+        baseManifestHash,
+        overrideJson: overrideJsonPath,
+        overrideJsonHash,
+        summaryOutput: resolve(summaryOutput),
+        markdownOutput: resolve(markdownOutput),
+        completedTrials: Array.from(completedTrials),
+        results,
+      },
+    });
 
     console.log(
       [
@@ -268,7 +467,7 @@ async function main(): Promise<void> {
   const payload = {
     schemaVersion: "phaseb_trial_sweep_result.v1",
     sweepId: args.sweepId,
-    generatedAt: new Date().toISOString(),
+    generatedAt: now().toISOString(),
     sourceRunId: searchPayload.run_id ?? null,
     sourceId: args.sourceId ?? null,
     protocolProfile,
@@ -288,7 +487,29 @@ async function main(): Promise<void> {
       writeFile(resolve(markdownOutput), renderMarkdown(payload), "utf-8"),
     ]);
 
-    await appendExecutionJournal({
+    checkpointStore.save<PhaseBTrialSweepCheckpointState>({
+      runId,
+      step: "wrote_outputs",
+      now: now(),
+      state: {
+        sweepId: args.sweepId,
+        symbol: args.symbol,
+        cliConfigHash,
+        searchJson: searchJsonPath,
+        searchJsonHash,
+        baseManifest: baseManifestPath,
+        baseManifestHash,
+        overrideJson: overrideJsonPath,
+        overrideJsonHash,
+        summaryOutput: resolve(summaryOutput),
+        markdownOutput: resolve(markdownOutput),
+        completedTrials: Array.from(completedTrials),
+        results,
+      },
+    });
+    checkpointStore.clear(runId);
+
+    await appendJournal({
       runId,
       batchId: args.sweepId,
       stage: "sweep",
@@ -308,8 +529,13 @@ async function main(): Promise<void> {
         `recommendedTrial=${recommendedTrial ?? "none"}`,
       ].join(" | ")
     );
+    return {
+      summaryOutput: resolve(summaryOutput),
+      markdownOutput: resolve(markdownOutput),
+      recommendedTrial,
+    };
   } catch (error) {
-    await appendExecutionJournal({
+    await appendJournal({
       runId,
       batchId: args.sweepId,
       stage: "sweep",
@@ -325,7 +551,11 @@ async function main(): Promise<void> {
   }
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export async function main(): Promise<void> {
+  await runPhaseBTrialSweep(parseArgs(process.argv.slice(2)));
+}
+
+export function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
   const searchJson = raw.get("search-json");
   const baseManifest = raw.get("base-manifest");
@@ -336,6 +566,11 @@ function parseArgs(argv: string[]): CliArgs {
   if (!baseManifest) throw new Error("--base-manifest is required.");
   if (!sweepId) throw new Error("--sweep-id is required.");
   if (!symbol) throw new Error("--symbol is required.");
+  const resume = raw.get("resume") === "true";
+  const fresh = raw.get("fresh") === "true";
+  if (resume && fresh) {
+    throw new Error("--resume and --fresh are mutually exclusive.");
+  }
 
   const trialListRaw = normalizeOptionalString(
     raw.get("trial-list") ?? raw.get("trials")
@@ -390,6 +625,10 @@ function parseArgs(argv: string[]): CliArgs {
     trialList,
     summaryOutput: normalizeOptionalString(raw.get("summary-output")),
     markdownOutput: normalizeOptionalString(raw.get("markdown-output")),
+    resume,
+    fresh,
+    runId: normalizeOptionalString(raw.get("run-id") ?? raw.get("runId")),
+    checkpointRoot: normalizeOptionalString(raw.get("checkpoint-root") ?? raw.get("checkpointRoot")),
   };
 }
 
@@ -679,6 +918,53 @@ function sanitizeTag(value: string): string {
   });
 }
 
+function buildDefaultRunId(args: CliArgs, resolvedConfigHash: string): string {
+  return sanitizeTag([
+    args.sweepId,
+    symbolToIdPrefix(args.symbol),
+    resolvedConfigHash.slice(0, 12),
+  ].join("."));
+}
+
+function hashString(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function validateResumeState(input: {
+  runId: string;
+  state: PhaseBTrialSweepCheckpointState;
+  sweepId: string;
+  symbol: string;
+  cliConfigHash: string;
+  searchJson: string;
+  searchJsonHash: string;
+  baseManifest: string;
+  baseManifestHash: string;
+  overrideJson: string | null;
+  overrideJsonHash: string | null;
+  summaryOutput: string;
+  markdownOutput: string;
+}): void {
+  const mismatches = [
+    input.state.sweepId === input.sweepId ? null : "sweepId",
+    input.state.symbol === input.symbol ? null : "symbol",
+    input.state.cliConfigHash === input.cliConfigHash ? null : "cliConfigHash",
+    input.state.searchJson === input.searchJson ? null : "searchJson",
+    input.state.searchJsonHash === input.searchJsonHash ? null : "searchJsonHash",
+    input.state.baseManifest === input.baseManifest ? null : "baseManifest",
+    input.state.baseManifestHash === input.baseManifestHash ? null : "baseManifestHash",
+    input.state.overrideJson === input.overrideJson ? null : "overrideJson",
+    input.state.overrideJsonHash === input.overrideJsonHash ? null : "overrideJsonHash",
+    input.state.summaryOutput === input.summaryOutput ? null : "summaryOutput",
+    input.state.markdownOutput === input.markdownOutput ? null : "markdownOutput",
+  ].filter((item): item is string => item !== null);
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Cannot resume phase-B trial sweep runId=${input.runId}: checkpoint does not match current config (${mismatches.join(", ")}).`
+    );
+  }
+}
+
 function symbolToIdPrefix(symbol: string): string {
   return symbol.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "SYMBOL";
 }
@@ -721,7 +1007,9 @@ function round6(value: number): number {
   return Number(value.toFixed(6));
 }
 
-main().catch((error) => {
-  console.error("run_phaseb_trial_sweep failed:", error);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((error) => {
+    console.error("run_phaseb_trial_sweep failed:", error);
+    process.exit(1);
+  });
+}
