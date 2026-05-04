@@ -741,6 +741,96 @@ describe('run_validation_pipeline', () => {
     expect(validationResult.blocking_reasons.map((reason) => reason.code)).toContain('FDR_INPUTS_INCOMPLETE')
   }, 15_000)
 
+  it('accepts explicit complete trial-universe manifest without turning explanatory p-values into promotion evidence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-trial-universe-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialUniverseManifestPath = join(root, 'trial_universe.json')
+    await writeFile(trialUniverseManifestPath, JSON.stringify({
+      raw_m: 4,
+      effective_m: 3,
+      surviving_trial_count: 2,
+      failed_trial_count: 2,
+      raw_m_complete: true,
+      includes_failed_trials: true,
+    }), 'utf-8')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'trend',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--candidatesJson',
+      JSON.stringify([
+        { trendFastPeriod: 20, trendSlowPeriod: 50 },
+        { trendFastPeriod: 16, trendSlowPeriod: 80 },
+      ]),
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialUniverseManifestPath',
+      trialUniverseManifestPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      evidenceOsV4: {
+        failureCodes: string[]
+        artifactPaths: {
+          fdrReport: string
+          trialRecord: string
+        }
+      }
+    }
+    const fdrReport = JSON.parse(await readFile(report.evidenceOsV4.artifactPaths.fdrReport, 'utf-8')) as {
+      raw_m: number
+      effective_m: number
+      raw_m_complete: boolean
+      includes_failed_trials: boolean
+      status: string
+      promotion_allowed: boolean
+      p_value_is_promotion_grade: boolean
+      blocking_reasons: Array<{ code: string }>
+    }
+    const trialRecord = JSON.parse(await readFile(report.evidenceOsV4.artifactPaths.trialRecord, 'utf-8')) as {
+      promotion_eligible: boolean
+      metadata: Record<string, unknown>
+    }
+
+    expect(fdrReport).toMatchObject({
+      raw_m: 4,
+      effective_m: 3,
+      raw_m_complete: true,
+      includes_failed_trials: true,
+      status: 'ready_explanatory_only',
+      promotion_allowed: false,
+      p_value_is_promotion_grade: false,
+    })
+    expect(fdrReport.blocking_reasons).toEqual([])
+    expect(report.evidenceOsV4.failureCodes).toEqual(['PIT_PROXY_ONLY'])
+    expect(trialRecord.promotion_eligible).toBe(false)
+    expect(trialRecord.metadata).toMatchObject({
+      raw_m_complete: true,
+      includes_failed_trials: true,
+      fdr_p_value_is_promotion_grade: false,
+    })
+  }, 15_000)
+
   it('emits additive regime-gate and meta-label quantile A/B outputs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-'))
     const inputCsv = await writeSyntheticMarketCsv(root)

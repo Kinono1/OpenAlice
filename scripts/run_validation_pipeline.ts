@@ -182,6 +182,7 @@ interface CliArgs {
   evidenceOutputRoot: string
   trialRegistryPath: string | null
   promotionGradePitRowsPath: string | null
+  trialUniverseManifestPath: string | null
   selfCheck: boolean
 }
 
@@ -289,12 +290,10 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
 
   const candidateReturns = holdoutReports.map((report) => equityCurveToReturns(report.equityCurve))
   const selectedReturns = equityCurveToReturns(selectedEvaluation.equityCurve)
-  const trialLedger = buildTrialLedgerSummary({
-    rawM: reports.length,
-    effectiveM: reports.length,
-    survivingTrialCount: 1,
-    rawMComplete: false,
-    includesFailedTrials: false,
+  const trialUniverseManifest = await readTrialUniverseManifest(args.trialUniverseManifestPath)
+  const trialLedger = buildTrialLedgerSummaryFromManifest({
+    manifest: trialUniverseManifest,
+    candidateCount: reports.length,
   })
   const significance = evaluateSignificanceGateForReport({
     candidateReturns,
@@ -645,6 +644,7 @@ function parseArgs(argv: string[]): CliArgs {
     evidenceOutputRoot: raw.get('evidenceOutputRoot') ?? 'runtime/research',
     trialRegistryPath: raw.get('trialRegistryPath') ?? null,
     promotionGradePitRowsPath: raw.get('promotionGradePitRowsPath') ?? null,
+    trialUniverseManifestPath: raw.get('trialUniverseManifestPath') ?? null,
     selfCheck: parseBoolArg(raw.get('selfCheck'), false),
   }
 }
@@ -678,6 +678,58 @@ async function readPromotionGradePitRows(
       : null
   if (!rows) throw new Error('promotionGradePitRowsPath must contain an array or an object with rows[]')
   return rows.map((row, rowIndex) => promotionGradePitAuditRowFromJson(row, rowIndex))
+}
+
+async function readTrialUniverseManifest(
+  path: string | null,
+): Promise<TrialUniverseManifestInput | null> {
+  if (!path) return null
+  const raw = JSON.parse(await readFile(resolve(path), 'utf-8')) as unknown
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('trialUniverseManifestPath must contain an object')
+  }
+  const manifest = raw as Record<string, unknown>
+  const effectiveM = manifest.effectiveM ?? manifest.effective_m
+  return {
+    rawM: numberOrThrow(manifest.rawM ?? manifest.raw_m, 'rawM'),
+    effectiveM: effectiveM == null ? null : numberOrThrow(effectiveM, 'effectiveM'),
+    survivingTrialCount: numberOrThrow(manifest.survivingTrialCount ?? manifest.surviving_trial_count, 'survivingTrialCount'),
+    failedTrialCount: numberOrThrow(manifest.failedTrialCount ?? manifest.failed_trial_count, 'failedTrialCount'),
+    rawMComplete: booleanOrThrow(manifest.rawMComplete ?? manifest.raw_m_complete, 'rawMComplete'),
+    includesFailedTrials: booleanOrThrow(manifest.includesFailedTrials ?? manifest.includes_failed_trials, 'includesFailedTrials'),
+  }
+}
+
+function buildTrialLedgerSummaryFromManifest(input: {
+  manifest: TrialUniverseManifestInput | null
+  candidateCount: number
+}): ReturnType<typeof buildTrialLedgerSummary> {
+  if (!input.manifest) {
+    return buildTrialLedgerSummary({
+      rawM: input.candidateCount,
+      effectiveM: input.candidateCount,
+      survivingTrialCount: 1,
+      rawMComplete: false,
+      includesFailedTrials: false,
+    })
+  }
+  const { manifest } = input
+  const countsAreConsistent =
+    Number.isInteger(manifest.rawM) &&
+    Number.isInteger(manifest.survivingTrialCount) &&
+    Number.isInteger(manifest.failedTrialCount) &&
+    manifest.rawM >= 0 &&
+    manifest.survivingTrialCount >= 0 &&
+    manifest.failedTrialCount >= 0 &&
+    manifest.rawM === manifest.survivingTrialCount + manifest.failedTrialCount &&
+    manifest.survivingTrialCount === input.candidateCount
+  return buildTrialLedgerSummary({
+    rawM: countsAreConsistent ? manifest.rawM : Math.max(input.candidateCount, manifest.rawM),
+    effectiveM: manifest.effectiveM ?? (countsAreConsistent ? manifest.rawM : input.candidateCount),
+    survivingTrialCount: countsAreConsistent ? manifest.survivingTrialCount : input.candidateCount,
+    rawMComplete: countsAreConsistent && manifest.rawMComplete,
+    includesFailedTrials: countsAreConsistent && manifest.includesFailedTrials,
+  })
 }
 
 function promotionGradePitAuditRowFromJson(value: unknown, rowIndex: number): PromotionGradePitAuditRow {
@@ -757,6 +809,15 @@ interface CompleteTrialUniverseMarkerAppendResult {
   appended: boolean
   reason: string
   trialId: string | null
+}
+
+interface TrialUniverseManifestInput {
+  rawM: number
+  effectiveM?: number | null
+  survivingTrialCount: number
+  failedTrialCount: number
+  rawMComplete: boolean
+  includesFailedTrials: boolean
 }
 
 type EvidenceOsFailureCode = 'FDR_INPUTS_INCOMPLETE' | 'PIT_AUDIT_NOT_IMPLEMENTED' | 'PIT_PROXY_ONLY' | 'PIT_VIOLATION'
@@ -3736,6 +3797,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function numberOrThrow(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`)
+  }
+  return value
+}
+
+function booleanOrThrow(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${label} must be a boolean`)
+  }
+  return value
 }
 
 function stringOrNull(value: unknown): string | null {
