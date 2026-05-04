@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  getSkippedRequiredLiveChecks,
   isReleaseGateStatusBlocking,
   normalizeReleaseGateStatus,
   writeReleaseGateStatus,
@@ -57,6 +58,106 @@ describe('release_gate_status', () => {
       blocking: true,
       reason: 'live_release_gate_failed:execution_quality',
     })
+  })
+
+  it('normalizes and persists allowTinyCapLiveTrading as an explicit boolean', async () => {
+    const normalized = normalizeReleaseGateStatus({
+      version: 1,
+      generatedAt: '2026-03-27T00:00:00.000Z',
+      allowPaperTrading: true,
+      allowLiveTrading: false,
+      allowTinyCapLiveTrading: true,
+      failedChecks: [],
+      warningChecks: [],
+    })
+
+    expect(normalized.allowTinyCapLiveTrading).toBe(true)
+    expect(() =>
+      normalizeReleaseGateStatus({
+        ...normalized,
+        allowTinyCapLiveTrading: 'true',
+      }),
+    ).toThrow('Malformed release gate status.')
+
+    const dir = await mkdtemp(join(tmpdir(), 'release-gate-status-'))
+    tempDirs.push(dir)
+    const filePath = join(dir, 'release_gate_status.json')
+
+    await writeReleaseGateStatus(
+      {
+        checks: [],
+        failedChecks: [],
+        warningChecks: [],
+        hardFail: false,
+        allowPaperTrading: true,
+        allowLiveTrading: false,
+      },
+      {
+        filePath,
+        allowTinyCapLiveTrading: true,
+      },
+    )
+
+    const persisted = normalizeReleaseGateStatus(JSON.parse(await readFile(filePath, 'utf-8')))
+    expect(persisted.allowTinyCapLiveTrading).toBe(true)
+    const manifest = JSON.parse(await readFile(`${filePath}.manifest.json`, 'utf-8'))
+    expect(manifest).toMatchObject({
+      job: 'release_gate_status',
+      artifactPath: filePath,
+      exitCode: 0,
+      businessStatus: 'pass',
+    })
+    expect(typeof manifest.artifactHash).toBe('string')
+  })
+
+  it('blocks expired gate status before evaluating tiny-cap live allowance', () => {
+    const result = isReleaseGateStatusBlocking(
+      makeStatus({
+        allowPaperTrading: true,
+        allowLiveTrading: false,
+        allowTinyCapLiveTrading: true,
+        failedChecks: [],
+        expiresAt: '2026-03-27T00:00:00.000Z',
+      }),
+      'live',
+      new Date('2026-03-28T00:00:00.000Z'),
+    )
+
+    expect(result).toEqual({
+      blocking: true,
+      reason: 'release_gate_status_expired:2026-03-27T00:00:00.000Z',
+    })
+  })
+
+  it('returns skipped required live checks from diagnostics when present', () => {
+    const skipped = getSkippedRequiredLiveChecks(
+      makeStatus({
+        allowPaperTrading: true,
+        allowLiveTrading: false,
+        checks: [
+          {
+            name: 'execution_quality',
+            status: 'skipped',
+            summary: 'Execution quality gate not provided; skipping gate.',
+            metrics: {},
+          },
+          {
+            name: 'ramp_up',
+            status: 'warn',
+            summary: 'Ramp-up sample is still insufficient.',
+            metrics: {},
+          },
+          {
+            name: 'regime_shift',
+            status: 'skipped',
+            summary: 'Regime-shift gate not provided; skipping gate.',
+            metrics: {},
+          },
+        ],
+      }),
+    )
+
+    expect(skipped).toEqual(['execution_quality', 'regime_shift'])
   })
 
   it('persists and reloads optional diagnostics fields', async () => {

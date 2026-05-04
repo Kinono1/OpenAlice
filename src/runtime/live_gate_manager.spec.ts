@@ -2,19 +2,34 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { IMarketDataProvider, MarketData } from "../extension/analysis-kit/data/interfaces.js";
+import type { KlineStore } from "../extension/analysis-kit/kline/KlineStore.js";
 import { RampUpStore } from "../deployment/ramp_up_store.js";
 import { ExecutionQualityStore } from "../live/execution_quality_store.js";
 import type {
+  CryptoAccountInfo,
+  CryptoFundingRate,
+  CryptoOrder,
+  CryptoOrderBook,
   CryptoOrderResult,
   CryptoPlaceOrderRequest,
+  CryptoTicker,
   ICryptoTradingEngine,
-} from "../extension/crypto-trading/interfaces.js";
+} from "../domain/trading/operation-dispatcher.types.js";
 import { RiskBreakerStore } from "./risk_breaker_state.js";
 import {
   LiveGateManager,
   type LiveGateManagerOptions,
   type LiveGateManagerOptionsConfig,
 } from "./live_gate_manager.js";
+import type { RegimeShiftResult } from "./regime_shift.js";
+import {
+  PROMOTION_V2_SCHEMA_VERSION,
+  buildPromotionReadinessV2,
+  makeGateResult,
+  type PromotionReadinessV2,
+  type SchemaMeta,
+} from "./promotion_v2.js";
 
 describe("live_gate_manager", () => {
   it("beforePlaceOrder blocks new opens when manual override pauses them", async () => {
@@ -91,6 +106,86 @@ describe("live_gate_manager", () => {
     });
     expect(breakerBlocked?.approved).toBe(false);
     expect(String(breakerBlocked?.reason)).toContain("execution_drift");
+  });
+
+  it("beforePlaceOrder blocks live new opens when required promotion v2 readiness is missing", async () => {
+    const harness = await createHarness({
+      releaseGateStatus: {
+        version: 1,
+        generatedAt: "2026-03-27T00:00:00.000Z",
+        allowPaperTrading: true,
+        allowLiveTrading: true,
+        failedChecks: [],
+        warningChecks: [],
+      },
+      config: {
+        requirePromotionV2ForLiveOrders: true,
+        validatePromotionV2Artifacts: false,
+        regimeShift: { enabled: false },
+      },
+    });
+
+    const blocked = await harness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+    });
+
+    expect(blocked?.approved).toBe(false);
+    expect(String(blocked?.reason)).toContain("Promotion v2 readiness missing");
+  });
+
+  it("beforePlaceOrder requires tiny-cap promotion v2 readiness for live new opens", async () => {
+    const paperOnlyHarness = await createHarness({
+      releaseGateStatus: {
+        version: 1,
+        generatedAt: "2026-03-27T00:00:00.000Z",
+        allowPaperTrading: true,
+        allowLiveTrading: true,
+        failedChecks: [],
+        warningChecks: [],
+      },
+      promotionReadinessV2: createPromotionReadiness({ liveReady: false }),
+      config: {
+        requirePromotionV2ForLiveOrders: true,
+        validatePromotionV2Artifacts: false,
+        regimeShift: { enabled: false },
+      },
+    });
+
+    const paperOnlyBlocked = await paperOnlyHarness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+    });
+    expect(paperOnlyBlocked?.approved).toBe(false);
+    expect(String(paperOnlyBlocked?.reason)).toContain(
+      "promotion_v2_blocks_live_orders:paper_allowed",
+    );
+
+    const tinyCapHarness = await createHarness({
+      releaseGateStatus: {
+        version: 1,
+        generatedAt: "2026-03-27T00:00:00.000Z",
+        allowPaperTrading: true,
+        allowLiveTrading: true,
+        failedChecks: [],
+        warningChecks: [],
+      },
+      promotionReadinessV2: createPromotionReadiness({ liveReady: true }),
+      config: {
+        requirePromotionV2ForLiveOrders: true,
+        validatePromotionV2Artifacts: false,
+        regimeShift: { enabled: false },
+      },
+    });
+
+    const allowed = await tinyCapHarness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+    });
+    expect(allowed).toBeUndefined();
   });
 
   it("buildRiskContext respects manual override forced values", async () => {
@@ -273,7 +368,8 @@ describe("live_gate_manager", () => {
         generatedAt: "2026-03-27T00:00:00.000Z",
         allowPaperTrading: true,
         allowLiveTrading: false,
-        failedChecks: ["significance"],
+        allowTinyCapLiveTrading: true,
+        failedChecks: [],
         warningChecks: [],
       },
       config: {
@@ -304,15 +400,36 @@ describe("live_gate_manager", () => {
     expect(allowed).toBeUndefined();
   });
 
-  it("buildRuntimePlanningState exposes tiny-cap-only deployment mode", async () => {
+  it("does not allow tiny-cap deployment when required live checks were skipped", async () => {
     const harness = await createHarness({
       releaseGateStatus: {
         version: 1,
         generatedAt: "2026-03-27T00:00:00.000Z",
         allowPaperTrading: true,
         allowLiveTrading: false,
-        failedChecks: ["significance"],
+        allowTinyCapLiveTrading: true,
+        failedChecks: [],
         warningChecks: [],
+        checks: [
+          {
+            name: "execution_quality",
+            status: "skipped",
+            summary: "Execution quality gate not provided; skipping gate.",
+            metrics: {},
+          },
+          {
+            name: "ramp_up",
+            status: "skipped",
+            summary: "Ramp-up status not provided; skipping gate.",
+            metrics: {},
+          },
+          {
+            name: "regime_shift",
+            status: "skipped",
+            summary: "Regime-shift gate not provided; skipping gate.",
+            metrics: {},
+          },
+        ],
       },
       config: {
         regimeShift: { enabled: false },
@@ -324,12 +441,57 @@ describe("live_gate_manager", () => {
       },
     });
 
+    const blocked = await harness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+      usd_size: 75,
+    });
+    expect(blocked?.approved).toBe(false);
+    expect(String(blocked?.reason)).toContain("Release gate");
+
     const state = await harness.manager.buildRuntimePlanningState();
-    expect(state.liveDeploymentMode).toBe("tiny_cap_only");
-    expect(state.liveDeploymentReason).toBe("paper_ready_live_tiny_cap_only");
-    expect(state.tinyCapitalMaxUsd).toBe(125);
-    expect(state.tinyCapitalMaxEquityFraction).toBe(0.025);
-    expect(state.releaseGateBlocked).toBe(true);
+    expect(state.liveDeploymentMode).toBe("not_ready");
+    expect(String(state.liveDeploymentReason)).toContain("required_checks_skipped");
+    expect(state.releaseGateAllowsPaperTrading).toBe(true);
+    expect(state.releaseGateAllowsLiveTrading).toBe(false);
+  });
+
+  it("does not allow tiny-cap deployment when the release gate status is expired", async () => {
+    const harness = await createHarness({
+      releaseGateStatus: {
+        version: 1,
+        generatedAt: "2026-03-27T00:00:00.000Z",
+        expiresAt: "2026-03-27T00:00:00.000Z",
+        allowPaperTrading: true,
+        allowLiveTrading: false,
+        allowTinyCapLiveTrading: true,
+        failedChecks: [],
+        warningChecks: [],
+      },
+      config: {
+        releaseGateStatusCacheTtlMs: 0,
+        regimeShift: { enabled: false },
+        deploymentRamp: {
+          enabled: true,
+          tinyCapitalMaxUsd: 125,
+          tinyCapitalMaxEquityFraction: 0.025,
+        },
+      },
+    });
+
+    const blocked = await harness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+      usd_size: 75,
+    });
+    expect(blocked?.approved).toBe(false);
+    expect(String(blocked?.reason)).toContain("release_gate_status_expired");
+
+    const state = await harness.manager.buildRuntimePlanningState();
+    expect(state.liveDeploymentMode).toBe("not_ready");
+    expect(String(state.liveDeploymentReason)).toContain("release_gate_status_expired");
   });
 
   it("buildRuntimePlanningState exposes normal-cap mode when live release gate passes", async () => {
@@ -462,8 +624,7 @@ describe("live_gate_manager", () => {
       100
     );
 
-    (harness.manager as unknown as { currentDate: string }).currentDate =
-      "2026-03-27";
+    setManagerCurrentDate(harness.manager, "2026-03-27");
 
     await harness.manager.tick(new Date("2026-03-28T00:00:00.000Z"));
 
@@ -488,19 +649,23 @@ describe("live_gate_manager", () => {
   });
 });
 
-async function createHarness(opts?: {
+interface HarnessOptions {
   engine?: ICryptoTradingEngine;
   manualOverride?: Record<string, unknown>;
   releaseGateStatus?: Record<string, unknown>;
   config?: LiveGateManagerOptionsConfig;
-  marketDataRange?: Array<{ close: number }>;
+  promotionReadinessV2?: PromotionReadinessV2;
+  marketDataRange?: MarketData[];
   initialRampStageLabel?: string;
-  regimeShiftCacheResult?: Record<string, unknown>;
+  regimeShiftCacheResult?: RegimeShiftResult;
   availableSymbols?: string[];
-}) {
+}
+
+async function createHarness(opts?: HarnessOptions) {
   const tempDir = await mkdtemp(join(tmpdir(), "live-gate-manager-"));
   const manualOverridePath = join(tempDir, "manual_override.json");
   const releaseGateStatusPath = join(tempDir, "release_gate_status.json");
+  const promotionReadinessV2Path = join(tempDir, "strategy_promotion.latest.json");
 
   if (opts?.manualOverride) {
     await writeFile(
@@ -513,6 +678,13 @@ async function createHarness(opts?: {
     await writeFile(
       releaseGateStatusPath,
       `${JSON.stringify(opts.releaseGateStatus, null, 2)}\n`,
+      "utf-8"
+    );
+  }
+  if (opts?.promotionReadinessV2) {
+    await writeFile(
+      promotionReadinessV2Path,
+      `${JSON.stringify(opts.promotionReadinessV2, null, 2)}\n`,
       "utf-8"
     );
   }
@@ -530,13 +702,13 @@ async function createHarness(opts?: {
 
   const engine = opts?.engine ?? createMockEngine();
   const playhead = new Date("2026-03-28T00:00:00.000Z");
-  const klineStore = {
-    marketDataProvider: {
-      getMarketData: vi.fn().mockResolvedValue({ close: 95 }),
-      getMarketDataRange: vi
-        .fn()
-        .mockResolvedValue(opts?.marketDataRange ?? []),
-    },
+  const marketDataProvider: IMarketDataProvider = {
+    getMarketData: vi.fn().mockResolvedValue(buildMarketData(95, playhead, "BTC/USD")),
+    getMarketDataRange: vi.fn().mockResolvedValue(opts?.marketDataRange ?? []),
+    getAvailableSymbols: vi.fn(() => opts?.availableSymbols ?? ["BTC/USD"]),
+  };
+  const klineStore: KlineStore = {
+    marketDataProvider,
     getPlayheadTime: vi.fn(() => playhead),
     calculatePreviousTime: vi.fn((bars: number) => {
       return new Date(playhead.getTime() - bars * 60 * 60 * 1000);
@@ -546,11 +718,12 @@ async function createHarness(opts?: {
 
   const config: LiveGateManagerOptionsConfig = {
     releaseGateStatusPath,
-    ...(opts?.config ?? {}),
+    promotionReadinessV2Path,
     regimeShift: {
       enabled: false,
       ...(opts?.config?.regimeShift ?? {}),
     },
+    ...opts?.config,
   };
 
   const Ctor = LiveGateManager as unknown as new (
@@ -573,12 +746,7 @@ async function createHarness(opts?: {
     riskBreakerStore
   );
   if (opts?.regimeShiftCacheResult) {
-    (manager as unknown as {
-      regimeShiftCache: { atMs: number; result: Record<string, unknown> };
-    }).regimeShiftCache = {
-      atMs: Date.now(),
-      result: opts.regimeShiftCacheResult,
-    };
+    setManagerRegimeShiftCache(manager, opts.regimeShiftCacheResult);
   }
 
   return {
@@ -607,7 +775,7 @@ function createManagerOptions(input: {
   };
 }
 
-function buildRegimeBars(opts: { shock: "watch" | "high" }): Array<{ close: number }> {
+function buildRegimeBars(opts: { shock: "watch" | "high" }): MarketData[] {
   const baselineBars = 24 * 90 + 24 + 2;
   const closes: number[] = [];
   let price = 100;
@@ -621,7 +789,25 @@ function buildRegimeBars(opts: { shock: "watch" | "high" }): Array<{ close: numb
     }
     closes.push(price);
   }
-  return closes.map(close => ({ close }));
+  return closes.map((close, index) =>
+    buildMarketData(
+      close,
+      new Date(Date.parse("2026-03-01T00:00:00.000Z") + index * 60 * 60 * 1000),
+      "BTC/USD"
+    )
+  );
+}
+
+function buildMarketData(close: number, time: Date, symbol: string): MarketData {
+  return {
+    symbol,
+    time: time.getTime(),
+    open: close,
+    high: close,
+    low: close,
+    close,
+    volume: 1,
+  };
 }
 
 function createMockEngine(
@@ -633,9 +819,9 @@ function createMockEngine(
       orderId: "ord-001",
       filledPrice: 95_000,
       filledSize: 0.1,
-    }),
+    } satisfies CryptoOrderResult),
     getPositions: vi.fn().mockResolvedValue([]),
-    getOrders: vi.fn().mockResolvedValue([]),
+    getOrders: vi.fn().mockResolvedValue([] as CryptoOrder[]),
     getAccount: vi.fn().mockResolvedValue({
       balance: 10_000,
       totalMargin: 0,
@@ -643,7 +829,7 @@ function createMockEngine(
       equity: 10_000,
       realizedPnL: 0,
       totalPnL: 0,
-    }),
+    } satisfies CryptoAccountInfo),
     cancelOrder: vi.fn().mockResolvedValue(true),
     adjustLeverage: vi.fn().mockResolvedValue({ success: true }),
     getTicker: vi.fn().mockResolvedValue({
@@ -655,18 +841,99 @@ function createMockEngine(
       low: 94_000,
       volume: 1_000,
       timestamp: new Date(),
-    }),
+    } satisfies CryptoTicker),
     getFundingRate: vi.fn().mockResolvedValue({
       symbol: "BTC/USD",
       fundingRate: 0.0001,
       timestamp: new Date(),
-    }),
+    } satisfies CryptoFundingRate),
     getOrderBook: vi.fn().mockResolvedValue({
       symbol: "BTC/USD",
       bids: [],
       asks: [],
       timestamp: new Date(),
-    }),
+    } satisfies CryptoOrderBook),
     ...overrides,
+  };
+}
+
+function createPromotionReadiness(input: { liveReady: boolean }): PromotionReadinessV2 {
+  const generatedAt = "2026-03-28T00:00:00.000Z";
+  const expiresAt = "2099-03-28T01:00:00.000Z";
+  const schemaMeta: SchemaMeta = {
+    schemaName: "strategy_promotion",
+    schemaVersion: PROMOTION_V2_SCHEMA_VERSION,
+    createdBy: "vitest",
+    createdAt: generatedAt,
+    codeCommit: "test",
+  };
+
+  return buildPromotionReadinessV2({
+    schemaMeta,
+    strategyId: "cross-sectional-v2",
+    experimentId: "experiment-1",
+    generatedAt,
+    globalReleaseGate: makeGateResult({ gateName: "global_release", expiresAt }),
+    researchGate: makeGateResult({ gateName: "research", expiresAt }),
+    monetizationGate: makeGateResult({ gateName: "monetization", expiresAt }),
+    paperGate: makeGateResult({ gateName: "paper", expiresAt }),
+    liveGate: input.liveReady
+      ? makeGateResult({ gateName: "live", expiresAt })
+      : makeGateResult({
+          gateName: "live",
+          hardBlocks: ["tiny_cap_not_reviewed"],
+          expiresAt,
+        }),
+    monetization: {
+      netExpectancyBpsPerTrade: 30,
+      netExpectancyUsdPerTrade: 3,
+      netExpectancyUsdPerDay: 6,
+      netExpectancyUsdPerMonth: 180,
+      validSignalsPerMonth: 30,
+      executableCapacityUsd: 5_000,
+      turnoverPerDay: 0.2,
+      routeAdjustedBreakEvenBps: 14,
+      benchmarkExcessReturnBps: 18,
+    },
+    execution: {
+      recentOrderCount: 20,
+      slippageViolationCount: 0,
+      actualToSimulatedCostRatio: 1.1,
+      missedFillRate: 0.2,
+      decayCircuitBreakerTriggered: false,
+    },
+    dataFreshness: {
+      latestDecisionStatus: "fresh",
+      staleBlockCount: 0,
+      maxDataLatencyMinutes: 3,
+    },
+    evidence: {
+      supportingEvidenceIds: ["evidence-1"],
+      blockingEvidenceIds: [],
+      missingRequiredEvidence: [],
+    },
+    now: new Date(generatedAt),
+  });
+}
+
+function setManagerCurrentDate(manager: LiveGateManager, currentDate: string): void {
+  (
+    manager as unknown as {
+      currentDate: string;
+    }
+  ).currentDate = currentDate;
+}
+
+function setManagerRegimeShiftCache(
+  manager: LiveGateManager,
+  result: RegimeShiftResult
+): void {
+  (
+    manager as unknown as {
+      regimeShiftCache: { atMs: number; result: RegimeShiftResult | null };
+    }
+  ).regimeShiftCache = {
+    atMs: Date.now(),
+    result,
   };
 }

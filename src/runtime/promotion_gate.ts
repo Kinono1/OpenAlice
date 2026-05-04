@@ -2,6 +2,11 @@ import {
   isReleaseGateStatusBlocking,
   type PersistedReleaseGateStatus,
 } from "./release_gate_status.js";
+import {
+  resolveSourceEligibility,
+  type SourceEligibility,
+  type SourceEligibilityLike,
+} from "./source_eligibility.js";
 
 export interface PromotionGateCandidateFailureDiagnostics {
   strategyId: string;
@@ -24,6 +29,17 @@ export interface PromotionGateArchiveReleaseGateDiagnostics {
   warningChecks: string[];
 }
 
+export interface PromotionGateSourceEligibilityDiagnostics {
+  symbol: string | null;
+  strategyId: string;
+  promotionEligible: boolean;
+  runtimeMode: string;
+  sourceLineage: string;
+  donorNative: boolean;
+  admissionIntent: string;
+  eligibilityBlockers: string[];
+}
+
 export interface PromotionGateDiagnostics {
   verdictResult: string | null;
   verdictReasonCodes: string[];
@@ -32,6 +48,7 @@ export interface PromotionGateDiagnostics {
   portfolioCandidateFailures: PromotionGateCandidateFailureDiagnostics[];
   symbolDiagnostics: PromotionGateSymbolDiagnostics[];
   releaseGate: PromotionGateArchiveReleaseGateDiagnostics;
+  sourceEligibility: PromotionGateSourceEligibilityDiagnostics[];
 }
 
 export interface PromotionGateVerdict {
@@ -60,6 +77,12 @@ interface ValidationRunsChampion {
   strategy?: string;
   strategyFamily?: string;
   strategyName?: string;
+  sourceEligibility?: SourceEligibilityLike["sourceEligibility"];
+  sourceValidity?: SourceEligibilityLike["sourceValidity"];
+  donorNative?: unknown;
+  promotionEligible?: unknown;
+  admissionIntent?: unknown;
+  eligibilityBlockers?: unknown;
 }
 
 interface ValidationRunsChampionSetEntry {
@@ -68,12 +91,24 @@ interface ValidationRunsChampionSetEntry {
   strategy?: string;
   strategyFamily?: string;
   strategyName?: string;
+  sourceEligibility?: SourceEligibilityLike["sourceEligibility"];
+  sourceValidity?: SourceEligibilityLike["sourceValidity"];
+  donorNative?: unknown;
+  promotionEligible?: unknown;
+  admissionIntent?: unknown;
+  eligibilityBlockers?: unknown;
 }
 
 interface ValidationRunsCandidate {
   strategyId?: string;
   strategy?: string;
   strategyName?: string;
+  sourceEligibility?: SourceEligibilityLike["sourceEligibility"];
+  sourceValidity?: SourceEligibilityLike["sourceValidity"];
+  donorNative?: unknown;
+  promotionEligible?: unknown;
+  admissionIntent?: unknown;
+  eligibilityBlockers?: unknown;
 }
 
 export interface ValidationRunsChampionAssignment {
@@ -81,6 +116,7 @@ export interface ValidationRunsChampionAssignment {
   strategyId: string;
   strategyFamily: string;
   strategyName?: string;
+  sourceEligibility: SourceEligibility;
 }
 
 export interface ValidationRunsSummary {
@@ -95,8 +131,11 @@ const DEFAULT_SUPPORTED_STRATEGY_FAMILIES = [
   "trend",
   "regimeTrend",
   "meanReversion",
+  "factorMeanReversion",
+  "shockFade",
   "breakout",
   "ensemble",
+  "carry",
 ] as const;
 
 export function evaluatePromotionGate(
@@ -130,6 +169,13 @@ export function evaluatePromotionGate(
     )) {
       if (!supportedFamilies.includes(family)) {
         blockingReasons.push(`promotion_strategy_family_unsupported:${family}`);
+      }
+    }
+    for (const assignment of validationRuns.championAssignments) {
+      if (!assignment.sourceEligibility.promotionEligible) {
+        blockingReasons.push(
+          `promotion_source_eligibility_blocked:${assignment.strategyId}`,
+        );
       }
     }
   }
@@ -183,6 +229,18 @@ export function evaluatePromotionGate(
       portfolioCandidateFailures: extractCandidateFailures(input.experimentVerdict),
       symbolDiagnostics: extractSymbolDiagnostics(input.experimentVerdict),
       releaseGate: archiveReleaseGate,
+      sourceEligibility: validationRuns.championAssignments.map((assignment) => ({
+        symbol: assignment.symbol,
+        strategyId: assignment.strategyId,
+        promotionEligible: assignment.sourceEligibility.promotionEligible,
+        runtimeMode: assignment.sourceEligibility.sourceValidity.runtimeMode,
+        sourceLineage: assignment.sourceEligibility.sourceValidity.sourceLineage,
+        donorNative: assignment.sourceEligibility.donorNative,
+        admissionIntent: assignment.sourceEligibility.admissionIntent,
+        eligibilityBlockers: [
+          ...assignment.sourceEligibility.eligibilityBlockers,
+        ],
+      })),
     },
   };
 }
@@ -291,7 +349,11 @@ export function summarizeValidationRuns(
 
 function buildChampionAssignments(
   normalized: ReturnType<typeof normalizeValidationRuns>,
-  candidateFamiliesByStrategyId: Map<string, { family: string; strategyName?: string }>,
+  candidateFamiliesByStrategyId: Map<string, {
+    family: string;
+    strategyName?: string;
+    sourceEligibility: SourceEligibility;
+  }>,
   requestedSymbols: string[],
   reasons: string[],
 ): ValidationRunsChampionAssignment[] {
@@ -303,6 +365,7 @@ function buildChampionAssignments(
     strategyId: unknown,
     familyHint?: unknown,
     strategyNameHint?: unknown,
+    eligibilityHint?: SourceEligibilityLike,
   ): void => {
     if (typeof symbol !== "string" || !symbol.trim()) {
       reasons.push("validation_symbol_missing_or_invalid");
@@ -330,14 +393,28 @@ function buildChampionAssignments(
     }
 
     seenSymbols.add(normalizedSymbol);
+    const normalizedStrategyId = strategyId.trim();
+    const candidateInfo = candidateFamiliesByStrategyId.get(normalizedStrategyId);
     assignments.push({
       symbol: normalizedSymbol,
-      strategyId: strategyId.trim(),
+      strategyId: normalizedStrategyId,
       strategyFamily: family,
       strategyName:
         typeof strategyNameHint === "string" && strategyNameHint.trim()
           ? strategyNameHint.trim()
-          : candidateFamiliesByStrategyId.get(strategyId.trim())?.strategyName,
+          : candidateInfo?.strategyName,
+      sourceEligibility: resolveSourceEligibility(
+        eligibilityHint,
+        candidateInfo
+          ? {
+              sourceValidity: candidateInfo.sourceEligibility.sourceValidity,
+              donorNative: candidateInfo.sourceEligibility.donorNative,
+              promotionEligible: candidateInfo.sourceEligibility.promotionEligible,
+              admissionIntent: candidateInfo.sourceEligibility.admissionIntent,
+              eligibilityBlockers: candidateInfo.sourceEligibility.eligibilityBlockers,
+            }
+          : undefined,
+      ),
     });
   };
 
@@ -347,6 +424,7 @@ function buildChampionAssignments(
       entry.strategyId,
       entry.strategy ?? entry.strategyFamily,
       entry.strategyName,
+      entry,
     );
   }
 
@@ -360,6 +438,7 @@ function buildChampionAssignments(
       value?.strategyId,
       value?.strategy ?? value?.strategyFamily,
       value?.strategyName,
+      value,
     );
   }
 
@@ -397,6 +476,7 @@ function buildChampionAssignments(
       championStrategyId,
       normalized.champion?.strategy ?? normalized.champion?.strategyFamily,
       normalized.champion?.strategyName,
+      normalized.champion ?? undefined,
     );
   }
 
@@ -405,8 +485,8 @@ function buildChampionAssignments(
 
 function buildCandidateFamiliesByStrategyId(
   candidates: ValidationRunsCandidate[],
-): Map<string, { family: string; strategyName?: string }> {
-  const families = new Map<string, { family: string; strategyName?: string }>();
+): Map<string, { family: string; strategyName?: string; sourceEligibility: SourceEligibility }> {
+  const families = new Map<string, { family: string; strategyName?: string; sourceEligibility: SourceEligibility }>();
   for (const candidate of candidates) {
     if (
       typeof candidate.strategyId !== "string" ||
@@ -422,6 +502,7 @@ function buildCandidateFamiliesByStrategyId(
         typeof candidate.strategyName === "string" && candidate.strategyName.trim()
           ? candidate.strategyName.trim()
           : undefined,
+      sourceEligibility: resolveSourceEligibility(candidate),
     });
   }
   return families;
@@ -430,7 +511,11 @@ function buildCandidateFamiliesByStrategyId(
 function resolveStrategyFamily(
   strategyId: string,
   familyHint: unknown,
-  candidateFamiliesByStrategyId: Map<string, { family: string; strategyName?: string }>,
+  candidateFamiliesByStrategyId: Map<string, {
+    family: string;
+    strategyName?: string;
+    sourceEligibility: SourceEligibility;
+  }>,
 ): string | null {
   if (typeof familyHint === "string" && familyHint.trim()) {
     return familyHint.trim();

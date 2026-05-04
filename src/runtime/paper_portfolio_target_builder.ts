@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { NewsItem } from "../extension/analysis-kit/data/interfaces.js";
 import type { KlineStore } from "../extension/analysis-kit/kline/KlineStore.js";
-import type { ICryptoTradingEngine } from "../extension/crypto-trading/interfaces.js";
+import type { ICryptoTradingEngine } from "../domain/trading/operation-dispatcher.types.js";
 import {
   evaluateStrategy,
   type StrategyParams,

@@ -6,7 +6,7 @@ import type {
   CryptoAccountInfo,
   CryptoPosition,
   ICryptoTradingEngine,
-} from "../extension/crypto-trading/interfaces.js";
+} from "../domain/trading/operation-dispatcher.types.js";
 import {
   buildPaperExecutionPlan,
   type PaperExecutionPlan,
@@ -16,8 +16,16 @@ import {
   buildPortfolioTargetFromWeights,
   type PortfolioTarget,
 } from "../portfolio/target.js";
+import type { PromotionReadinessV2 } from "./promotion_v2.js";
+import {
+  DEFAULT_PROMOTION_READINESS_V2_PATH,
+  tryLoadPromotionReadinessV2,
+  tryLoadValidatedPromotionReadinessV2,
+  type PromotionReadinessV2LoadResult,
+  type PromotionReadinessV2ValidatedLoadResult,
+} from "./promotion_v2_artifacts.js";
 
-const supportedSources = ["tradingagents", "alphaswarm", "cryptotrade"] as const;
+const supportedSources = ["tradingagents", "alphaswarm", "cryptotrade", "currencypurchases"] as const;
 
 export const normalizedSidecarSignalSchema = z.object({
   signal_id: z.string().trim().min(1),
@@ -43,6 +51,10 @@ export interface SidecarSignalIntakeOptions {
   supportedSymbols?: string[];
   maxTurnoverPct?: number;
   artifactPath?: string;
+  promotionReadinessV2?: PromotionReadinessV2 | null;
+  promotionReadinessV2Path?: string;
+  requirePromotionV2?: boolean;
+  validatePromotionV2Artifacts?: boolean;
 }
 
 export interface SidecarSignalReadiness {
@@ -193,6 +205,7 @@ export async function runSidecarSignalPaperIntake(
     maxTurnoverPct: opts.maxTurnoverPct,
     now,
   });
+  const promotionV2Load = await resolvePromotionReadinessV2ForSidecar(opts);
   const paperGate = evaluatePaperGate({
     promotionGatePass: true,
     championRegistryState: "valid",
@@ -214,6 +227,8 @@ export async function runSidecarSignalPaperIntake(
     paperGateAllowsExecution: paperGate.allowPaperExecution,
     paperGateBlockingReasons: paperGate.blockingReasons,
     paperGateFlatOnlyReasons: paperGate.flatOnlyReasons,
+    promotionReadinessV2: promotionV2Load.readiness,
+    requirePromotionV2: opts.requirePromotionV2,
     championRegistryState: "valid",
     championSetComplete: true,
     portfolioTarget,
@@ -227,6 +242,7 @@ export async function runSidecarSignalPaperIntake(
     signal,
     paperGate,
     executionPlan,
+    promotionV2: promotionV2Load.artifactSummary,
     generatedAt: now.toISOString(),
   };
   await writeJsonArtifact(artifactPath, artifactPayload);
@@ -261,6 +277,63 @@ export async function runSidecarSignalPaperIntake(
     },
     paper_gate: paperGate,
     execution_plan_kind: executionPlan.kind,
+  };
+}
+
+async function resolvePromotionReadinessV2ForSidecar(
+  opts: SidecarSignalIntakeOptions,
+): Promise<{
+  readiness: PromotionReadinessV2 | null | undefined;
+  artifactSummary: {
+    required: boolean;
+    path: string | null;
+    loadStatus: "provided" | PromotionReadinessV2LoadResult["kind"] | PromotionReadinessV2ValidatedLoadResult["kind"] | "not_requested";
+    error: string | null;
+  };
+}> {
+  if (opts.promotionReadinessV2 !== undefined) {
+    return {
+      readiness: opts.promotionReadinessV2,
+      artifactSummary: {
+        required: opts.requirePromotionV2 === true,
+        path: null,
+        loadStatus: "provided",
+        error: null,
+      },
+    };
+  }
+
+  const shouldLoad = opts.requirePromotionV2 === true || Boolean(opts.promotionReadinessV2Path);
+  if (!shouldLoad) {
+    return {
+      readiness: undefined,
+      artifactSummary: {
+        required: false,
+        path: null,
+        loadStatus: "not_requested",
+        error: null,
+      },
+    };
+  }
+
+  const path = opts.promotionReadinessV2Path ?? DEFAULT_PROMOTION_READINESS_V2_PATH;
+  const validateArtifacts = opts.validatePromotionV2Artifacts ?? (opts.requirePromotionV2 === true);
+  const result = validateArtifacts
+    ? await tryLoadValidatedPromotionReadinessV2(dirname(path), { now: opts.now })
+    : await tryLoadPromotionReadinessV2(path);
+  return {
+    readiness:
+      result.kind === "loaded"
+        ? result.readiness
+        : result.kind === "invalid" && result.readiness
+          ? result.readiness
+          : null,
+    artifactSummary: {
+      required: opts.requirePromotionV2 === true,
+      path: result.path,
+      loadStatus: result.kind,
+      error: result.kind === "loaded" ? null : result.error,
+    },
   };
 }
 

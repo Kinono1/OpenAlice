@@ -2,11 +2,12 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { CryptoPosition } from "../extension/crypto-trading/interfaces.js";
+import type { CryptoPosition } from "../domain/trading/operation-dispatcher.types.js";
 import { buildPortfolioTargetFromWeights } from "../portfolio/target.js";
 import { buildPaperExecutionPlan } from "./paper_execution_plan.js";
 import {
   buildRuntimeStatusSnapshot,
+  buildRuntimeStatusSnapshotPaths,
   writeRuntimeStatusSnapshot,
 } from "./runtime_status_snapshot.js";
 
@@ -175,7 +176,10 @@ describe("runtime_status_snapshot", () => {
     const executionPlan = buildPaperExecutionPlan({
       promotionPass: true,
       paperGateAllowsPaperTrading: true,
+      paperGateMode: "active",
+      paperGateAllowsExecution: true,
       championRegistryState: "valid",
+      championSetComplete: true,
       regimeSeverity: "stable",
       portfolioTarget,
       currentPositions,
@@ -193,13 +197,18 @@ describe("runtime_status_snapshot", () => {
         blockingReasons: [],
       },
       executionPlan:
-        executionPlan.kind === "active"
-          ? {
-              ...executionPlan,
+        executionPlan.kind === "blocked"
+          ? executionPlan
+          : {
+              kind: executionPlan.kind,
+              flatReasons:
+                executionPlan.kind === "flat" ? executionPlan.flatReasons : undefined,
+              portfolioTarget: executionPlan.portfolioTarget,
+              rebalancePlan: executionPlan.rebalancePlan,
+              walletOperations: executionPlan.walletOperations,
               currentPositions,
               pricesBySymbol,
-            }
-          : executionPlan,
+            },
       planningState: {
         regimeSeverity: "stable",
         regimeReason: null,
@@ -300,12 +309,209 @@ describe("runtime_status_snapshot", () => {
     expect(snapshot.runtimeFaithfulSimulation.blockingReasons).toEqual([]);
   });
 
+  it("requires proof tracking to start before marking tiny-cap readiness as live-ready", () => {
+    const executionPlan = buildPaperExecutionPlan({
+      promotionPass: true,
+      paperGateAllowsPaperTrading: true,
+      paperGateMode: "active",
+      paperGateAllowsExecution: true,
+      championRegistryState: "valid",
+      championSetComplete: true,
+      regimeSeverity: "stable",
+      portfolioTarget,
+      currentPositions,
+      pricesBySymbol,
+    });
+
+    expect(executionPlan.kind).toBe("active");
+    const snapshot = buildRuntimeStatusSnapshot({
+      promotionGate: {
+        pass: true,
+        blockingReasons: [],
+      },
+      paperGate: {
+        allowPaperTrading: true,
+        blockingReasons: [],
+      },
+      executionPlan:
+        executionPlan.kind === "blocked"
+          ? executionPlan
+          : {
+              kind: executionPlan.kind,
+              flatReasons:
+                executionPlan.kind === "flat" ? executionPlan.flatReasons : undefined,
+              portfolioTarget: executionPlan.portfolioTarget,
+              rebalancePlan: executionPlan.rebalancePlan,
+              walletOperations: executionPlan.walletOperations,
+              currentPositions,
+              pricesBySymbol,
+            },
+      planningState: {
+        regimeSeverity: "stable",
+        regimeReason: null,
+        capitalRampStage: "5%",
+        releaseGateStatus: null,
+        releaseGateBlocked: false,
+        releaseGateBlockedReason: null,
+        releaseGateAllowsPaperTrading: true,
+        releaseGateAllowsLiveTrading: true,
+      },
+      releaseGateStatus: {
+        allowPaperTrading: true,
+        allowLiveTrading: true,
+        failedChecks: [],
+        warningChecks: [],
+      },
+    });
+
+    expect(snapshot.phaseReadiness.paper).toMatchObject({
+      status: "active_ready",
+      ready: true,
+      hasNonFlatTarget: true,
+    });
+    expect(snapshot.phaseReadiness.liveTinyCapital).toMatchObject({
+      status: "proof_start_ready",
+      proofStarted: false,
+      capitalMode: "tiny_cap_only",
+    });
+    expect(snapshot.phaseReadiness.proofTracking).toMatchObject({
+      status: "not_started",
+      readyToStart: true,
+      started: false,
+      elapsedDays: 0,
+      remainingDays: 90,
+    });
+  });
+
+  it("writes runtime status artifacts with sidecar evidence manifests", async () => {
+    const root = await mkdtemp(join(tmpdir(), "runtime-status-snapshot-manifest-"));
+    const snapshot = buildRuntimeStatusSnapshot({
+      promotionGate: {
+        pass: false,
+        blockingReasons: ["promotion_requires_go_verdict"],
+      },
+      paperGate: {
+        allowPaperTrading: false,
+        blockingReasons: ["paper_research_not_approved"],
+      },
+      executionPlan: {
+        kind: "blocked",
+        blockingReasons: ["release_gate_not_approved"],
+      },
+      now: new Date("2026-05-03T00:00:00.000Z"),
+    });
+
+    await writeRuntimeStatusSnapshot(snapshot, { baseDir: root });
+
+    const paths = buildRuntimeStatusSnapshotPaths(root);
+    for (const path of [
+      paths.paperPromotionStatus,
+      paths.paperGateStatus,
+      paths.paperExecutorStatus,
+      paths.runtimeFaithfulSimulation,
+      paths.phaseReadiness,
+    ]) {
+      const manifest = JSON.parse(await readFile(`${path}.manifest.json`, "utf-8"));
+      expect(manifest).toMatchObject({
+        artifactPath: path,
+        exitCode: 0,
+        evidenceTrust: expect.stringMatching(/^(pass|quarantine)$/),
+      });
+      expect(typeof manifest.artifactHash).toBe("string");
+    }
+  });
+
+  it("marks paper as flat-only and blocks proof start when the portfolio target is flat", () => {
+    const flatTarget = buildPortfolioTargetFromWeights({
+      basisEquityUsd: 1_000,
+      weights: {
+        "BTC/USD": 0,
+        "ETH/USD": 0,
+      },
+      maxTurnoverPct: 1,
+    });
+    const executionPlan = buildPaperExecutionPlan({
+      promotionPass: true,
+      paperGateAllowsPaperTrading: true,
+      paperGateMode: "active",
+      paperGateAllowsExecution: true,
+      championRegistryState: "valid",
+      championSetComplete: true,
+      regimeSeverity: "stable",
+      portfolioTarget: flatTarget,
+      currentPositions,
+      pricesBySymbol,
+    });
+
+    expect(executionPlan.kind).toBe("active");
+    const snapshot = buildRuntimeStatusSnapshot({
+      promotionGate: {
+        pass: true,
+        blockingReasons: [],
+      },
+      paperGate: {
+        allowPaperTrading: true,
+        blockingReasons: [],
+      },
+      executionPlan:
+        executionPlan.kind === "blocked"
+          ? executionPlan
+          : {
+              kind: executionPlan.kind,
+              flatReasons:
+                executionPlan.kind === "flat" ? executionPlan.flatReasons : undefined,
+              portfolioTarget: executionPlan.portfolioTarget,
+              rebalancePlan: executionPlan.rebalancePlan,
+              walletOperations: executionPlan.walletOperations,
+              currentPositions,
+              pricesBySymbol,
+            },
+      planningState: {
+        regimeSeverity: "stable",
+        regimeReason: null,
+        capitalRampStage: "5%",
+        releaseGateStatus: null,
+        releaseGateBlocked: false,
+        releaseGateBlockedReason: null,
+        releaseGateAllowsPaperTrading: true,
+        releaseGateAllowsLiveTrading: true,
+      },
+      releaseGateStatus: {
+        allowPaperTrading: true,
+        allowLiveTrading: true,
+        failedChecks: [],
+        warningChecks: [],
+      },
+    });
+
+    expect(snapshot.phaseReadiness.paper).toMatchObject({
+      status: "flat_only",
+      ready: false,
+      hasNonFlatTarget: false,
+    });
+    expect(snapshot.phaseReadiness.liveTinyCapital).toMatchObject({
+      status: "blocked",
+      ready: false,
+      readyToStartProof: false,
+      proofStarted: false,
+    });
+    expect(snapshot.phaseReadiness.proofTracking).toMatchObject({
+      status: "blocked",
+      readyToStart: false,
+      started: false,
+      blockingReasons: ["live_tiny_capital_not_ready"],
+    });
+  });
+
   it("writes all runtime snapshot files", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "runtime-status-snapshot-"));
     const executionPlan = buildPaperExecutionPlan({
       promotionPass: true,
       paperGateAllowsPaperTrading: true,
+      paperGateMode: "active",
+      paperGateAllowsExecution: true,
       championRegistryState: "valid",
+      championSetComplete: true,
       regimeSeverity: "stable",
       portfolioTarget,
       currentPositions,
@@ -315,38 +521,48 @@ describe("runtime_status_snapshot", () => {
       promotionGate: { pass: true, blockingReasons: [] },
       paperGate: { allowPaperTrading: true, blockingReasons: [] },
       executionPlan:
-        executionPlan.kind === "active"
-          ? {
-              ...executionPlan,
+        executionPlan.kind === "blocked"
+          ? executionPlan
+          : {
+              kind: executionPlan.kind,
+              flatReasons:
+                executionPlan.kind === "flat" ? executionPlan.flatReasons : undefined,
+              portfolioTarget: executionPlan.portfolioTarget,
+              rebalancePlan: executionPlan.rebalancePlan,
+              walletOperations: executionPlan.walletOperations,
               currentPositions,
               pricesBySymbol,
-            }
-          : executionPlan,
+            },
+      snapshotBaseDir: tempDir,
     });
 
     await writeRuntimeStatusSnapshot(snapshot, { baseDir: tempDir });
 
+    const snapshotPaths = buildRuntimeStatusSnapshotPaths(tempDir);
     const promotion = JSON.parse(
-      await readFile(join(tempDir, "paper_promotion_status.latest.json"), "utf-8"),
+      await readFile(snapshotPaths.paperPromotionStatus, "utf-8"),
     ) as { canPromote: boolean };
     const paperGate = JSON.parse(
-      await readFile(join(tempDir, "paper_gate_status.json"), "utf-8"),
+      await readFile(snapshotPaths.paperGateStatus, "utf-8"),
     ) as { finalAllowPaperTrading: boolean };
     const executor = JSON.parse(
-      await readFile(join(tempDir, "paper_executor_status.latest.json"), "utf-8"),
-    ) as { summary: { paperGate: string; walletOperationCount: number } };
+      await readFile(snapshotPaths.paperExecutorStatus, "utf-8"),
+    ) as {
+      paperGateStatusPath: string;
+      simulationOutput: string;
+      summary: { paperGate: string; walletOperationCount: number };
+    };
     const simulation = JSON.parse(
-      await readFile(
-        join(tempDir, "runtime_faithful_simulation.latest.json"),
-        "utf-8",
-      ),
+      await readFile(snapshotPaths.runtimeFaithfulSimulation, "utf-8"),
     ) as { summary: { skippedByPaperGate: boolean; targetSymbolCount: number } };
     const readiness = JSON.parse(
-      await readFile(join(tempDir, "phase_readiness.latest.json"), "utf-8"),
+      await readFile(snapshotPaths.phaseReadiness, "utf-8"),
     ) as { research: { status: string }; paper: { status: string } };
 
     expect(promotion.canPromote).toBe(true);
     expect(paperGate.finalAllowPaperTrading).toBe(true);
+    expect(executor.paperGateStatusPath).toBe(snapshotPaths.paperGateStatus);
+    expect(executor.simulationOutput).toBe(snapshotPaths.runtimeFaithfulSimulation);
     expect(executor.summary.paperGate).toBe("PASS");
     expect(executor.summary.walletOperationCount).toBe(3);
     expect(simulation.summary.skippedByPaperGate).toBe(false);

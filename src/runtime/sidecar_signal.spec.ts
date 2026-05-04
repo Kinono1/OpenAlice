@@ -1,19 +1,26 @@
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   CryptoAccountInfo,
-  CryptoFundingRate,
-  CryptoOrderBook,
-  CryptoOrderResult,
   CryptoPosition,
   CryptoTicker,
   ICryptoTradingEngine,
-} from "../extension/crypto-trading/interfaces.js";
+} from "../domain/trading/operation-dispatcher.types.js";
 import { createEventLog } from "../core/event-log.js";
 import {
   buildPortfolioTargetFromSidecarSignal,
   runSidecarSignalPaperIntake,
   validateNormalizedSidecarSignal,
 } from "./sidecar_signal.js";
+import {
+  PROMOTION_V2_SCHEMA_VERSION,
+  buildPromotionReadinessV2,
+  makeGateResult,
+  type PromotionReadinessV2,
+  type SchemaMeta,
+} from "./promotion_v2.js";
 
 class MockEngine implements ICryptoTradingEngine {
   constructor(
@@ -22,37 +29,45 @@ class MockEngine implements ICryptoTradingEngine {
     private readonly tickers: Record<string, CryptoTicker>,
   ) {}
 
-  async placeOrder(): Promise<CryptoOrderResult> {
+  placeOrder: ICryptoTradingEngine["placeOrder"] = async () => {
     throw new Error("not implemented");
-  }
-  async getPositions() {
+  };
+
+  getPositions: ICryptoTradingEngine["getPositions"] = async () => {
     return this.positions;
-  }
-  async getOrders() {
+  };
+
+  getOrders: ICryptoTradingEngine["getOrders"] = async () => {
     return [];
-  }
-  async getAccount() {
+  };
+
+  getAccount: ICryptoTradingEngine["getAccount"] = async () => {
     return this.account;
-  }
-  async cancelOrder() {
+  };
+
+  cancelOrder: ICryptoTradingEngine["cancelOrder"] = async () => {
     return true;
-  }
-  async adjustLeverage() {
+  };
+
+  adjustLeverage: ICryptoTradingEngine["adjustLeverage"] = async () => {
     return { success: true };
-  }
-  async getTicker(symbol: string) {
+  };
+
+  getTicker: ICryptoTradingEngine["getTicker"] = async (symbol: string) => {
     const ticker = this.tickers[symbol];
     if (!ticker) {
       throw new Error(`missing ticker for ${symbol}`);
     }
     return ticker;
-  }
-  async getFundingRate(symbol: string): Promise<CryptoFundingRate> {
+  };
+
+  getFundingRate: ICryptoTradingEngine["getFundingRate"] = async () => {
     throw new Error("not implemented");
-  }
-  async getOrderBook(symbol: string): Promise<CryptoOrderBook> {
+  };
+
+  getOrderBook: ICryptoTradingEngine["getOrderBook"] = async () => {
     throw new Error("not implemented");
-  }
+  };
 }
 
 const baseSignal = {
@@ -174,4 +189,152 @@ describe("sidecar signal runtime", () => {
     await log._resetForTest();
     await log.close();
   });
+
+  it("blocks paper intake when promotion v2 is required and the latest artifact is missing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sidecar-promotion-v2-missing-"));
+    const log = await createEventLog({
+      logPath: join(tempDir, "event-log.jsonl"),
+    });
+    const engine = createTickerEngine();
+
+    const result = await runSidecarSignalPaperIntake({
+      signal: baseSignal,
+      engine,
+      eventLog: log,
+      supportedSymbols: ["BTC/USDT"],
+      now: new Date("2026-04-02T12:00:30.000Z"),
+      artifactPath: join(tempDir, "sidecar_signal_intake.latest.json"),
+      promotionReadinessV2Path: join(tempDir, "missing_strategy_promotion.latest.json"),
+      requirePromotionV2: true,
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.paper_result).toBe("rejected");
+    expect(result.block_reason).toBe("promotion_v2_readiness_missing");
+    const artifact = JSON.parse(
+      await readFile(join(tempDir, "sidecar_signal_intake.latest.json"), "utf-8"),
+    ) as { promotionV2: { loadStatus: string } };
+    expect(artifact.promotionV2.loadStatus).toBe("missing");
+    await log._resetForTest();
+    await log.close();
+  });
+
+  it("loads promotion v2 readiness from disk before allowing paper intake", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sidecar-promotion-v2-loaded-"));
+    const readinessPath = join(tempDir, "strategy_promotion.latest.json");
+    await writeFile(
+      readinessPath,
+      `${JSON.stringify(createPromotionReadiness(), null, 2)}\n`,
+      "utf-8",
+    );
+    const log = await createEventLog({
+      logPath: join(tempDir, "event-log.jsonl"),
+    });
+    const engine = createTickerEngine();
+
+    const result = await runSidecarSignalPaperIntake({
+      signal: baseSignal,
+      engine,
+      eventLog: log,
+      supportedSymbols: ["BTC/USDT"],
+      now: new Date("2026-04-02T12:00:30.000Z"),
+      artifactPath: join(tempDir, "sidecar_signal_intake.latest.json"),
+      promotionReadinessV2Path: readinessPath,
+      requirePromotionV2: true,
+      validatePromotionV2Artifacts: false,
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.paper_result).toBe("executed");
+    expect(result.execution_plan_kind).toBe("active");
+    const artifact = JSON.parse(
+      await readFile(join(tempDir, "sidecar_signal_intake.latest.json"), "utf-8"),
+    ) as { promotionV2: { loadStatus: string } };
+    expect(artifact.promotionV2.loadStatus).toBe("loaded");
+    await log._resetForTest();
+    await log.close();
+  });
 });
+
+function createTickerEngine(): ICryptoTradingEngine {
+  return new MockEngine(
+    {
+      balance: 1_000,
+      totalMargin: 0,
+      unrealizedPnL: 0,
+      equity: 1_000,
+      realizedPnL: 0,
+      totalPnL: 0,
+    },
+    [],
+    {
+      "BTC/USDT": {
+        symbol: "BTC/USDT",
+        last: 100_000,
+        bid: 99_900,
+        ask: 100_100,
+        high: 101_000,
+        low: 99_000,
+        volume: 1,
+        timestamp: new Date("2026-04-02T12:00:00.000Z"),
+      },
+    },
+  );
+}
+
+function createPromotionReadiness(): PromotionReadinessV2 {
+  const generatedAt = "2026-04-02T12:00:00.000Z";
+  const expiresAt = "2026-04-02T13:00:00.000Z";
+  const schemaMeta: SchemaMeta = {
+    schemaName: "strategy_promotion",
+    schemaVersion: PROMOTION_V2_SCHEMA_VERSION,
+    createdBy: "vitest",
+    createdAt: generatedAt,
+    codeCommit: "test",
+  };
+
+  return buildPromotionReadinessV2({
+    schemaMeta,
+    strategyId: "cross-sectional-v2",
+    experimentId: "experiment-1",
+    generatedAt,
+    globalReleaseGate: makeGateResult({ gateName: "global_release", expiresAt }),
+    researchGate: makeGateResult({ gateName: "research", expiresAt }),
+    monetizationGate: makeGateResult({ gateName: "monetization", expiresAt }),
+    paperGate: makeGateResult({ gateName: "paper", expiresAt }),
+    liveGate: makeGateResult({
+      gateName: "live",
+      hardBlocks: ["tiny_cap_not_reviewed"],
+      expiresAt,
+    }),
+    monetization: {
+      netExpectancyBpsPerTrade: 30,
+      netExpectancyUsdPerTrade: 3,
+      netExpectancyUsdPerDay: 6,
+      netExpectancyUsdPerMonth: 180,
+      validSignalsPerMonth: 30,
+      executableCapacityUsd: 5_000,
+      turnoverPerDay: 0.2,
+      routeAdjustedBreakEvenBps: 14,
+      benchmarkExcessReturnBps: 18,
+    },
+    execution: {
+      recentOrderCount: 20,
+      slippageViolationCount: 0,
+      actualToSimulatedCostRatio: 1.1,
+      missedFillRate: 0.2,
+      decayCircuitBreakerTriggered: false,
+    },
+    dataFreshness: {
+      latestDecisionStatus: "fresh",
+      staleBlockCount: 0,
+      maxDataLatencyMinutes: 3,
+    },
+    evidence: {
+      supportingEvidenceIds: ["evidence-1"],
+      blockingEvidenceIds: [],
+      missingRequiredEvidence: [],
+    },
+    now: new Date(generatedAt),
+  });
+}

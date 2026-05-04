@@ -1,7 +1,7 @@
 import type {
   CryptoOrderResult,
   CryptoPlaceOrderRequest,
-} from "../extension/crypto-trading/interfaces.js";
+} from "../domain/trading/operation-dispatcher.types.js";
 import type { OrderExecutionRecord } from "../live/execution_quality.js";
 
 export function estimateRequestedNotionalUsd(

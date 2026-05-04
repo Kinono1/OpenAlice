@@ -1,4 +1,4 @@
-import type { CryptoPosition } from "../extension/crypto-trading/interfaces.js";
+import type { CryptoPosition } from "../domain/trading/operation-dispatcher.types.js";
 import type { PortfolioTarget } from "../portfolio/target.js";
 import {
   evaluateChampionRegistryCoverage,
@@ -15,6 +15,7 @@ import {
   type PromotionGateVerdict,
 } from "./promotion_gate.js";
 import type { PersistedReleaseGateStatus } from "./release_gate_status.js";
+import type { PromotionReadinessV2 } from "./promotion_v2.js";
 import {
   buildRuntimeStatusSnapshot,
   type RuntimeProofTrackingInput,
@@ -43,11 +44,14 @@ export interface RuntimeTruthPipelineInput {
   riskLimitsLoaded?: boolean;
   paperExecutorEnabled?: boolean;
   turnoverCap?: number;
+  promotionReadinessV2?: PromotionReadinessV2 | null;
+  requirePromotionV2?: boolean;
   proofTracking?: RuntimeProofTrackingInput;
   validationRunsPath?: string;
   verdictPath?: string;
   releaseGateStatusPath?: string;
   registryPath?: string;
+  snapshotBaseDir?: string;
   now?: Date;
 }
 
@@ -112,7 +116,18 @@ export function evaluateRuntimeTruthPipeline(
   const executionPlan = buildPaperExecutionPlan({
     promotionPass: promotionGate.pass,
     paperGateAllowsPaperTrading: paperGate.allowPaperTrading,
+    paperGateMode: paperGate.mode,
+    paperGateAllowsExecution: paperGate.allowPaperExecution,
+    paperGateBlockingReasons: paperGate.blockingReasons,
+    paperGateFlatOnlyReasons: paperGate.flatOnlyReasons,
+    promotionReadinessV2: input.promotionReadinessV2,
+    requirePromotionV2: input.requirePromotionV2,
     championRegistryState: input.championRegistry.kind,
+    championSetComplete:
+      input.championLoaded ??
+      (input.championRegistry.kind === "valid" &&
+        validationRuns.ok &&
+        registryCoverage?.ok === true),
     regimeSeverity: input.planningState.regimeSeverity,
     portfolioTarget: input.portfolioTarget,
     currentPositions: input.currentPositions,
@@ -131,7 +146,9 @@ export function evaluateRuntimeTruthPipeline(
             blockingReasons: executionPlan.blockingReasons,
           }
         : {
-            kind: "active",
+            kind: executionPlan.kind,
+            flatReasons:
+              executionPlan.kind === "flat" ? executionPlan.flatReasons : undefined,
             portfolioTarget: executionPlan.portfolioTarget,
             rebalancePlan: executionPlan.rebalancePlan,
             walletOperations: executionPlan.walletOperations,
@@ -145,6 +162,7 @@ export function evaluateRuntimeTruthPipeline(
     validationRunsPath: input.validationRunsPath,
     verdictPath: input.verdictPath,
     registryPath: input.registryPath,
+    snapshotBaseDir: input.snapshotBaseDir,
     now: input.now,
   });
 

@@ -1,19 +1,60 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { CryptoPosition } from "../extension/crypto-trading/interfaces.js";
+import { dirname, join } from "node:path";
+import type { CryptoPosition } from "../domain/trading/operation-dispatcher.types.js";
 import type { PortfolioRebalanceEntry, PortfolioRebalancePlan } from "../portfolio/rebalance.js";
 import type { PortfolioTarget } from "../portfolio/target.js";
 import type { RuntimePlanningState } from "./live_gate_manager.js";
+import { writeEvidenceManifestForArtifact } from "./evidence_manifest.js";
 
-interface RuntimeStatusExecutionPlanInput {
-  kind: "blocked" | "active" | "flat";
+export const DEFAULT_RUNTIME_STATUS_SNAPSHOT_BASE_DIR = "data/runtime";
+
+export const RUNTIME_STATUS_SNAPSHOT_FILE_NAMES = {
+  paperPromotionStatus: "paper_promotion_status.latest.json",
+  paperGateStatus: "paper_gate_status.json",
+  paperExecutorStatus: "paper_executor_status.latest.json",
+  runtimeFaithfulSimulation: "runtime_faithful_simulation.latest.json",
+  phaseReadiness: "phase_readiness.latest.json",
+} as const;
+
+export function buildRuntimeStatusSnapshotPaths(
+  baseDir = DEFAULT_RUNTIME_STATUS_SNAPSHOT_BASE_DIR,
+) {
+  return {
+    paperPromotionStatus: join(
+      baseDir,
+      RUNTIME_STATUS_SNAPSHOT_FILE_NAMES.paperPromotionStatus,
+    ),
+    paperGateStatus: join(baseDir, RUNTIME_STATUS_SNAPSHOT_FILE_NAMES.paperGateStatus),
+    paperExecutorStatus: join(
+      baseDir,
+      RUNTIME_STATUS_SNAPSHOT_FILE_NAMES.paperExecutorStatus,
+    ),
+    runtimeFaithfulSimulation: join(
+      baseDir,
+      RUNTIME_STATUS_SNAPSHOT_FILE_NAMES.runtimeFaithfulSimulation,
+    ),
+    phaseReadiness: join(baseDir, RUNTIME_STATUS_SNAPSHOT_FILE_NAMES.phaseReadiness),
+  };
+}
+
+interface BlockedRuntimeStatusExecutionPlanInput {
+  kind: "blocked";
   blockingReasons?: string[];
+}
+
+interface FlatOrActiveRuntimeStatusExecutionPlanInput {
+  kind: "flat" | "active";
+  flatReasons?: string[];
   portfolioTarget?: PortfolioTarget;
   rebalancePlan?: PortfolioRebalancePlan;
   walletOperations?: Array<Record<string, unknown>>;
   currentPositions?: CryptoPosition[];
   pricesBySymbol?: Record<string, number>;
 }
+
+type RuntimeStatusExecutionPlanInput =
+  | BlockedRuntimeStatusExecutionPlanInput
+  | FlatOrActiveRuntimeStatusExecutionPlanInput;
 
 export interface RuntimeStatusSnapshotInput {
   promotionGate: {
@@ -67,6 +108,7 @@ export interface RuntimeStatusSnapshotInput {
   validationRunsPath?: string;
   verdictPath?: string;
   registryPath?: string;
+  snapshotBaseDir?: string;
   now?: Date;
 }
 
@@ -112,7 +154,9 @@ export function buildRuntimeStatusSnapshot(
   const combinedBlockingReasons = unique([
     ...input.promotionGate.blockingReasons,
     ...input.paperGate.blockingReasons,
-    ...(input.executionPlan.blockingReasons ?? []),
+    ...(input.executionPlan.kind === "blocked"
+      ? input.executionPlan.blockingReasons ?? []
+      : []),
   ]);
   const hasNonFlatTarget = hasActiveNonFlatTarget(input.executionPlan);
   const phaseReadiness = buildPhaseReadiness({
@@ -126,6 +170,9 @@ export function buildRuntimeStatusSnapshot(
     hasNonFlatTarget,
   });
   const promotionDiagnostics = buildPromotionDiagnosticsSummary(input);
+  const snapshotPaths = buildRuntimeStatusSnapshotPaths(
+    input.snapshotBaseDir ?? DEFAULT_RUNTIME_STATUS_SNAPSHOT_BASE_DIR,
+  );
 
   const paperPromotionStatus: Record<string, unknown> = {
     generatedAt,
@@ -140,6 +187,9 @@ export function buildRuntimeStatusSnapshot(
     readiness: phaseReadiness.research,
   };
 
+  const executionPlanAllowsActiveTrading = input.executionPlan.kind === "active";
+  const executionPlanAllowsPaperExecution = input.executionPlan.kind !== "blocked";
+
   const paperGateStatus: Record<string, unknown> = {
     version: 1,
     generatedAt,
@@ -149,9 +199,9 @@ export function buildRuntimeStatusSnapshot(
     dataQualityValid: true,
     connectorHealthy: true,
     riskLimitsLoaded: true,
-    championLoaded: input.executionPlan.kind === "active",
-    policyVersionMatch: input.executionPlan.kind === "active",
-    paperExecutorEnabled: true,
+    championLoaded: executionPlanAllowsActiveTrading,
+    policyVersionMatch: executionPlanAllowsActiveTrading,
+    paperExecutorEnabled: executionPlanAllowsPaperExecution,
     finalAllowPaperTrading: input.paperGate.allowPaperTrading,
     blockingReasons: [...input.paperGate.blockingReasons],
     warnings: [...(input.paperGate.warnings ?? [])],
@@ -162,9 +212,9 @@ export function buildRuntimeStatusSnapshot(
   const paperExecutorStatus: Record<string, unknown> = {
     generatedAt,
     mode: "executor",
-    paperGateStatusPath:
-      input.releaseGateStatusPath ?? "data/runtime/paper_gate_status.json",
-    journalPath: "data/runtime/paper_executor_journal.json",
+    paperGateStatusPath: snapshotPaths.paperGateStatus,
+    simulationOutput: snapshotPaths.runtimeFaithfulSimulation,
+    journalPath: join(dirname(snapshotPaths.paperExecutorStatus), "paper_executor_journal.json"),
     blockingReasons: combinedBlockingReasons,
     executionPlanKind: input.executionPlan.kind,
     portfolioPlan,
@@ -181,10 +231,12 @@ export function buildRuntimeStatusSnapshot(
       paperGate: input.paperGate.allowPaperTrading ? "PASS" : "BLOCKED",
       paperGateReasons: [...input.paperGate.blockingReasons],
       targetSymbols,
-      rebalanceEntryCount: input.executionPlan.rebalancePlan?.entries.length ?? 0,
+      rebalanceEntryCount: input.executionPlan.kind === "blocked"
+        ? 0
+        : input.executionPlan.rebalancePlan?.entries.length ?? 0,
       walletOperationCount: walletOperations.length,
       executor: {
-        executed: input.executionPlan.kind === "active" ? 1 : 0,
+        executed: executionPlanAllowsPaperExecution ? 1 : 0,
         skipped: 0,
         blocked: input.executionPlan.kind === "blocked" ? 1 : 0,
         operationCount: walletOperations.length,
@@ -198,22 +250,27 @@ export function buildRuntimeStatusSnapshot(
     schemaVersion: "runtime_faithful_simulation.v1",
     generatedAt,
     strategyFamily:
-      input.executionPlan.portfolioTarget || input.executionPlan.rebalancePlan
+      input.executionPlan.kind !== "blocked" &&
+      (input.executionPlan.portfolioTarget || input.executionPlan.rebalancePlan)
         ? "portfolio_rebalance"
         : "unknown",
     strategyRuntime:
-      input.executionPlan.kind === "active"
-        ? {
+      input.executionPlan.kind === "blocked"
+        ? null
+        : {
             executionPlanKind: input.executionPlan.kind,
             targetSymbols,
             portfolioPlan,
             walletOperations,
-          }
-        : null,
+            flatReasons:
+              input.executionPlan.kind === "flat"
+                ? [...(input.executionPlan.flatReasons ?? [])]
+                : [],
+          },
     championValidation: {
-      championLoaded: input.executionPlan.kind === "active",
-      policyVersionMatch: input.executionPlan.kind === "active",
-      checksumValid: input.executionPlan.kind === "active",
+      championLoaded: executionPlanAllowsActiveTrading,
+      policyVersionMatch: executionPlanAllowsActiveTrading,
+      checksumValid: executionPlanAllowsActiveTrading,
       blockingReasons: input.executionPlan.kind === "blocked"
         ? combinedBlockingReasons
         : [],
@@ -227,7 +284,10 @@ export function buildRuntimeStatusSnapshot(
     ),
     commonBarCount: 0,
     commits: [],
-    finalPositions: buildFinalPositions(input.executionPlan.rebalancePlan),
+    finalPositions:
+      input.executionPlan.kind === "blocked"
+        ? {}
+        : buildFinalPositions(input.executionPlan.rebalancePlan),
     summary: {
       commitCount: 0,
       operationCount: walletOperations.length,
@@ -238,8 +298,14 @@ export function buildRuntimeStatusSnapshot(
         operation => operation.action === "closePosition",
       ).length,
       targetSymbolCount: targetSymbols.length,
-      rebalanceEntryCount: input.executionPlan.rebalancePlan?.entries.length ?? 0,
-      currentPositionCount: input.executionPlan.currentPositions?.length ?? 0,
+      rebalanceEntryCount:
+        input.executionPlan.kind === "blocked"
+          ? 0
+          : input.executionPlan.rebalancePlan?.entries.length ?? 0,
+      currentPositionCount:
+        input.executionPlan.kind === "blocked"
+          ? 0
+          : input.executionPlan.currentPositions?.length ?? 0,
       skippedByPaperGate: input.executionPlan.kind === "blocked",
       skippedByEventBlock: 0,
       skippedByVeto: 0,
@@ -263,25 +329,58 @@ export async function writeRuntimeStatusSnapshot(
   snapshot: RuntimeStatusSnapshot,
   opts?: { baseDir?: string },
 ): Promise<void> {
-  const baseDir = opts?.baseDir ?? "data/runtime";
+  const baseDir = opts?.baseDir ?? DEFAULT_RUNTIME_STATUS_SNAPSHOT_BASE_DIR;
+  const snapshotPaths = buildRuntimeStatusSnapshotPaths(baseDir);
+  const paperExecutorStatus: Record<string, unknown> = {
+    ...snapshot.paperExecutorStatus,
+    paperGateStatusPath: snapshotPaths.paperGateStatus,
+    simulationOutput: snapshotPaths.runtimeFaithfulSimulation,
+    journalPath: join(dirname(snapshotPaths.paperExecutorStatus), "paper_executor_journal.json"),
+  };
   await mkdir(baseDir, { recursive: true });
   await Promise.all([
-    writeJson(
-      join(baseDir, "paper_promotion_status.latest.json"),
-      snapshot.paperPromotionStatus,
-    ),
-    writeJson(join(baseDir, "paper_gate_status.json"), snapshot.paperGateStatus),
-    writeJson(
-      join(baseDir, "paper_executor_status.latest.json"),
-      snapshot.paperExecutorStatus,
-    ),
-    writeJson(
-      join(baseDir, "runtime_faithful_simulation.latest.json"),
+    writeJsonWithManifest(snapshotPaths.paperPromotionStatus, snapshot.paperPromotionStatus, {
+      job: "runtime_status_snapshot_paper_promotion_status",
+      generatedAt: snapshot.generatedAt,
+      businessStatus: snapshot.paperPromotionStatus.canPromote === true ? "pass" : "warn",
+      errorClass: firstString(snapshot.paperPromotionStatus.blockingReasons) ?? null,
+    }),
+    writeJsonWithManifest(snapshotPaths.paperGateStatus, snapshot.paperGateStatus, {
+      job: "runtime_status_snapshot_paper_gate_status",
+      generatedAt: snapshot.generatedAt,
+      businessStatus: snapshot.paperGateStatus.finalAllowPaperTrading === true ? "pass" : "warn",
+      errorClass: firstString(snapshot.paperGateStatus.blockingReasons) ?? null,
+    }),
+    writeJsonWithManifest(snapshotPaths.paperExecutorStatus, paperExecutorStatus, {
+      job: "runtime_status_snapshot_paper_executor_status",
+      generatedAt: snapshot.generatedAt,
+      businessStatus: paperExecutorStatus.executionPlanKind === "blocked" ? "warn" : "pass",
+      errorClass: firstString(paperExecutorStatus.blockingReasons) ?? null,
+    }),
+    writeJsonWithManifest(
+      snapshotPaths.runtimeFaithfulSimulation,
       snapshot.runtimeFaithfulSimulation,
+      {
+        job: "runtime_status_snapshot_runtime_faithful_simulation",
+        generatedAt: snapshot.generatedAt,
+        businessStatus: Array.isArray(snapshot.runtimeFaithfulSimulation.blockingReasons) &&
+          snapshot.runtimeFaithfulSimulation.blockingReasons.length > 0
+          ? "warn"
+          : "pass",
+        errorClass: firstString(snapshot.runtimeFaithfulSimulation.blockingReasons) ?? null,
+      },
     ),
-    writeJson(
-      join(baseDir, "phase_readiness.latest.json"),
+    writeJsonWithManifest(
+      snapshotPaths.phaseReadiness,
       snapshot.phaseReadiness as unknown as Record<string, unknown>,
+      {
+        job: "runtime_status_snapshot_phase_readiness",
+        generatedAt: snapshot.generatedAt,
+        businessStatus: snapshot.phaseReadiness.paper.ready === true ? "pass" : "warn",
+        errorClass: firstString(snapshot.phaseReadiness.paper.blockingReasons) ??
+          firstString(snapshot.phaseReadiness.research.blockingReasons) ??
+          null,
+      },
     ),
   ]);
 }
@@ -310,7 +409,7 @@ function buildPhaseReadiness(input: {
   const paperStatus =
     !input.paperGate.allowPaperTrading
       ? "blocked"
-      : input.executionPlan.kind !== "active"
+      : input.executionPlan.kind === "blocked"
         ? "blocked"
         : input.hasNonFlatTarget
           ? "active_ready"
@@ -328,7 +427,12 @@ function buildPhaseReadiness(input: {
     hasNonFlatTarget: input.hasNonFlatTarget,
     executionPlanKind: input.executionPlan.kind,
     blockingReasons: unique(paperBlockingReasons),
-    warnings: [...(input.paperGate.warnings ?? [])],
+    warnings: [
+      ...(input.paperGate.warnings ?? []),
+      ...(input.executionPlan.kind === "flat"
+        ? input.executionPlan.flatReasons ?? []
+        : []),
+    ],
     generatedAt: input.generatedAt,
   };
 
@@ -360,28 +464,10 @@ function buildPhaseReadiness(input: {
   if (liveReleaseAllowsLive === false) {
     liveBlockingReasons.push("release_gate_disallows_live");
   }
+  const liveProofReadyToStart = liveBlockingReasons.length === 0;
   const capitalMode = resolveCapitalMode(
     input.planningState?.capitalRampStage ?? null,
   );
-  const liveTinyCapitalStatus =
-    liveBlockingReasons.length > 0
-      ? "blocked"
-      : capitalMode === "normal_cap"
-        ? "normal_cap_ready"
-        : "tiny_cap_ready";
-  const liveTinyCapital = {
-    status: liveTinyCapitalStatus,
-    ready:
-      liveTinyCapitalStatus === "tiny_cap_ready" ||
-      liveTinyCapitalStatus === "normal_cap_ready",
-    capitalMode,
-    capitalRampStage: input.planningState?.capitalRampStage ?? null,
-    regimeSeverity: input.planningState?.regimeSeverity ?? null,
-    releaseGateAllowsPaperTrading: liveReleaseAllowsPaper,
-    releaseGateAllowsLiveTrading: liveReleaseAllowsLive,
-    blockingReasons: unique(liveBlockingReasons),
-    generatedAt: input.generatedAt,
-  };
 
   const targetDays = Math.max(1, input.proofTracking?.targetDays ?? 90);
   const elapsedDays = Math.max(0, input.proofTracking?.elapsedDays ?? 0);
@@ -389,7 +475,7 @@ function buildPhaseReadiness(input: {
     ...(input.proofTracking?.blockingReasons ?? []),
   ];
   let proofStatus: "blocked" | "not_started" | "tracking" | "passed" | "failed";
-  if (!liveTinyCapital.ready) {
+  if (!liveProofReadyToStart) {
     proofStatus = "blocked";
     if (!proofBlockingReasons.includes("live_tiny_capital_not_ready")) {
       proofBlockingReasons.push("live_tiny_capital_not_ready");
@@ -403,9 +489,44 @@ function buildPhaseReadiness(input: {
   } else {
     proofStatus = "not_started";
   }
+  const proofStarted =
+    proofStatus === "tracking" ||
+    proofStatus === "passed" ||
+    proofStatus === "failed";
+  const liveTinyCapitalStatus =
+    !liveProofReadyToStart || proofStatus === "failed"
+      ? "blocked"
+      : proofStatus === "not_started"
+        ? "proof_start_ready"
+        : capitalMode === "normal_cap"
+          ? "normal_cap_ready"
+          : "tiny_cap_ready";
+  const liveTinyCapitalBlockingReasons =
+    proofStatus === "failed"
+      ? unique([
+          ...liveBlockingReasons,
+          ...(proofBlockingReasons.length > 0
+            ? proofBlockingReasons
+            : ["proof_tracking_failed"]),
+        ])
+      : unique(liveBlockingReasons);
+  const liveTinyCapital = {
+    status: liveTinyCapitalStatus,
+    ready: proofStatus === "tracking" || proofStatus === "passed",
+    readyToStartProof: liveProofReadyToStart,
+    proofStarted,
+    capitalMode,
+    capitalRampStage: input.planningState?.capitalRampStage ?? null,
+    regimeSeverity: input.planningState?.regimeSeverity ?? null,
+    releaseGateAllowsPaperTrading: liveReleaseAllowsPaper,
+    releaseGateAllowsLiveTrading: liveReleaseAllowsLive,
+    blockingReasons: liveTinyCapitalBlockingReasons,
+    generatedAt: input.generatedAt,
+  };
   const proofTracking = {
     status: proofStatus,
-    readyToStart: liveTinyCapital.ready,
+    readyToStart: liveProofReadyToStart,
+    started: proofStarted,
     elapsedDays,
     targetDays,
     remainingDays: Math.max(targetDays - elapsedDays, 0),
@@ -478,7 +599,7 @@ function buildPromotionDiagnosticsSummary(
 function hasActiveNonFlatTarget(
   executionPlan: RuntimeStatusExecutionPlanInput,
 ): boolean {
-  if (!executionPlan.portfolioTarget) {
+  if (executionPlan.kind === "blocked" || !executionPlan.portfolioTarget) {
     return false;
   }
   if (Math.abs(executionPlan.portfolioTarget.targetGrossExposure) > 1e-9) {
@@ -522,6 +643,9 @@ function parseRampStagePercent(capitalRampStage: string): number | null {
 function collectExecutionSymbols(
   executionPlan: RuntimeStatusExecutionPlanInput,
 ): string[] {
+  if (executionPlan.kind === "blocked") {
+    return [];
+  }
   return sortUnique([
     ...(executionPlan.portfolioTarget?.positions.map(position => position.symbol) ??
       []),
@@ -534,6 +658,9 @@ function collectExecutionSymbols(
 function resolveWalletOperations(
   executionPlan: RuntimeStatusExecutionPlanInput,
 ): Array<Record<string, unknown>> {
+  if (executionPlan.kind === "blocked") {
+    return [];
+  }
   if (executionPlan.walletOperations) {
     return executionPlan.walletOperations.map(cloneWalletOperation);
   }
@@ -553,6 +680,24 @@ function buildPortfolioPlanSummary(
   targetSymbols: string[],
   walletOperations: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
+  if (executionPlan.kind === "blocked") {
+    return {
+      basisEquityUsd: null,
+      targetGrossExposure: null,
+      targetNetExposure: null,
+      maxTurnoverPct: null,
+      maxTurnoverUsd: null,
+      totalRequestedTurnoverUsd: null,
+      totalPlannedTurnoverUsd: null,
+      plannedTurnoverPct: null,
+      targetSymbols,
+      targetSymbolCount: targetSymbols.length,
+      currentPositionSymbols: [],
+      currentPositionCount: 0,
+      rebalanceEntryCount: 0,
+      walletOperationCount: walletOperations.length,
+    };
+  }
   return {
     basisEquityUsd:
       executionPlan.portfolioTarget?.basisEquityUsd ??
@@ -582,6 +727,9 @@ function buildDataContractBySymbol(
   executionPlan: RuntimeStatusExecutionPlanInput,
   symbols: string[],
 ): Record<string, unknown> {
+  if (executionPlan.kind === "blocked") {
+    return {};
+  }
   const targetBySymbol = new Map(
     executionPlan.portfolioTarget?.positions.map(position => [
       position.symbol,
@@ -671,6 +819,34 @@ function sortUnique(values: string[]): string[] {
 
 async function writeJson(path: string, payload: Record<string, unknown>): Promise<void> {
   await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+}
+
+async function writeJsonWithManifest(
+  path: string,
+  payload: Record<string, unknown>,
+  input: {
+    job: string;
+    generatedAt: string;
+    businessStatus: "pass" | "warn" | "fail" | "unknown";
+    errorClass: string | null;
+  },
+): Promise<void> {
+  await writeJson(path, payload);
+  await writeEvidenceManifestForArtifact({
+    job: input.job,
+    artifactPath: path,
+    startedAt: input.generatedAt,
+    finishedAt: new Date(),
+    exitCode: 0,
+    businessStatus: input.businessStatus,
+    recordsIn: 1,
+    recordsOut: 1,
+    errorClass: input.errorClass,
+  });
+}
+
+function firstString(value: unknown): string | null {
+  return Array.isArray(value) && typeof value[0] === "string" ? value[0] : null;
 }
 
 function unique(values: string[]): string[] {

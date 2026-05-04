@@ -1,4 +1,5 @@
 import type { NewsItem } from "../extension/analysis-kit/data/interfaces.js";
+import { applyEthCarryNewsPolicy } from "./eth_carry_news_policy.js";
 
 export type NewsTheme =
   | "macro_geopolitical"
@@ -20,6 +21,8 @@ export interface NewsFlag {
   time: string;
   title: string;
   reason: string;
+  theme?: NewsTheme;
+  severity?: "elevated" | "decayed_severe" | "severe";
 }
 
 export type NewsRiskRegime = "normal" | "elevated" | "severe";
@@ -61,10 +64,22 @@ export interface NewsImpactSummary {
   overlay?: NewsOverlaySummary;
 }
 
+export interface SevereDecayConfig {
+  /** Hours after which duplicate severe events are considered distinct. Default 6. */
+  dedupWindowHours: number;
+  /** Hours during which severe weight stays at 1.0. Default 8. */
+  fullWeightHours: number;
+  /** Hours after which severe weight decays to 0. Default 12. */
+  decayEndHours: number;
+  /** Boost applied to elevated fraud/enforcement risk. Default 0.75. */
+  fraudElevatedBoost: number;
+}
+
 export interface AnalyzeNewsImpactOptions {
   now?: Date;
   maxFlags?: number;
   sourceWeights?: Record<string, number>;
+  severeDecay?: Partial<SevereDecayConfig>;
 }
 
 const DEFAULT_SOURCE_WEIGHTS: Record<string, number> = {
@@ -123,12 +138,99 @@ const SEVERE_RISK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bhack(ed|er|ing)?\b/i, reason: "security_incident" },
   { pattern: /\bexploit(ed)?\b/i, reason: "security_incident" },
   { pattern: /\bbreach\b/i, reason: "security_incident" },
-  { pattern: /\bfraud\b/i, reason: "fraud_or_enforcement" },
-  { pattern: /\blaunder(ing|ed)?\b/i, reason: "fraud_or_enforcement" },
   { pattern: /\bsanction(s|ed)?\b/i, reason: "sanctions_risk" },
   { pattern: /\bwar\b/i, reason: "geopolitical_risk" },
   { pattern: /\bconflict\b/i, reason: "geopolitical_risk" },
 ];
+
+const ELEVATED_RISK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\bfraud\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\blaunder(ing|ed)?\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\benforcement\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\bcourt\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\bcharg(ed|es|ing)?\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\bindict(ed|ment|ing)?\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\bsettlement\b/i, reason: "fraud_or_enforcement" },
+  { pattern: /\bprobe\b/i, reason: "fraud_or_enforcement" },
+];
+
+const GEO_SEVERE_CONTEXT_PATTERNS = [
+  /\binvasion\b/i,
+  /\bmissile\b/i,
+  /\bairstrike\b/i,
+  /\battack(ed|s|ing)?\b/i,
+  /\bstrike(s|s)?\b/i,
+  /\bmilitary\b/i,
+  /\bwar\b/i,
+  /\bsanction(s|ed)?\b/i,
+];
+
+const GEO_NEUTRAL_MACRO_PATTERNS = [
+  /\btariff(s)?\b/i,
+  /\bdata\b/i,
+  /\bcpi\b/i,
+  /\bppi\b/i,
+  /\bgdp\b/i,
+  /\bfed\b/i,
+  /\brates?\b/i,
+  /\btreasury\b/i,
+  /\binflation\b/i,
+  /\bmacro\b/i,
+];
+
+const GEO_COMMENTARY_PATTERNS = [
+  /\bsays\b/i,
+  /\bcall(s|ed)?\b/i,
+  /\bpossible\b/i,
+  /\bbaseline price\b/i,
+  /\btarget\b/i,
+  /\bappeal\b/i,
+  /\boutlook\b/i,
+  /\bthesis\b/i,
+  /\bprediction\b/i,
+  /\brally\b/i,
+  /\bgain(s|ed)?\b/i,
+  /\bhigh\b/i,
+  /\bclimb(ed|s)?\b/i,
+  /\brecover(ed|s)?\b/i,
+  /\bequit(y|ies)\b/i,
+  /\bloss(es)?\b/i,
+  /\beasing\b/i,
+];
+
+const CRYPTO_SECURITY_RELEVANCE_PATTERNS = [
+  /\bcrypto\b/i,
+  /\btoken\b/i,
+  /\bprotocol\b/i,
+  /\bwallet\b/i,
+  /\bexchange\b/i,
+  /\bdefi\b/i,
+  /\bstablecoin\b/i,
+  /\bsmart contract\b/i,
+  /\bprivate key\b/i,
+  /\bblockchain\b/i,
+  /\bbridge\b/i,
+  /\bbinance\b/i,
+  /\bokx\b/i,
+  /\bbybit\b/i,
+  /\bbitget\b/i,
+  /\bbitcoin\b/i,
+  /\bbtc\b/i,
+  /\bethereum\b/i,
+  /\beth\b/i,
+];
+
+const SEVERE_DEDUP_WINDOW_HOURS = 6;
+const SEVERE_FULL_WINDOW_HOURS = 8;
+const SEVERE_DECAY_END_HOURS = 12;
+const FRAUD_ELEVATED_BOOST = 0.75;
+
+const DEFAULT_SEVERE_DECAY: SevereDecayConfig = {
+  dedupWindowHours: SEVERE_DEDUP_WINDOW_HOURS,
+  fullWeightHours: SEVERE_FULL_WINDOW_HOURS,
+  decayEndHours: SEVERE_DECAY_END_HOURS,
+  fraudElevatedBoost: FRAUD_ELEVATED_BOOST,
+};
 
 const THEME_PATTERNS: Array<{ theme: NewsTheme; patterns: RegExp[] }> = [
   {
@@ -221,6 +323,72 @@ function detectTheme(text: string): NewsTheme {
   return bestTheme;
 }
 
+function normalizeTitleTokens(title: string): Set<string> {
+  const tokens = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(Boolean)
+    .filter(token => token.length > 2);
+
+  return new Set(tokens);
+}
+
+function jaccardSimilarity(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 && right.size === 0) {
+    return 1;
+  }
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+
+  let intersection = 0;
+  for (const token of left) {
+    if (right.has(token)) {
+      intersection += 1;
+    }
+  }
+
+  const union = new Set([...left, ...right]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function computeSevereDecayWeight(hoursAgo: number, config: SevereDecayConfig): number {
+  if (hoursAgo <= config.fullWeightHours) {
+    return 1;
+  }
+  if (hoursAgo >= config.decayEndHours) {
+    return 0;
+  }
+  return 1 - (hoursAgo - config.fullWeightHours) / (config.decayEndHours - config.fullWeightHours);
+}
+
+function detectGeopoliticalSevere(text: string): boolean {
+  const contextHits = countMatches(text, GEO_SEVERE_CONTEXT_PATTERNS);
+  if (contextHits === 0) {
+    return false;
+  }
+  if (countMatches(text, GEO_NEUTRAL_MACRO_PATTERNS) > 0) {
+    return false;
+  }
+  if (countMatches(text, GEO_COMMENTARY_PATTERNS) > 0) {
+    return false;
+  }
+  return true;
+}
+
+function detectSecurityIncidentSevere(text: string): boolean {
+  if (
+    !/\bhack(ed|er|ing)?\b/i.test(text) &&
+    !/\bexploit(ed)?\b/i.test(text) &&
+    !/\bbreach\b/i.test(text)
+  ) {
+    return false;
+  }
+  return countMatches(text, CRYPTO_SECURITY_RELEVANCE_PATTERNS) > 0;
+}
+
 function resolveSourceWeight(
   item: NewsItem,
   sourceWeights: Record<string, number> | undefined,
@@ -235,8 +403,29 @@ function resolveSourceWeight(
   return DEFAULT_SOURCE_WEIGHTS.unknown;
 }
 
-function resolveFlagReason(text: string): string | null {
+function resolveSevereReason(text: string): string | null {
   for (const item of SEVERE_RISK_PATTERNS) {
+    if (item.reason === "security_incident") {
+      if (item.pattern.test(text) && detectSecurityIncidentSevere(text)) {
+        return item.reason;
+      }
+      continue;
+    }
+    if (item.reason === "geopolitical_risk") {
+      continue;
+    }
+    if (item.pattern.test(text)) {
+      return item.reason;
+    }
+  }
+  if (detectGeopoliticalSevere(text)) {
+    return "geopolitical_risk";
+  }
+  return null;
+}
+
+function resolveElevatedReason(text: string): string | null {
+  for (const item of ELEVATED_RISK_PATTERNS) {
     if (item.pattern.test(text)) {
       return item.reason;
     }
@@ -247,6 +436,7 @@ function resolveFlagReason(text: string): string | null {
 function resolveOverlay(
   riskScore: number,
   severeFlags: number,
+  severeWeight: number,
   highRiskNews: number,
   btcBias: number,
   ethBias: number,
@@ -259,9 +449,14 @@ function resolveOverlay(
 
   if (severeFlags > 0) {
     riskRegime = "severe";
-    hardVeto = true;
-    exposureMultiplier = 0;
     reasons.push("severe_risk_flag");
+    if (severeWeight >= 0.5) {
+      hardVeto = true;
+      exposureMultiplier = 0;
+    } else if (severeWeight > 0) {
+      exposureMultiplier = Number(clamp(1 - severeWeight * 0.8, 0.35, 0.95).toFixed(4));
+      reasons.push("decayed_severe_risk_flag");
+    }
   } else if (riskScore >= ELEVATED_RISK_SCORE || highRiskNews > 0) {
     riskRegime = "elevated";
     exposureMultiplier = Number(clamp(1 - riskScore * 0.8, 0.35, 0.85).toFixed(4));
@@ -330,6 +525,10 @@ export function analyzeNewsImpact(
 
   const nowMs = (options?.now ?? new Date()).getTime();
   const maxFlags = options?.maxFlags ?? 8;
+  const decayConfig: SevereDecayConfig = {
+    ...DEFAULT_SEVERE_DECAY,
+    ...options?.severeDecay,
+  };
 
   let positiveNews = 0;
   let negativeNews = 0;
@@ -340,11 +539,18 @@ export function analyzeNewsImpact(
   let weightedSentimentDenominator = 0;
   let weightedRisk = 0;
   let severeFlags = 0;
+  let severeWeight = 0;
   let btcBias = 0;
   let ethBias = 0;
 
   const themeCounts = new Map<NewsTheme, number>();
   const flags: NewsFlag[] = [];
+  const acceptedSevereEvents: Array<{
+    reason: string;
+    theme: NewsTheme;
+    timeMs: number;
+    tokens: Set<string>;
+  }> = [];
 
   for (const item of news) {
     const text = `${item.title} ${item.content}`.toLowerCase();
@@ -371,25 +577,58 @@ export function analyzeNewsImpact(
     }
 
     const riskHits = countMatches(text, RISK_PATTERNS);
-    const severeReason = resolveFlagReason(text);
-    if (riskHits >= 2 || severeReason) {
+    const severeReason = resolveSevereReason(text);
+    const elevatedReason = severeReason ? null : resolveElevatedReason(text);
+    const theme = detectTheme(text);
+    const normalizedTitleTokens = normalizeTitleTokens(item.title);
+    const severeHoursAgo = Math.max(0, (nowMs - item.time.getTime()) / 3_600_000);
+    const severeDecayWeight = severeReason ? computeSevereDecayWeight(severeHoursAgo, decayConfig) : 0;
+
+    let isDuplicateSevere = false;
+    if (severeReason && severeDecayWeight > 0) {
+      isDuplicateSevere = acceptedSevereEvents.some(existing => {
+        if (existing.reason !== severeReason || existing.theme !== theme) {
+          return false;
+        }
+        if (Math.abs(existing.timeMs - item.time.getTime()) > decayConfig.dedupWindowHours * 3_600_000) {
+          return false;
+        }
+        return jaccardSimilarity(existing.tokens, normalizedTitleTokens) >= 0.8;
+      });
+    }
+
+    const effectiveSevereWeight = isDuplicateSevere ? 0 : severeDecayWeight;
+    if (severeReason && effectiveSevereWeight > 0) {
+      acceptedSevereEvents.push({
+        reason: severeReason,
+        theme,
+        timeMs: item.time.getTime(),
+        tokens: normalizedTitleTokens,
+      });
+    }
+
+    if (riskHits >= 2 || effectiveSevereWeight > 0 || elevatedReason) {
       highRiskNews += 1;
       if (flags.length < maxFlags) {
         flags.push({
           time: item.time.toISOString(),
           title: item.title,
-          reason: severeReason ?? "multi_risk_keywords",
+          reason: severeReason ?? elevatedReason ?? "multi_risk_keywords",
+          theme,
+          severity: effectiveSevereWeight > 0 ? (effectiveSevereWeight >= 1 ? "severe" : "decayed_severe") : "elevated",
         });
       }
     }
-    if (severeReason) {
+    if (effectiveSevereWeight > 0) {
       severeFlags += 1;
+      severeWeight = Math.max(severeWeight, effectiveSevereWeight);
     }
 
-    const riskStrength = riskHits * 0.5 + (severeReason ? 1.0 : 0);
+    const riskStrength =
+      riskHits * 0.5 +
+      effectiveSevereWeight +
+      (elevatedReason ? decayConfig.fraudElevatedBoost : 0);
     weightedRisk += riskStrength * itemWeight;
-
-    const theme = detectTheme(text);
     themeCounts.set(theme, (themeCounts.get(theme) ?? 0) + 1);
 
     const btcHits = countMatches(text, BTC_PATTERNS);
@@ -420,7 +659,7 @@ export function analyzeNewsImpact(
     .slice(0, 5)
     .map(([theme, count]) => ({ theme, count }));
 
-  const overlay = resolveOverlay(riskScore, severeFlags, highRiskNews, btcBias, ethBias);
+  const overlay = resolveOverlay(riskScore, severeFlags, severeWeight, highRiskNews, btcBias, ethBias);
 
   return {
     totalNews: news.length,
@@ -434,4 +673,12 @@ export function analyzeNewsImpact(
     flags,
     overlay,
   };
+}
+
+export function analyzeEthCarryNewsImpact(
+  news: NewsItem[],
+  options?: AnalyzeNewsImpactOptions,
+): NewsImpactSummary {
+  const summary = analyzeNewsImpact(news, options);
+  return applyEthCarryNewsPolicy(summary, news, options);
 }
