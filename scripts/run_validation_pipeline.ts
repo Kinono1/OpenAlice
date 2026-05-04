@@ -1,19 +1,42 @@
+import { randomUUID } from 'node:crypto'
+import { execSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { OhlcvData } from '../src/domain/analysis/indicator/types.js'
 import { readStrategyConfig } from '../src/core/config.js'
 import type { StrategyConfig } from '../src/core/config.js'
+import {
+  readAlphaPoolArtifactSync,
+  summarizeAlphaPoolArtifact,
+} from '../src/domain/strategy/alpha-pool.js'
 import { buildStrategyExecutionDecision } from '../src/domain/strategy/execution.js'
 import { buildMetaLabelFeatureVector } from '../src/domain/strategy/meta-labeling/feature-builder.js'
 import { evaluateTripleBarrierLabel } from '../src/domain/strategy/meta-labeling/triple-barrier.js'
+import {
+  DEFAULT_REGIME_HMM_CONFIG,
+  RegimeHmm,
+  evaluateCrossAssetRegimeConsistency,
+  evaluateRegime,
+  extractHmmObservations,
+} from '../src/domain/strategy/regime/index.js'
+import type { RegimeEvaluation } from '../src/domain/strategy/regime/index.js'
 import { runQuantileTest } from '../src/domain/strategy/research/quantile-test.js'
 import { evaluateRuntimeFactorSnapshot } from '../src/domain/strategy/runtime-evaluator.js'
 import { evaluateReleaseGate } from '../src/backtest/release_gate.js'
+import { buildValidationDecisionSummary } from '../src/backtest/validation-report-summary.js'
 import { evaluateRiskSimulation } from '../src/backtest/risk_simulation.js'
-import { evaluateSignificanceGate } from '../src/backtest/statistical_significance.js'
+import {
+  buildTrialLedgerSummary,
+  computeSpaLikePValues,
+  evaluateSignificanceGate,
+  type SpaLikeCandidateResult,
+  type SignificanceGateInput,
+  type SignificanceGateResult,
+} from '../src/backtest/statistical_significance.js'
 import { runStrategyWalkForward } from '../src/backtest/wfo.js'
 import { runStrategyBacktest } from '../src/backtest/strategy-validation/backtest.js'
+import { evaluateStrategy, getStrategyMinimumBars } from '../src/backtest/strategy-validation/strategies.js'
 import type {
   BacktestMetrics,
   BacktestRegimeSummary,
@@ -29,16 +52,114 @@ import type {
 import {
   isStrategyName,
 } from '../src/backtest/strategy-validation/types.js'
+import { sessionAwareSlippageEstimate } from '../src/live/execution_quality.js'
+import type { IntradayLiquiditySession } from '../src/live/execution_quality.js'
+import {
+  buildStableCorrelationClusters,
+  selectUniverseByRollingSharpe,
+} from '../src/portfolio/index.js'
+import {
+  buildEvidenceId,
+  evidenceIdToPathKey,
+  hashEvidenceComponent,
+} from '../src/evidence/evidence_id.js'
+import {
+  DATA_LINEAGE_PIT_POLICY,
+  DATA_LINEAGE_SCHEMA_VERSION,
+  dataLineageGraphToJson,
+  hashDataLineageGraph,
+  validateDataLineageGraph,
+  type DataLineageGraph,
+  type DataLineageNode,
+} from '../src/data/data_lineage.js'
+import {
+  appendTrialRecord,
+  buildCompleteTrialUniverseMarkerRecord,
+  DUPLICATE_TRIAL_ID,
+  TrialRegistryError,
+  trialRecordToJson,
+  type TrialRecord,
+} from '../src/evidence/trial_registry.js'
+import {
+  getStrategyFamilyContract,
+  validateStrategyFamilyContract,
+  type StrategyFamilyContract,
+} from '../src/strategy/contracts/index.js'
+import type { FailureCode } from '../src/research/failure_taxonomy.js'
+import {
+  buildBlockedPromotionVerdictProvenance,
+  promotionVerdictProvenanceToJson,
+} from '../src/runtime/promotion_v2_verdict_provenance.js'
 import { writeReleaseGateStatus } from '../src/runtime/release_gate_status.js'
+
+type ValidationStrategyName = StrategyName
+
+type RegimeGateConfig = {
+  allowedEntryRegimes: StrategyRegimeLabel[]
+  exitOnMismatch?: boolean
+}
+
+function evaluateSignificanceGateForReport(
+  input: SignificanceGateInput,
+): SignificanceGateResult {
+  try {
+    const result = evaluateSignificanceGate(input)
+    return {
+      ...result,
+      candidateTrialCount:
+        result.candidateTrialCount ??
+        Math.max(0, Math.floor(input.trialCount ?? input.candidateReturns.length)),
+    }
+  } catch {
+    const candidateTrialCount = Math.max(
+      0,
+      Math.floor(input.trialCount ?? input.candidateReturns.length),
+    )
+    return {
+      passed: false,
+      pboResult: {
+        pbo: 1,
+        logits: [],
+        splitsEvaluated: 0,
+        partitions: input.partitions ?? 8,
+      },
+      dsrResult: {
+        observedSharpe: 0,
+        benchmarkSharpe: 0,
+        dsrValue: 0,
+        dsrProbability: 0,
+        skewness: 0,
+        kurtosis: 3,
+        trialCount: Math.max(2, candidateTrialCount),
+      },
+      pboThreshold: input.pboThreshold ?? 0.1,
+      dsrMin: input.dsrMin ?? 0.95,
+      candidateTrialCount,
+      fdrQ: null,
+      trialLedger: input.trialLedger ?? null,
+    }
+  }
+}
+
+type VolatilityGateConfig = {
+  minVolatilityPct?: number
+  maxVolatilityPct?: number
+  minTrendStrengthPct?: number
+  maxTrendStrengthPct?: number
+  exitOnMismatch?: boolean
+}
 
 interface CliArgs {
   inputCsv: string
   symbol: string
-  strategy: StrategyName
+  strategy: ValidationStrategyName
   lookbackBars: number
   output: string
   params: StrategyParams
   candidates?: StrategyParams[]
+  peerCsvBySymbol?: Record<string, string>
+  volatilityGate?: VolatilityGateConfig
+  regimeGate?: RegimeGateConfig
   feeRate: number
   slippageBps: number
   latencyBars: number
@@ -57,6 +178,9 @@ interface CliArgs {
   riskMinProfitProbability: number
   writeReleaseGateStatus: boolean
   releaseGateStatusPath: string
+  alphaPoolPath: string
+  evidenceOutputRoot: string
+  trialRegistryPath: string | null
   selfCheck: boolean
 }
 
@@ -85,6 +209,11 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
   }
 
   const candles = (await loadCsvCandles(args.inputCsv, args.symbol)).slice(-args.lookbackBars)
+  const peerCandlesBySymbol = await loadPeerCsvCandles(args.peerCsvBySymbol, args.lookbackBars)
+  const assetCandlesBySymbol = {
+    ...peerCandlesBySymbol,
+    [args.symbol]: candles,
+  }
   if (candles.length < args.trainBars + args.testBars) {
     throw new Error(
       `Not enough candles for WFO. Need >= ${args.trainBars + args.testBars}, got ${candles.length}.`,
@@ -92,6 +221,7 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
   }
 
   const candidates = ensureCandidates(args.strategy, args.params, args.candidates)
+  const executionStrategy = resolveExecutionStrategy(args.strategy)
   const costModel = {
     feeRate: args.feeRate,
     slippageBps: args.slippageBps,
@@ -99,21 +229,54 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
     fundingRatePer8h: args.fundingRatePer8h,
   }
 
+  const holdoutBars = Math.max(1, Math.min(args.testBars, Math.floor(candles.length * 0.2)))
+  const selectionCandles = candles.slice(0, candles.length - holdoutBars)
+  const holdoutCandles = candles.slice(candles.length - holdoutBars)
+  if (selectionCandles.length < 1 || holdoutCandles.length < 1) {
+    throw new Error('Not enough candles to create non-overlapping selection and holdout samples.')
+  }
+
   const reports = candidates.map((candidate) =>
     runStrategyBacktest({
-      strategy: args.strategy,
-      candles,
+      strategy: executionStrategy,
+      candles: selectionCandles,
       params: candidate,
       costModel,
+      regimeGate: args.regimeGate,
+      volatilityGate: args.volatilityGate,
     }),
   )
   const selected = [...reports].sort((left, right) => right.metrics.sharpe - left.metrics.sharpe)[0]
+  const selectedCandidateIndex = reports.indexOf(selected)
+  if (selectedCandidateIndex < 0) {
+    throw new Error('Selected candidate was not found in the candidate report set.')
+  }
+  const holdoutReports = candidates.map((candidate) =>
+    runStrategyBacktest({
+      strategy: executionStrategy,
+      candles: holdoutCandles,
+      params: candidate,
+      costModel,
+      regimeGate: args.regimeGate,
+      volatilityGate: args.volatilityGate,
+    }),
+  )
+  const selectedEvaluation = holdoutReports[selectedCandidateIndex]
+  const selectionLeakageCheck = {
+    selectedOn: 'selection',
+    evaluatedOn: 'holdout',
+    passed: true,
+    selectionBars: selectionCandles.length,
+    holdoutBars: holdoutCandles.length,
+  }
 
   const wfo = runStrategyWalkForward({
-    strategy: args.strategy,
+    strategy: executionStrategy,
     candles,
     candidates,
     costModel,
+    regimeGate: args.regimeGate,
+    volatilityGate: args.volatilityGate,
     config: {
       trainBars: args.trainBars,
       testBars: args.testBars,
@@ -123,15 +286,23 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
     },
   })
 
-  const candidateReturns = reports.map((report) => equityCurveToReturns(report.equityCurve))
-  const selectedReturns = equityCurveToReturns(selected.equityCurve)
-  const significance = evaluateSignificanceGate({
+  const candidateReturns = holdoutReports.map((report) => equityCurveToReturns(report.equityCurve))
+  const selectedReturns = equityCurveToReturns(selectedEvaluation.equityCurve)
+  const trialLedger = buildTrialLedgerSummary({
+    rawM: reports.length,
+    effectiveM: reports.length,
+    survivingTrialCount: 1,
+    rawMComplete: false,
+    includesFailedTrials: false,
+  })
+  const significance = evaluateSignificanceGateForReport({
     candidateReturns,
     selectedReturns,
     partitions: args.significancePartitions,
     pboThreshold: 0.2,
     dsrMin: 0,
     trialCount: reports.length,
+    trialLedger,
   })
 
   const riskSimulation = evaluateRiskSimulation(selectedReturns, {
@@ -144,39 +315,76 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
     minProfitProbability: args.riskMinProfitProbability,
   })
 
+  const strategySignalIcByHorizon = computeStrategySignalIcByHorizon({
+    strategy: executionStrategy,
+    candles: holdoutCandles,
+    params: selected.params,
+    horizons: [1, 6, 24],
+  })
+  const strategyConfig = await readStrategyConfig()
+  const strategyPlanEvidence = buildStrategyPlanEvidence({
+    symbol: args.symbol,
+    candles,
+    assetCandlesBySymbol,
+    holdoutCandles,
+    selectedEvaluation,
+    costModel,
+    strategyConfig,
+    alphaPoolPath: args.alphaPoolPath,
+  })
+
   const releaseGate = evaluateReleaseGate({
     wfo,
     significance,
     riskSimulation,
     economics: {
-      grossExpectancyPct: selected.metrics.grossExpectancyPct,
-      netExpectancyPct: selected.metrics.netExpectancyPct,
-      feeExpectancyDragPct: selected.metrics.feeExpectancyDragPct,
-      slippageExpectancyDragPct: selected.metrics.slippageExpectancyDragPct,
-      fundingExpectancyDragPct: selected.metrics.fundingExpectancyDragPct,
-      totalCostsPaid: selected.metrics.totalCostsPaid,
-      costDragPctOfInitialCapital: selected.metrics.costDragPctOfInitialCapital,
-      averageHoldingHours: selected.metrics.averageHoldingHours,
-      medianHoldingHours: selected.metrics.medianHoldingHours,
-      tradeCount: selected.metrics.tradeCount,
+      grossExpectancyPct: selectedEvaluation.metrics.grossExpectancyPct,
+      netExpectancyPct: selectedEvaluation.metrics.netExpectancyPct,
+      feeExpectancyDragPct: selectedEvaluation.metrics.feeExpectancyDragPct,
+      slippageExpectancyDragPct: selectedEvaluation.metrics.slippageExpectancyDragPct,
+      fundingExpectancyDragPct: selectedEvaluation.metrics.fundingExpectancyDragPct,
+      totalCostsPaid: selectedEvaluation.metrics.totalCostsPaid,
+      costDragPctOfInitialCapital: selectedEvaluation.metrics.costDragPctOfInitialCapital,
+      averageHoldingHours: selectedEvaluation.metrics.averageHoldingHours,
+      medianHoldingHours: selectedEvaluation.metrics.medianHoldingHours,
+      tradeCount: selectedEvaluation.metrics.tradeCount,
     },
+    strategyPlanEvidence,
+  })
+  const validationEvidence = buildValidationEvidence({
+    symbol: args.symbol,
+    candles,
+    assetCandlesBySymbol,
+    holdoutCandles,
+    selectedEvaluation,
+    strategySignalIcByHorizon,
+    releaseGate,
+    costModel,
+    strategyConfig,
+    alphaPoolPath: args.alphaPoolPath,
+    strategyPlanEvidence,
   })
 
-  const baselineReport = buildBaselineReport(selected.metrics)
+  const baselineReport = buildBaselineReport(selectedEvaluation.metrics)
+  const deployableStrategyTarget = buildDeployableStrategyTarget({
+    baselineMetrics: selectedEvaluation.metrics,
+    baselineReport,
+    releaseGate,
+  })
   const regimeGateSweep = buildRegimeGateSweep({
     strategy: args.strategy,
     candles,
     params: selected.params,
     costModel,
-    baselineMetrics: selected.metrics,
+    baselineMetrics: selectedEvaluation.metrics,
+    lockedRegimeGate: args.regimeGate,
   })
-  const strategyConfig = await readStrategyConfig()
   const metaLabelSweep = buildMetaLabelSweep({
     strategy: args.strategy,
     candles,
     costModel,
     strategyConfig,
-    baseResult: selected,
+    baseResult: selectedEvaluation,
     baseLabel: 'baseline',
   })
   const preferredRegimeGateArm =
@@ -190,7 +398,7 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
         costModel,
         strategyConfig,
         baseResult: runStrategyBacktest({
-          strategy: args.strategy,
+          strategy: executionStrategy,
           candles,
           params: selected.params,
           costModel,
@@ -211,8 +419,32 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
         enabled: false,
         reason: 'No regime gate arm available for combined meta-label A/B replay.',
       }
+  const recommendedCandidate = buildRecommendedCandidate({
+    baselineMetrics: selectedEvaluation.metrics,
+    baselineReport,
+    releaseGate,
+    abExperiments: {
+      regimeGate: regimeGateSweep,
+      metaLabel: metaLabelSweep,
+      metaLabelWithBestRegimeGate,
+    },
+  })
+  const canonicalScoreboard = buildCanonicalScoreboardSummary({
+    controlArm: deployableStrategyTarget.controlArm,
+    selectedCandidate: {
+      candidateIndex: selectedCandidateIndex,
+      params: selected.params,
+      metrics: summarizeMetrics(selectedEvaluation.metrics),
+      baselineReport,
+    },
+    recommendation: recommendedCandidate.recommendation,
+    wfo,
+    significance,
+    riskSimulation,
+    releaseGate,
+  })
 
-  const summary = {
+  const summaryBase = {
     schemaVersion: 'validation_pipeline_report.v1',
     generatedAt: new Date().toISOString(),
     input: {
@@ -220,16 +452,40 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
       symbol: args.symbol,
       strategy: args.strategy,
       lookbackBars: candles.length,
+      peerCsvBySymbol: Object.fromEntries(
+        Object.entries(args.peerCsvBySymbol ?? {}).map(([symbol, path]) => [symbol, resolve(path)]),
+      ),
     },
-    deployableStrategyTarget: buildDeployableStrategyTarget({
-      baselineMetrics: selected.metrics,
-      baselineReport,
-      releaseGate,
-    }),
+    configuredGates: {
+      regimeGate: args.regimeGate ?? null,
+      volatilityGate: args.volatilityGate ?? null,
+    },
+    deployableStrategyTarget,
+    sampleSplit: {
+      selection: {
+        startTime: selectionCandles[0]?.time ?? null,
+        endTime: selectionCandles[selectionCandles.length - 1]?.time ?? null,
+        bars: selectionCandles.length,
+      },
+      holdout: {
+        startTime: holdoutCandles[0]?.time ?? null,
+        endTime: holdoutCandles[holdoutCandles.length - 1]?.time ?? null,
+        bars: holdoutCandles.length,
+      },
+    },
+    selectionLeakageCheck,
     selectedParams: selected.params,
-    selectedMetrics: selected.metrics,
+    selectedMetrics: selectedEvaluation.metrics,
+    selectedInSampleMetrics: selected.metrics,
     baselineReport,
+    validationEvidence,
     candidateMetrics: reports.map((report, index) => ({
+      candidateIndex: index,
+      params: report.params,
+      metrics: report.metrics,
+      baselineReport: buildBaselineReport(report.metrics),
+    })),
+    candidateHoldoutMetrics: holdoutReports.map((report, index) => ({
       candidateIndex: index,
       params: report.params,
       metrics: report.metrics,
@@ -240,16 +496,8 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
       metaLabel: metaLabelSweep,
       metaLabelWithBestRegimeGate,
     },
-    recommendedCandidate: buildRecommendedCandidate({
-      baselineMetrics: selected.metrics,
-      baselineReport,
-      releaseGate,
-      abExperiments: {
-        regimeGate: regimeGateSweep,
-        metaLabel: metaLabelSweep,
-        metaLabelWithBestRegimeGate,
-      },
-    }),
+    recommendedCandidate,
+    canonicalScoreboard,
     wfo: {
       overallPassed: wfo.overallPassed,
       failedWindows: wfo.failedWindows,
@@ -268,9 +516,35 @@ async function main(): Promise<ValidationPipelineRunResult | void> {
       pbo: significance.pboResult.pbo,
       dsrValue: significance.dsrResult.dsrValue,
       dsrProbability: significance.dsrResult.dsrProbability,
+      fdrQ: significance.fdrQ ?? null,
+      candidateTrialCount: significance.candidateTrialCount ?? null,
+      trialLedger: significance.trialLedger ?? null,
     },
     riskSimulation,
     releaseGate,
+  }
+  const evidenceOsV4 = await writeEvidenceOsV4Artifacts({
+    args,
+    candles,
+    holdoutCandles,
+    selectedCandidateIndex,
+    candidateReturns,
+    selectedEvaluation,
+    strategySignalIcByHorizon,
+    costModel,
+    wfo,
+    significance,
+    riskSimulation,
+    releaseGate,
+    outputPath: resolve(args.output),
+  })
+  const summaryBaseWithEvidence = {
+    ...summaryBase,
+    evidenceOsV4: evidenceOsV4.summary,
+  }
+  const summary = {
+    ...summaryBaseWithEvidence,
+    decisionSummary: buildValidationDecisionSummary(summaryBaseWithEvidence),
   }
 
   const outputPath = resolve(args.output)
@@ -321,6 +595,12 @@ function parseArgs(argv: string[]): CliArgs {
       `logs/research/validation_${new Date().toISOString().replaceAll(':', '-')}.json`,
     params: parseJsonArg<StrategyParams>(raw.get('paramsJson'), {}),
     candidates: parseJsonArg<StrategyParams[] | undefined>(raw.get('candidatesJson'), undefined),
+    peerCsvBySymbol: parseJsonArg<Record<string, string> | undefined>(
+      raw.get('peerCsvJson'),
+      undefined,
+    ),
+    regimeGate: parseJsonArg<RegimeGateConfig | undefined>(raw.get('regimeGateJson'), undefined),
+    volatilityGate: parseJsonArg<VolatilityGateConfig | undefined>(raw.get('volatilityGateJson'), undefined),
     feeRate: parseNumberArg(raw.get('feeRate'), 0.0006, 'feeRate'),
     slippageBps: parseNumberArg(raw.get('slippageBps'), 8, 'slippageBps'),
     latencyBars: parseIntArg(raw.get('latencyBars'), 1, 'latencyBars'),
@@ -359,6 +639,9 @@ function parseArgs(argv: string[]): CliArgs {
     writeReleaseGateStatus: parseBoolArg(raw.get('writeReleaseGateStatus'), true),
     releaseGateStatusPath:
       raw.get('releaseGateStatusPath') ?? 'data/runtime/release_gate_status.json',
+    alphaPoolPath: raw.get('alphaPoolPath') ?? 'data/research/alpha_pool/latest.json',
+    evidenceOutputRoot: raw.get('evidenceOutputRoot') ?? 'runtime/research',
+    trialRegistryPath: raw.get('trialRegistryPath') ?? null,
     selfCheck: parseBoolArg(raw.get('selfCheck'), false),
   }
 }
@@ -380,6 +663,1161 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out
 }
 
+interface EvidenceOsV4ArtifactsInput {
+  args: CliArgs
+  candles: MarketData[]
+  holdoutCandles: MarketData[]
+  selectedCandidateIndex: number
+  candidateReturns: number[][]
+  selectedEvaluation: BacktestResult
+  strategySignalIcByHorizon: StrategySignalIcHorizon[]
+  costModel: {
+    feeRate: number
+    slippageBps: number
+    latencyBars: number
+    fundingRatePer8h: number
+  }
+  wfo: ReturnType<typeof runStrategyWalkForward>
+  significance: SignificanceGateResult
+  riskSimulation: ReturnType<typeof evaluateRiskSimulation>
+  releaseGate: ReturnType<typeof evaluateReleaseGate>
+  outputPath: string
+}
+
+interface EvidenceOsV4ArtifactsResult {
+  summary: Record<string, unknown>
+}
+
+interface CompleteTrialUniverseMarkerAppendResult {
+  appended: boolean
+  reason: string
+  trialId: string | null
+}
+
+type EvidenceOsFailureCode = 'FDR_INPUTS_INCOMPLETE' | 'PIT_AUDIT_NOT_IMPLEMENTED' | 'PIT_PROXY_ONLY' | 'PIT_VIOLATION'
+
+interface FdrReport {
+  schema_version: 'evidence_os_v4_fdr_report.v4_0'
+  evidence_id: string
+  strategy_family: string
+  candidate_id: string
+  code_commit: string
+  data_manifest_hash: string
+  data_lineage_hash: string
+  feature_schema_hash: string
+  validation_profile_hash: string
+  cost_model_hash: string
+  created_at: string
+  status: 'blocked_inputs_incomplete' | 'ready_explanatory_only'
+  promotion_allowed: false
+  fdr_method_primary: 'BY_raw_m'
+  fdr_method_secondary: 'BY_effective_m'
+  raw_m: number
+  effective_m: number
+  raw_m_complete: boolean
+  includes_failed_trials: boolean
+  p_values_available: boolean
+  missing_p_value_count: number
+  p_value: number | null
+  p_value_method: string | null
+  p_value_scope: 'explanatory_selected_vs_holdout_benchmark' | null
+  p_value_is_promotion_grade: false
+  benchmark_candidate_index: number | null
+  bootstrap_samples: number | null
+  bootstrap_block_size: number | null
+  bootstrap_block_size_set: number[]
+  bootstrap_direction_stable: boolean | null
+  p_value_block_sensitivity: Array<{
+    block_size: number
+    observed_mean_excess: number
+    p_value: number
+    passed: boolean
+  }>
+  observed_mean_excess: number | null
+  p_adjusted_by_raw_m: number | null
+  p_adjusted_by_effective_m: number | null
+  p_adjusted_bh_secondary: number | null
+  blocking_reasons: Array<{
+    code: EvidenceOsFailureCode
+    severity: 'hard_block'
+    source: string
+    required: string
+    observed: string
+  }>
+  notes: string[]
+}
+
+type PitAuditCheckStatus = 'pass' | 'fail' | 'blocked'
+
+interface PitAuditCheck {
+  id: string
+  status: PitAuditCheckStatus
+  node_id: string | null
+  node_type: string | null
+  source: string
+  required: string
+  observed: string
+  details: Record<string, unknown>
+}
+
+function buildValidationDataLineageGraph(input: {
+  args: CliArgs
+  candles: MarketData[]
+  holdoutCandles: MarketData[]
+  strategyFamily: string
+  candidateId: string
+  evidenceId: string
+  generatedAt: string
+}): DataLineageGraph {
+  const rawNodeId = `${input.args.symbol.toLowerCase()}_validation_raw`
+  const normalizedNodeId = `${input.args.symbol.toLowerCase()}_validation_normalized`
+  const featureNodeId = `${input.strategyFamily}_${input.candidateId}_features`
+  const strategyInputNodeId = `${input.strategyFamily}_${input.candidateId}_strategy_input`
+  const decisionArtifactNodeId = `${input.strategyFamily}_${input.candidateId}_validation_result`
+
+  return {
+    schemaVersion: DATA_LINEAGE_SCHEMA_VERSION,
+    generatedAt: input.generatedAt,
+    nodes: [
+      {
+        id: rawNodeId,
+        type: 'raw_source',
+        qualityStatus: 'ok',
+        source: 'local_csv',
+        endpoint: input.args.inputCsv,
+        symbol: input.args.symbol,
+        firstTimestamp: input.candles[0]?.time ? marketTimeToIso(input.candles[0].time) : null,
+        lastTimestamp: input.candles[input.candles.length - 1]?.time
+          ? marketTimeToIso(input.candles[input.candles.length - 1].time)
+          : null,
+        metadata: {
+          selection_bar_count: input.candles.length,
+          holdout_bar_count: input.holdoutCandles.length,
+          peer_symbols: Object.keys(input.args.peerCsvBySymbol ?? {}).sort(),
+        },
+      },
+      {
+        id: normalizedNodeId,
+        type: 'normalized_series',
+        qualityStatus: 'ok',
+        parents: [rawNodeId],
+        symbol: input.args.symbol,
+      },
+      {
+        id: featureNodeId,
+        type: 'feature',
+        qualityStatus: 'ok',
+        parents: [normalizedNodeId],
+        symbol: input.args.symbol,
+        availableTimePolicy: DATA_LINEAGE_PIT_POLICY,
+        metadata: {
+          strategy_family: input.strategyFamily,
+          pit_audit_status: 'stub_blocked_by_feature_availability_audit',
+        },
+      },
+      {
+        id: strategyInputNodeId,
+        type: 'strategy_input',
+        qualityStatus: 'ok',
+        parents: [featureNodeId],
+        symbol: input.args.symbol,
+        availableTimePolicy: DATA_LINEAGE_PIT_POLICY,
+        metadata: {
+          candidate_id: input.candidateId,
+        },
+      },
+      {
+        id: decisionArtifactNodeId,
+        type: 'decision_artifact',
+        qualityStatus: 'ok',
+        parents: [strategyInputNodeId],
+        symbol: input.args.symbol,
+        availableTimePolicy: DATA_LINEAGE_PIT_POLICY,
+        metadata: {
+          evidence_id: input.evidenceId,
+          verdict: 'blocked',
+        },
+      },
+    ],
+  }
+}
+
+function marketTimeToIso(timeSeconds: number): string {
+  return new Date(timeSeconds * 1000).toISOString()
+}
+
+function buildFailClosedFdrReport(input: {
+  meta: Omit<FdrReport, (
+    | 'schema_version'
+    | 'status'
+    | 'promotion_allowed'
+    | 'fdr_method_primary'
+    | 'fdr_method_secondary'
+    | 'raw_m'
+    | 'effective_m'
+    | 'raw_m_complete'
+    | 'includes_failed_trials'
+    | 'p_values_available'
+    | 'missing_p_value_count'
+    | 'p_value'
+    | 'p_value_method'
+    | 'p_value_scope'
+    | 'p_value_is_promotion_grade'
+    | 'benchmark_candidate_index'
+    | 'bootstrap_samples'
+    | 'bootstrap_block_size'
+    | 'bootstrap_block_size_set'
+    | 'bootstrap_direction_stable'
+    | 'p_value_block_sensitivity'
+    | 'observed_mean_excess'
+    | 'p_adjusted_by_raw_m'
+    | 'p_adjusted_by_effective_m'
+    | 'p_adjusted_bh_secondary'
+    | 'blocking_reasons'
+    | 'notes'
+  )>
+  significance: SignificanceGateResult
+  candidateReturns: number[][]
+  selectedCandidateIndex: number
+  riskBlockSize: number
+}): FdrReport {
+  const trialLedger = input.significance.trialLedger
+  const rawM = Math.max(0, Math.floor(trialLedger?.rawM ?? input.significance.candidateTrialCount ?? 0))
+  const effectiveM = Math.max(0, Math.floor(trialLedger?.effectiveM ?? rawM))
+  const rawMComplete = trialLedger?.rawMComplete === true
+  const includesFailedTrials = trialLedger?.includesFailedTrials === true
+  const pValueEstimate = buildExplanatoryValidationPValue({
+    candidateReturns: input.candidateReturns,
+    selectedCandidateIndex: input.selectedCandidateIndex,
+    riskBlockSize: input.riskBlockSize,
+  })
+  const pValue: number | null = pValueEstimate.pValue
+  const pValuesAvailable = pValue != null && pValueEstimate.blockedReason == null
+  const blockingReasons: FdrReport['blocking_reasons'] = []
+
+  if (!rawMComplete) {
+    blockingReasons.push({
+      code: 'FDR_INPUTS_INCOMPLETE',
+      severity: 'hard_block',
+      source: 'trial_ledger',
+      required: 'raw_m_complete=true from complete trial universe marker',
+      observed: 'raw_m_complete=false',
+    })
+  }
+  if (!includesFailedTrials) {
+    blockingReasons.push({
+      code: 'FDR_INPUTS_INCOMPLETE',
+      severity: 'hard_block',
+      source: 'trial_ledger',
+      required: 'includes_failed_trials=true',
+      observed: 'includes_failed_trials=false',
+    })
+  }
+  if (!pValuesAvailable) {
+    blockingReasons.push({
+      code: 'FDR_INPUTS_INCOMPLETE',
+      severity: 'hard_block',
+      source: 'validation_runner',
+      required: 'finite p_value for every included FDR trial',
+      observed: pValueEstimate.blockedReason ?? 'p_value=null',
+    })
+  }
+
+  return {
+    schema_version: 'evidence_os_v4_fdr_report.v4_0',
+    ...input.meta,
+    status: blockingReasons.length === 0 ? 'ready_explanatory_only' : 'blocked_inputs_incomplete',
+    promotion_allowed: false,
+    fdr_method_primary: 'BY_raw_m',
+    fdr_method_secondary: 'BY_effective_m',
+    raw_m: rawM,
+    effective_m: effectiveM,
+    raw_m_complete: rawMComplete,
+    includes_failed_trials: includesFailedTrials,
+    p_values_available: pValuesAvailable,
+    missing_p_value_count: pValuesAvailable ? 0 : 1,
+    p_value: pValue,
+    p_value_method: pValueEstimate.method,
+    p_value_scope: pValueEstimate.scope,
+    p_value_is_promotion_grade: false,
+    benchmark_candidate_index: pValueEstimate.benchmarkCandidateIndex,
+    bootstrap_samples: pValueEstimate.bootstrapSamples,
+    bootstrap_block_size: pValueEstimate.bootstrapBlockSize,
+    bootstrap_block_size_set: pValueEstimate.bootstrapBlockSizeSet,
+    bootstrap_direction_stable: pValueEstimate.bootstrapDirectionStable,
+    p_value_block_sensitivity: pValueEstimate.blockSensitivity.map((entry) => ({
+      block_size: entry.blockSize,
+      observed_mean_excess: entry.observedMeanExcess,
+      p_value: entry.pValue,
+      passed: entry.passed,
+    })),
+    observed_mean_excess: pValueEstimate.observedMeanExcess,
+    p_adjusted_by_raw_m: pValuesAvailable
+      ? byAdjustedPValue(pValue, rawM)
+      : null,
+    p_adjusted_by_effective_m: pValuesAvailable
+      ? byAdjustedPValue(pValue, effectiveM)
+      : null,
+    p_adjusted_bh_secondary: pValuesAvailable
+      ? bhAdjustedPValue(pValue, rawM)
+      : null,
+    blocking_reasons: blockingReasons,
+    notes: [
+      'This artifact exists so downstream ledgers can distinguish missing FDR output from incomplete promotion-grade FDR inputs.',
+      'promotion_allowed is hard-coded false until a complete trial universe, failed-trial coverage, promotion-grade p-values, and row-level PIT audit are available.',
+      'p_value, when present, is explanatory only: it compares the selected holdout return series against a deterministic holdout benchmark candidate and must not be used alone for promotion.',
+      'When the explanatory p-value cannot be computed, p_value is null and fdr_p_value_blocked_reason explains why; do not substitute p=1 into BY/BH sorting.',
+      'BY_raw_m remains the primary promotion method; BY_effective_m is explanatory only.',
+    ],
+  }
+}
+
+function resolveCompleteTrialUniverseMarkerInput(input: {
+  significance: SignificanceGateResult
+  evidenceId: string
+  fdrFamily: string
+  batchId: string
+  createdAt: string
+}): Parameters<typeof buildCompleteTrialUniverseMarkerRecord>[0] | null {
+  const ledger = input.significance.trialLedger
+  if (!ledger?.rawMComplete || !ledger.includesFailedTrials) return null
+
+  const rawM = nonNegativeIntegerOrNull(ledger.rawM)
+  const effectiveM = nonNegativeIntegerOrNull(ledger.effectiveM ?? ledger.rawM)
+  const failedTrialCount = nonNegativeIntegerOrNull(ledger.failedTrialCount)
+  const survivingTrialCount = nonNegativeIntegerOrNull(ledger.survivingTrialCount)
+  if (
+    rawM == null ||
+    effectiveM == null ||
+    failedTrialCount == null ||
+    survivingTrialCount == null ||
+    failedTrialCount + survivingTrialCount !== rawM
+  ) {
+    return null
+  }
+
+  const markerHash = hashEvidenceComponent({
+    schema: 'complete_trial_universe_marker.v1',
+    evidenceId: input.evidenceId,
+    fdrFamily: input.fdrFamily,
+    rawM,
+    effectiveM,
+    failedTrialCount,
+    survivingTrialCount,
+    batchId: input.batchId,
+  }).replace(/^sha256:/, '')
+
+  return {
+    trialId: `trial_universe_${markerHash.slice(0, 24)}`,
+    evidenceId: input.evidenceId,
+    fdrFamily: input.fdrFamily,
+    rawM,
+    effectiveM,
+    includedTrialCount: rawM,
+    failedTrialCount,
+    survivingTrialCount,
+    batchId: input.batchId,
+    createdAt: input.createdAt,
+  }
+}
+
+async function appendCompleteTrialUniverseMarkerIfReady(input: {
+  significance: SignificanceGateResult
+  evidenceId: string
+  fdrFamily: string
+  batchId: string
+  createdAt: string
+  trialRegistryPath: string | null
+}): Promise<CompleteTrialUniverseMarkerAppendResult> {
+  const ledger = input.significance.trialLedger
+  if (!ledger?.rawMComplete) {
+    return {
+      appended: false,
+      reason: 'raw_m_complete_false',
+      trialId: null,
+    }
+  }
+  if (!ledger.includesFailedTrials) {
+    return {
+      appended: false,
+      reason: 'includes_failed_trials_false',
+      trialId: null,
+    }
+  }
+
+  const markerInput = resolveCompleteTrialUniverseMarkerInput(input)
+  if (!markerInput) {
+    return {
+      appended: false,
+      reason: 'invalid_trial_universe_counts',
+      trialId: null,
+    }
+  }
+  if (!input.trialRegistryPath) {
+    return {
+      appended: false,
+      reason: 'trial_registry_path_not_configured',
+      trialId: markerInput.trialId,
+    }
+  }
+
+  try {
+    await appendTrialRecord(
+      buildCompleteTrialUniverseMarkerRecord(markerInput),
+      input.trialRegistryPath,
+    )
+  } catch (err) {
+    if (err instanceof TrialRegistryError && err.code === DUPLICATE_TRIAL_ID) {
+      return {
+        appended: false,
+        reason: 'complete_trial_universe_marker_already_exists',
+        trialId: markerInput.trialId,
+      }
+    }
+    throw err
+  }
+  return {
+    appended: true,
+    reason: 'complete_trial_universe_marker_appended',
+    trialId: markerInput.trialId,
+  }
+}
+
+function nonNegativeIntegerOrNull(value: unknown): number | null {
+  if (!Number.isInteger(value) || (value as number) < 0) return null
+  return value as number
+}
+
+type ExplanatoryValidationPValue = {
+  pValue: number | null
+  method: string | null
+  scope: FdrReport['p_value_scope']
+  benchmarkCandidateIndex: number | null
+  bootstrapSamples: number | null
+  bootstrapBlockSize: number | null
+  bootstrapBlockSizeSet: number[]
+  bootstrapDirectionStable: boolean | null
+  blockSensitivity: SpaLikeCandidateResult['blockSensitivity']
+  observedMeanExcess: number | null
+  blockedReason: string | null
+}
+
+function buildExplanatoryValidationPValue(input: {
+  candidateReturns: number[][]
+  selectedCandidateIndex: number
+  riskBlockSize: number
+}): ExplanatoryValidationPValue {
+  const empty = (blockedReason: string): ExplanatoryValidationPValue => ({
+    pValue: null,
+    method: null,
+    scope: null,
+    benchmarkCandidateIndex: null,
+    bootstrapSamples: null,
+    bootstrapBlockSize: null,
+    bootstrapBlockSizeSet: [],
+    bootstrapDirectionStable: null,
+    blockSensitivity: [],
+    observedMeanExcess: null,
+    blockedReason,
+  })
+  if (input.candidateReturns.length < 2) {
+    return empty('need_at_least_two_candidate_return_series')
+  }
+  const benchmarkCandidateIndex = resolveExplanatoryBenchmarkIndex(
+    input.selectedCandidateIndex,
+    input.candidateReturns.length,
+  )
+  if (benchmarkCandidateIndex == null) {
+    return empty('no_distinct_holdout_benchmark_candidate_available')
+  }
+
+  try {
+    const result = computeSpaLikePValues({
+      candidateReturns: input.candidateReturns,
+      benchmarkIndex: benchmarkCandidateIndex,
+      bootstrapSamples: 400,
+      blockSize: Math.max(2, Math.floor(input.riskBlockSize)),
+      alpha: 0.05,
+    })
+    const selectedItem = result.items.find(
+      (item) => item.candidateIndex === input.selectedCandidateIndex,
+    )
+    if (!selectedItem || !Number.isFinite(selectedItem.pValue)) {
+      return empty('selected_candidate_p_value_not_finite')
+    }
+    return {
+      pValue: selectedItem.pValue,
+      method: 'spa_like_moving_block_selected_vs_deterministic_holdout_benchmark_v1',
+      scope: 'explanatory_selected_vs_holdout_benchmark',
+      benchmarkCandidateIndex,
+      bootstrapSamples: result.bootstrapSamples,
+      bootstrapBlockSize: result.blockSize,
+      bootstrapBlockSizeSet: result.blockSizeSet,
+      bootstrapDirectionStable: selectedItem.bootstrapDirectionStable,
+      blockSensitivity: selectedItem.blockSensitivity,
+      observedMeanExcess: selectedItem.observedMeanExcess,
+      blockedReason: null,
+    }
+  } catch (err) {
+    return empty(err instanceof Error ? err.message : String(err))
+  }
+}
+
+function resolveExplanatoryBenchmarkIndex(
+  selectedCandidateIndex: number,
+  candidateCount: number,
+): number | null {
+  if (!Number.isInteger(selectedCandidateIndex) || selectedCandidateIndex < 0 || selectedCandidateIndex >= candidateCount) {
+    return null
+  }
+  if (candidateCount < 2) return null
+  if (selectedCandidateIndex !== 0) return 0
+  return 1
+}
+
+function byAdjustedPValue(pValue: number, trialCount: number): number | null {
+  if (!Number.isFinite(pValue) || !Number.isFinite(trialCount) || trialCount < 1) return null
+  return Math.min(1, Math.max(0, pValue) * Math.floor(trialCount) * harmonicNumber(Math.floor(trialCount)))
+}
+
+function bhAdjustedPValue(pValue: number, trialCount: number): number | null {
+  if (!Number.isFinite(pValue) || !Number.isFinite(trialCount) || trialCount < 1) return null
+  return Math.min(1, Math.max(0, pValue) * Math.floor(trialCount))
+}
+
+function harmonicNumber(n: number): number {
+  let total = 0
+  for (let index = 1; index <= n; index += 1) total += 1 / index
+  return total
+}
+
+function buildFeatureAvailabilityAudit(input: {
+  meta: Record<string, unknown>
+  dataLineageGraph: DataLineageGraph
+  strategyFamilyContract: StrategyFamilyContract
+  holdoutCandles: MarketData[]
+}): Record<string, unknown> {
+  const lineageValidation = validateDataLineageGraph(input.dataLineageGraph)
+  const holdoutStart = input.holdoutCandles[0]?.time ?? null
+  const holdoutEnd = input.holdoutCandles[input.holdoutCandles.length - 1]?.time ?? null
+  const holdoutStartIso = holdoutStart == null ? null : marketTimeToIso(holdoutStart)
+  const holdoutEndIso = holdoutEnd == null ? null : marketTimeToIso(holdoutEnd)
+  const rowLevelProxyAudit = buildCsvRowLevelPitProxyAudit(input.holdoutCandles)
+  const checks: PitAuditCheck[] = [
+    ...input.dataLineageGraph.nodes.flatMap((node) =>
+      pitChecksForLineageNode({
+        node,
+        holdoutStart,
+        holdoutEnd,
+      }),
+    ),
+    ...input.strategyFamilyContract.requiredFeatures.map((feature) => ({
+      id: `contract_required_feature:${feature.featureId}`,
+      status: feature.availableTimePolicy === DATA_LINEAGE_PIT_POLICY ? 'pass' as const : 'fail' as const,
+      node_id: null,
+      node_type: 'contract_feature',
+      source: 'strategy_family_contract',
+      required: DATA_LINEAGE_PIT_POLICY,
+      observed: feature.availableTimePolicy,
+      details: {
+        feature_id: feature.featureId,
+        required: feature.required,
+        quality_statuses_allowed: feature.qualityStatusesAllowed,
+      },
+    })),
+    {
+      id: 'row_level_available_time_audit',
+      status: 'blocked',
+      node_id: null,
+      node_type: null,
+      source: 'validation_runner',
+      required: 'promotion-grade per-row system arrival_time <= decision_time proof',
+      observed: rowLevelProxyAudit.observed,
+      details: rowLevelProxyAudit,
+    },
+  ]
+  const blockingReasons = [
+    ...lineageValidation.blockingReasons.map((reason) => ({
+      code: reason.code,
+      severity: 'hard_block',
+      source: 'data_lineage',
+      node_id: reason.nodeId ?? null,
+      required: reason.required ?? DATA_LINEAGE_PIT_POLICY,
+      observed: reason.observed ?? reason.qualityStatus ?? 'lineage_validation_block',
+    })),
+    ...checks
+      .filter((check) => check.status !== 'pass')
+      .map((check) => ({
+        code: pitBlockingCodeForCheck(check),
+        severity: 'hard_block',
+        source: check.source,
+        node_id: check.node_id,
+        required: check.required,
+        observed: check.observed,
+      })),
+  ]
+
+  return {
+    schema_version: 'evidence_os_v4_feature_availability_audit.v4_0',
+    ...input.meta,
+    status: blockingReasons.length === 0 ? 'pass' : 'blocked',
+    policy: DATA_LINEAGE_PIT_POLICY,
+    holdout_window: {
+      start_time: holdoutStart,
+      end_time: holdoutEnd,
+      start_time_iso: holdoutStartIso,
+      end_time_iso: holdoutEndIso,
+      candle_count: input.holdoutCandles.length,
+    },
+    lineage_validation: {
+      passed: lineageValidation.passed,
+      hash: lineageValidation.hash,
+      blocking_reasons: lineageValidation.blockingReasons,
+    },
+    row_level_proxy_audit: rowLevelProxyAudit,
+    checks,
+    blocking_reasons: blockingReasons,
+  }
+}
+
+function pitBlockingCodeForCheck(check: PitAuditCheck): EvidenceOsFailureCode {
+  if (check.id !== 'row_level_available_time_audit') return 'PIT_VIOLATION'
+  return check.details.proxy_status === 'fail' ? 'PIT_VIOLATION' : 'PIT_PROXY_ONLY'
+}
+
+function pitChecksForLineageNode(input: {
+  node: DataLineageNode
+  holdoutStart: number | null
+  holdoutEnd: number | null
+}): PitAuditCheck[] {
+  const checks: PitAuditCheck[] = []
+  const { node } = input
+  if (node.type === 'feature' || node.type === 'strategy_input' || node.type === 'decision_artifact') {
+    checks.push({
+      id: `available_time_policy:${node.id}`,
+      status: node.availableTimePolicy === DATA_LINEAGE_PIT_POLICY ? 'pass' : 'fail',
+      node_id: node.id,
+      node_type: node.type,
+      source: 'data_lineage',
+      required: DATA_LINEAGE_PIT_POLICY,
+      observed: node.availableTimePolicy ?? 'missing',
+      details: {
+        quality_status: node.qualityStatus,
+      },
+    })
+  }
+  if (node.lastTimestamp != null && input.holdoutEnd != null) {
+    const lastTimestampMs = Date.parse(node.lastTimestamp)
+    const holdoutEndMs = input.holdoutEnd * 1000
+    checks.push({
+      id: `lineage_timestamp_not_after_holdout:${node.id}`,
+      status: Number.isFinite(lastTimestampMs) && lastTimestampMs <= holdoutEndMs ? 'pass' : 'fail',
+      node_id: node.id,
+      node_type: node.type,
+      source: 'data_lineage',
+      required: 'lineage lastTimestamp <= holdout end',
+      observed: node.lastTimestamp,
+      details: {
+        holdout_end: input.holdoutEnd,
+        holdout_end_iso: marketTimeToIso(input.holdoutEnd),
+      },
+    })
+  }
+  return checks
+}
+
+function buildCsvRowLevelPitProxyAudit(holdoutCandles: MarketData[]): Record<string, unknown> & {
+  observed: string
+} {
+  const rowCount = holdoutCandles.length
+  const timestamps = holdoutCandles.map((candle) => candle.time)
+  const invalidTimestampCount = timestamps.filter((time) => !Number.isFinite(time)).length
+  let nonIncreasingCount = 0
+  for (let index = 1; index < timestamps.length; index += 1) {
+    if (timestamps[index] <= timestamps[index - 1]) nonIncreasingCount += 1
+  }
+  const firstDecisionTime = timestamps[0] ?? null
+  const lastDecisionTime = timestamps[timestamps.length - 1] ?? null
+  const eventTimeAfterDecisionTimeCount = holdoutCandles.filter((candle) => candle.time > candle.time).length
+  const proxyPassed =
+    rowCount > 0 &&
+    invalidTimestampCount === 0 &&
+    nonIncreasingCount === 0 &&
+    eventTimeAfterDecisionTimeCount === 0
+
+  return {
+    observed: proxyPassed
+      ? 'proxy_event_time_ordering_passed_but_arrival_time_missing'
+      : 'proxy_event_time_ordering_failed_or_empty',
+    proxy_status: proxyPassed ? 'pass' : 'fail',
+    promotion_grade: false,
+    proxy_type: 'csv_bar_event_time_as_decision_time',
+    row_count: rowCount,
+    invalid_timestamp_count: invalidTimestampCount,
+    non_increasing_timestamp_count: nonIncreasingCount,
+    event_time_after_decision_time_count: eventTimeAfterDecisionTimeCount,
+    first_decision_time: firstDecisionTime,
+    first_decision_time_iso: firstDecisionTime == null ? null : marketTimeToIso(firstDecisionTime),
+    last_decision_time: lastDecisionTime,
+    last_decision_time_iso: lastDecisionTime == null ? null : marketTimeToIso(lastDecisionTime),
+    reason: 'CSV validation rows expose bar event times but not per-feature system arrival timestamps; proxy evidence cannot authorize promotion.',
+    required_upgrade: 'persist per-feature available_time/arrival_time from the live data pipeline and prove available_time <= decision_time row by row',
+  }
+}
+
+async function writeEvidenceOsV4Artifacts(
+  input: EvidenceOsV4ArtifactsInput,
+): Promise<EvidenceOsV4ArtifactsResult> {
+  const createdAt = new Date().toISOString()
+  const strategyFamily = normalizeStrategyFamily(input.args.strategy)
+  const strategyFamilyContract = resolveValidationStrategyFamilyContract(strategyFamily)
+  const strategyFamilyContractValidation = validateStrategyFamilyContract(strategyFamilyContract)
+  const codeCommit = currentCodeCommit()
+  const selectedParams = input.selectedEvaluation.params
+  const strategyConfigHash = hashEvidenceComponent({
+    strategy: input.args.strategy,
+    params: selectedParams,
+    candidates: input.args.candidates ?? [input.args.params],
+  })
+  const dataManifest = {
+    schema: 'validation_data_manifest_stub.v4_0',
+    inputCsv: input.args.inputCsv,
+    symbol: input.args.symbol,
+    peerCsvBySymbol: input.args.peerCsvBySymbol ?? {},
+    candleCount: input.candles.length,
+    firstTimestamp: input.candles[0]?.time ?? null,
+    lastTimestamp: input.candles[input.candles.length - 1]?.time ?? null,
+    holdoutFirstTimestamp: input.holdoutCandles[0]?.time ?? null,
+    holdoutLastTimestamp: input.holdoutCandles[input.holdoutCandles.length - 1]?.time ?? null,
+  }
+  const dataManifestHash = hashEvidenceComponent(dataManifest)
+  const featureSchemaHash = hashEvidenceComponent({
+    schema: 'validation_feature_schema.v4_0',
+    strategy: input.args.strategy,
+    selectedParamKeys: Object.keys(selectedParams).sort(),
+    featureLogicNote:
+      'Increment this schema input whenever signal, feature lag, smoothing, or label logic changes.',
+    icHorizons: input.strategySignalIcByHorizon.map((horizon) => horizon.horizonBars),
+    pitPolicy: 'available_time <= decision_time',
+  })
+  const validationProfileHash = hashEvidenceComponent({
+    schema: 'validation_profile.v4_0',
+    trainBars: input.args.trainBars,
+    testBars: input.args.testBars,
+    stepBars: input.args.stepBars,
+    degradationThreshold: input.args.degradationThreshold,
+    significancePartitions: input.args.significancePartitions,
+    riskSimulationMethod: input.args.riskSimulationMethod,
+    riskSimulationCount: input.args.riskSimulationCount,
+    riskHorizonBars: input.args.riskHorizonBars,
+    riskBlockSize: input.args.riskBlockSize,
+    riskRuinDrawdownPct: input.args.riskRuinDrawdownPct,
+    riskMaxRuinProbability: input.args.riskMaxRuinProbability,
+    riskMinProfitProbability: input.args.riskMinProfitProbability,
+    selectionPolicy: 'selection_holdout_non_overlapping',
+  })
+  const costModelHash = hashEvidenceComponent({
+    schema: 'validation_cost_model.v4_0',
+    ...input.costModel,
+  })
+  const { evidenceId, hashHex } = buildEvidenceId({
+    strategyFamily,
+    strategyConfigHash,
+    dataManifestHash,
+    featureSchemaHash,
+    validationProfileHash,
+    costModelHash,
+  })
+  const evidenceKey = evidenceIdToPathKey(evidenceId)
+  const artifactDir = resolve(input.args.evidenceOutputRoot, 'validation', evidenceKey)
+  const trialId = `trial_${hashHex.slice(0, 16)}_${randomUUID()}`
+  const candidateId = `candidate_${input.selectedCandidateIndex}_${hashHex.slice(0, 16)}`
+  const validationResultPath = join(artifactDir, 'validation_result.json')
+  const trialRecordPath = join(artifactDir, 'trial_record.json')
+  const featureAvailabilityAuditPath = join(artifactDir, 'feature_availability_audit.json')
+  const fdrReportPath = join(artifactDir, 'fdr_report.json')
+  const promotionProvenancePath = join(artifactDir, 'promotion_verdict_provenance.json')
+  const dataManifestPath = join(artifactDir, 'data_manifest.json')
+  const dataLineagePath = join(artifactDir, 'data_lineage.latest.json')
+  const dataLineageGraph = buildValidationDataLineageGraph({
+    args: input.args,
+    candles: input.candles,
+    holdoutCandles: input.holdoutCandles,
+    strategyFamily,
+    candidateId,
+    evidenceId,
+    generatedAt: createdAt,
+  })
+  const dataLineageHash = hashDataLineageGraph(dataLineageGraph)
+  const fdrReport = buildFailClosedFdrReport({
+    meta: {
+      evidence_id: evidenceId,
+      strategy_family: strategyFamily,
+      candidate_id: candidateId,
+      code_commit: codeCommit,
+      data_manifest_hash: dataManifestHash,
+      data_lineage_hash: dataLineageHash,
+      feature_schema_hash: featureSchemaHash,
+      validation_profile_hash: validationProfileHash,
+      cost_model_hash: costModelHash,
+      created_at: createdAt,
+    },
+    significance: input.significance,
+    candidateReturns: input.candidateReturns,
+    selectedCandidateIndex: input.selectedCandidateIndex,
+    riskBlockSize: input.args.riskBlockSize,
+  })
+  const featureAvailabilityAudit = buildFeatureAvailabilityAudit({
+    meta: {
+      evidence_id: evidenceId,
+      strategy_family: strategyFamily,
+      candidate_id: candidateId,
+      code_commit: codeCommit,
+      data_manifest_hash: dataManifestHash,
+      data_lineage_hash: dataLineageHash,
+      feature_schema_hash: featureSchemaHash,
+      validation_profile_hash: validationProfileHash,
+      cost_model_hash: costModelHash,
+      created_at: createdAt,
+      strategy_family_contract: strategyFamilyContractToJson(strategyFamilyContract),
+      strategy_family_contract_validation: {
+        passed: strategyFamilyContractValidation.passed,
+        blocking_reasons: strategyFamilyContractValidation.blockingReasons,
+      },
+    },
+    dataLineageGraph,
+    strategyFamilyContract,
+    holdoutCandles: input.holdoutCandles,
+  })
+  const fdrBlockingReasons = fdrReport.blocking_reasons.map((reason) => reason.observed)
+  const pitProxyAudit = asRecord(featureAvailabilityAudit.row_level_proxy_audit)
+  const pitAuditBlockingCodes = featureAvailabilityAudit.blocking_reasons
+    .map((reason) => reason.code)
+    .filter((code): code is string => typeof code === 'string')
+  const failureCodes: FailureCode[] = [...new Set([
+    ...fdrReport.blocking_reasons.map((reason) => reason.code),
+    ...pitAuditBlockingCodes,
+  ])] as FailureCode[]
+
+  const fdrFamily = '2026Q2_crypto_evidence_os_v4'
+  const batchId = `batch_${hashHex.slice(0, 12)}`
+  const trialRecord: TrialRecord = {
+    trialId,
+    evidenceId,
+    trialType: 'alpha_candidate',
+    strategyFamily,
+    candidateId,
+    hypothesis: `Validate ${strategyFamily} candidate under Evidence OS v4.0 fail-closed gates.`,
+    primaryMetric: 'cost_adjusted_net_expectancy_bps',
+    secondaryMetrics: ['ic_mean', 'ic_ir', 'max_drawdown', 'turnover'],
+    pValue: fdrReport.p_value,
+    includedInFdr: true,
+    fdrFamily,
+    promotionEligible: false,
+    status: 'failed_validation',
+    failureCodes,
+    batchId,
+    createdAt,
+    metadata: {
+      code_commit: codeCommit,
+      selected_candidate_index: input.selectedCandidateIndex,
+      output_report_path: input.outputPath,
+      evidence_os_version: 'v4.0',
+      strategy_family_contract_status: strategyFamilyContractValidation.passed ? 'passed' : 'blocked',
+      strategy_family_contract_blocks: strategyFamilyContractValidation.blockingReasons,
+      raw_m_complete: fdrReport.raw_m_complete,
+      includes_failed_trials: fdrReport.includes_failed_trials,
+      p_value_source: fdrReport.p_value == null ? 'missing' : 'fdr_report',
+      fdr_report_path: fdrReportPath,
+      fdr_report_path_source: 'generated_artifact',
+      fdr_report_status: fdrReport.status,
+      fdr_p_values_available: fdrReport.p_values_available,
+      fdr_missing_p_value_count: fdrReport.missing_p_value_count,
+      fdr_p_value_blocked_reason: fdrBlockingReasons.find((reason) =>
+        reason !== 'raw_m_complete=false' &&
+        reason !== 'includes_failed_trials=false'
+      ) ?? null,
+      fdr_p_value_method: fdrReport.p_value_method,
+      fdr_p_value_scope: fdrReport.p_value_scope,
+      fdr_p_value_is_promotion_grade: fdrReport.p_value_is_promotion_grade,
+      fdr_p_value_promotion_grade_source: 'fdr_report',
+      fdr_observed_mean_excess: fdrReport.observed_mean_excess,
+      fdr_bootstrap_samples: fdrReport.bootstrap_samples,
+      fdr_candidate_count: fdrReport.raw_m,
+      fdr_holdout_return_count: input.candidateReturns[input.selectedCandidateIndex]?.length ?? 0,
+      fdr_benchmark_candidate_index: fdrReport.benchmark_candidate_index,
+      fdr_bootstrap_block_size: fdrReport.bootstrap_block_size,
+      fdr_bootstrap_block_size_set: fdrReport.bootstrap_block_size_set,
+      fdr_bootstrap_direction_stable: fdrReport.bootstrap_direction_stable,
+      feature_availability_audit_path: featureAvailabilityAuditPath,
+      pit_audit_path: featureAvailabilityAuditPath,
+      pit_audit_source: 'feature_availability_audit',
+      pit_audit_status: featureAvailabilityAudit.status,
+      pit_audit_blocking_codes: pitAuditBlockingCodes,
+      pit_audit_proxy_type: stringOrNull(pitProxyAudit?.proxy_type),
+      pit_audit_promotion_grade: booleanOrNull(pitProxyAudit?.promotion_grade) ?? false,
+      pit_audit_promotion_grade_source: 'feature_availability_audit',
+      promotion_decision_source: 'fail_closed_validation_pipeline',
+    },
+  }
+
+  const meta = {
+    evidence_id: evidenceId,
+    strategy_family: strategyFamily,
+    candidate_id: candidateId,
+    code_commit: codeCommit,
+    data_manifest_hash: dataManifestHash,
+    data_lineage_hash: dataLineageHash,
+    feature_schema_hash: featureSchemaHash,
+    validation_profile_hash: validationProfileHash,
+    cost_model_hash: costModelHash,
+    created_at: createdAt,
+    strategy_family_contract: strategyFamilyContractToJson(strategyFamilyContract),
+    strategy_family_contract_validation: {
+      passed: strategyFamilyContractValidation.passed,
+      blocking_reasons: strategyFamilyContractValidation.blockingReasons,
+    },
+  }
+  const icValues = input.strategySignalIcByHorizon
+    .map((horizon) => horizon.pearsonIc)
+    .filter((value) => Number.isFinite(value))
+  const validationResult = {
+    schema_version: 'evidence_os_v4_validation_result.v4_0',
+    ...meta,
+    verdict: 'blocked',
+    metrics: {
+      cost_adjusted_net_expectancy_bps: input.selectedEvaluation.metrics.netExpectancyPct * 100,
+      ic_mean: mean(icValues),
+      ic_ir: informationRatio(icValues),
+      max_drawdown: input.selectedEvaluation.metrics.maxDrawdownPct,
+      turnover: input.selectedEvaluation.metrics.turnoverPctOfInitialCapital,
+      trade_count: input.selectedEvaluation.metrics.tradeCount,
+      wfo_overall_passed: input.wfo.overallPassed,
+      pbo: input.significance.pboResult.pbo,
+      dsr_value: input.significance.dsrResult.dsrValue,
+      risk_of_ruin: input.riskSimulation.riskOfRuin,
+    },
+    blocking_reasons: [
+      {
+        code: 'FDR_INPUTS_INCOMPLETE',
+        source: 'fdr_report',
+        severity: 'hard_block',
+        required: 'complete trial universe with finite p-values before BY_raw_m FDR',
+        observed: fdrReport.status,
+      },
+      {
+        code: 'PIT_PROXY_ONLY',
+        source: 'feature_availability_audit',
+        severity: 'hard_block',
+        required: 'promotion-grade row-level system arrival_time <= decision_time audit',
+        observed: featureAvailabilityAudit.status,
+      },
+    ],
+  }
+  const promotionProvenance = buildBlockedPromotionVerdictProvenance({
+    blockingReasons: [
+      {
+        code: 'FDR_INPUTS_INCOMPLETE',
+        source: 'fdr_report',
+        severity: 'hard_block',
+        required: 'complete trial universe and p-values for BY_raw_m FDR',
+        observed: fdrReport.status,
+      },
+      {
+        code: 'PIT_PROXY_ONLY',
+        source: 'feature_availability_audit',
+        severity: 'hard_block',
+        required: 'promotion-grade row-level system arrival_time <= decision_time audit',
+        observed: featureAvailabilityAudit.status,
+      },
+    ],
+    supportingEvidenceIds: [],
+    excludedEvidenceIds: [
+      {
+        evidenceId,
+        reason: 'validation_artifact_blocked_fdr_inputs_incomplete',
+        source: 'validation_runner',
+      },
+    ],
+    missingEvidence: [
+      'complete_trial_universe_marker',
+      'finite_p_values_for_all_included_trials',
+      'promotion_grade_feature_availability_audit.pass',
+    ],
+    nextRequiredEvidence: [
+      'register complete raw_m including failed and aborted trials',
+      'emit finite p-values from validation statistics before BY_raw_m FDR',
+      'replace CSV proxy PIT audit with row-level system arrival_time evidence',
+    ],
+    generatedAt: createdAt,
+  })
+
+  await mkdir(artifactDir, { recursive: true })
+  await writeFile(dataManifestPath, `${JSON.stringify(dataManifest, null, 2)}\n`, 'utf-8')
+  await writeFile(dataLineagePath, `${JSON.stringify(dataLineageGraphToJson(dataLineageGraph), null, 2)}\n`, 'utf-8')
+  await writeFile(fdrReportPath, `${JSON.stringify(fdrReport, null, 2)}\n`, 'utf-8')
+  await writeFile(validationResultPath, `${JSON.stringify(validationResult, null, 2)}\n`, 'utf-8')
+  await writeFile(trialRecordPath, `${JSON.stringify(trialRecordToJson(trialRecord), null, 2)}\n`, 'utf-8')
+  await writeFile(
+    featureAvailabilityAuditPath,
+    `${JSON.stringify(featureAvailabilityAudit, null, 2)}\n`,
+    'utf-8',
+  )
+  await writeFile(
+    promotionProvenancePath,
+    `${JSON.stringify(promotionVerdictProvenanceToJson(promotionProvenance), null, 2)}\n`,
+    'utf-8',
+  )
+  let trialRegistryAppend = {
+    appended: false,
+    reason: 'trial_registry_path_not_configured',
+    trialId,
+  }
+  if (input.args.trialRegistryPath) {
+    await appendTrialRecord(trialRecord, input.args.trialRegistryPath)
+    trialRegistryAppend = {
+      appended: true,
+      reason: 'trial_record_appended',
+      trialId,
+    }
+  }
+  const completeTrialUniverseMarker = await appendCompleteTrialUniverseMarkerIfReady({
+    significance: input.significance,
+    evidenceId,
+    fdrFamily,
+    batchId,
+    createdAt,
+    trialRegistryPath: input.args.trialRegistryPath,
+  })
+
+  return {
+    summary: {
+      version: 'v4.0',
+      evidenceId,
+      evidenceKey,
+      artifactDir,
+      trialId,
+      strategyFamily,
+      candidateId,
+      selectedCandidateIndex: input.selectedCandidateIndex,
+      verdict: 'blocked',
+      status: 'blocked_fdr_inputs_incomplete',
+      promotionEligible: false,
+      dataManifestHash,
+      dataLineageHash,
+      featureSchemaHash,
+      validationProfileHash,
+      costModelHash,
+      codeCommit,
+      artifactPaths: {
+        dataManifest: dataManifestPath,
+        dataLineage: dataLineagePath,
+        fdrReport: fdrReportPath,
+        validationResult: validationResultPath,
+        trialRecord: trialRecordPath,
+        featureAvailabilityAudit: featureAvailabilityAuditPath,
+        promotionVerdictProvenance: promotionProvenancePath,
+        trialRegistry: input.args.trialRegistryPath ? resolve(input.args.trialRegistryPath) : null,
+      },
+      trialRegistryAppend,
+      completeTrialUniverseMarker,
+      failureCodes,
+      strategyFamilyContract: strategyFamilyContractToJson(strategyFamilyContract),
+      strategyFamilyContractValidation: {
+        passed: strategyFamilyContractValidation.passed,
+        blockingReasons: strategyFamilyContractValidation.blockingReasons,
+      },
+    },
+  }
+}
+
+function normalizeStrategyFamily(strategy: string): string {
+  return strategy
+    .replaceAll(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replaceAll(/[^a-zA-Z0-9]+/g, '_')
+    .replaceAll(/^_+|_+$/g, '')
+    .toLowerCase()
+}
+
+function resolveValidationStrategyFamilyContract(strategyFamily: string): StrategyFamilyContract {
+  const known = getStrategyFamilyContract(strategyFamily)
+  if (known) return known
+  return {
+    familyId: strategyFamily,
+    role: 'research',
+    requiredFeatures: [
+      {
+        featureId: `${strategyFamily}_validation_features`,
+        required: true,
+        availableTimePolicy: 'available_time <= decision_time',
+        qualityStatusesAllowed: ['ok'],
+      },
+    ],
+    decisionHorizon: 'legacy_validation_default',
+    labelHorizon: 'legacy_validation_default',
+    allowedUniverse: ['validation_input_symbol'],
+    maxTurnover: 1,
+    maxLeverage: 1,
+    promotionEligibility: 'research_only',
+    failureModes: ['FDR_INPUTS_INCOMPLETE', 'PIT_PROXY_ONLY'],
+    nextMutationAllowed: 'retry_after_new_hypothesis',
+    paperEvidenceRequirement: {
+      minLiveOnlyDays: 14,
+      minDecisionCount: 30,
+      minExecutedTradeCount: 10,
+      minEventCount: 0,
+      maxReportAgeSeconds: 900,
+    },
+  }
+}
+
+function strategyFamilyContractToJson(contract: StrategyFamilyContract): Record<string, unknown> {
+  return {
+    family_id: contract.familyId,
+    role: contract.role,
+    required_features: contract.requiredFeatures.map((feature) => ({
+      feature_id: feature.featureId,
+      required: feature.required,
+      available_time_policy: feature.availableTimePolicy,
+      quality_statuses_allowed: feature.qualityStatusesAllowed,
+    })),
+    decision_horizon: contract.decisionHorizon,
+    label_horizon: contract.labelHorizon,
+    allowed_universe: contract.allowedUniverse,
+    max_turnover: contract.maxTurnover,
+    max_leverage: contract.maxLeverage,
+    promotion_eligibility: contract.promotionEligibility,
+    failure_modes: contract.failureModes,
+    next_mutation_allowed: contract.nextMutationAllowed,
+    paper_evidence_requirement: {
+      min_live_only_days: contract.paperEvidenceRequirement.minLiveOnlyDays,
+      min_decision_count: contract.paperEvidenceRequirement.minDecisionCount,
+      min_executed_trade_count: contract.paperEvidenceRequirement.minExecutedTradeCount,
+      min_event_count: contract.paperEvidenceRequirement.minEventCount,
+      max_report_age_seconds: contract.paperEvidenceRequirement.maxReportAgeSeconds,
+    },
+  }
+}
+
+function informationRatio(values: number[]): number {
+  if (values.length < 2) return 0
+  const avg = mean(values)
+  const variance =
+    values.reduce((sum, value) => sum + (value - avg) ** 2, 0) / Math.max(1, values.length - 1)
+  const stdev = Math.sqrt(variance)
+  return stdev > 0 ? avg / stdev : 0
+}
+
+function currentCodeCommit(): string {
+  if (process.env.OPENALICE_CODE_COMMIT?.trim()) return process.env.OPENALICE_CODE_COMMIT.trim()
+  if (process.env.GIT_COMMIT?.trim()) return process.env.GIT_COMMIT.trim()
+  try {
+    return execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim()
+  } catch {
+    return 'unknown-local'
+  }
+}
+
 
 const ALL_REGIME_LABELS: StrategyRegimeLabel[] = [
   'HighVolTrend',
@@ -390,6 +1828,7 @@ const ALL_REGIME_LABELS: StrategyRegimeLabel[] = [
 
 const REGIME_GATE_MIN_TRADE_RETENTION_RATIO = 0.3
 const META_LABEL_MIN_TRADE_RETENTION_RATIO = 0.05
+const META_LABEL_MIN_REALIZED_TRADE_COUNT = 3
 const META_LABEL_TOP_COVERAGE_RATIOS = [0.5, 0.3, 0.2, 0.1, 0.05] as const
 const META_LABEL_SELECTION_MODES = ['global', 'perRegime'] as const
 const PAPER_RELEASE_GATE_CHECKS = [
@@ -454,7 +1893,7 @@ interface MetaLabelCandidate {
 type MetaLabelSelectionMode = typeof META_LABEL_SELECTION_MODES[number]
 
 function buildMetaLabelSweep(input: {
-  strategy: StrategyName
+  strategy: ValidationStrategyName
   candles: MarketData[]
   costModel: {
     feeRate: number
@@ -480,12 +1919,15 @@ function buildMetaLabelSweep(input: {
     bootstrappedFromUnqualifiedBestArm?: boolean
   }
 }) {
-  if (input.strategy !== 'factorMeanReversion') {
-    return {
-      enabled: false,
-      reason: 'Meta-label quantile sweep is currently only wired for factorMeanReversion.',
-    }
+  if (!isAdditiveSweepStrategy(input.strategy)) {
+    return unsupportedSweepResult(
+      'meta-label quantile sweep',
+      input.strategy,
+      'factorMeanReversion, shockFade',
+    )
   }
+
+  const executionStrategy = resolveExecutionStrategy(input.strategy)
 
   if (input.baseResult.trades.length < 5) {
     return {
@@ -564,12 +2006,15 @@ function buildMetaLabelSweep(input: {
         const passesNetExpectancyConstraint = delta.netExpectancyPct > 0
         const passesTradeCountConstraint =
           tradeCountRetentionRatio >= META_LABEL_MIN_TRADE_RETENTION_RATIO
+        const passesMinRealizedTradeCountConstraint =
+          candidate.metrics.tradeCount >= META_LABEL_MIN_REALIZED_TRADE_COUNT
         const passesDrawdownConstraint =
           candidate.metrics.maxDrawdownPct <= input.baseResult.metrics.maxDrawdownPct
         const qualifies =
           positiveAbsoluteNetExpectancy &&
           passesNetExpectancyConstraint &&
           passesTradeCountConstraint &&
+          passesMinRealizedTradeCountConstraint &&
           passesDrawdownConstraint &&
           candidate.metrics.tradeCount > 0
 
@@ -613,6 +2058,7 @@ function buildMetaLabelSweep(input: {
             averageSelectedScore: average(selectedScores),
             passesNetExpectancyConstraint,
             passesTradeCountConstraint,
+            passesMinRealizedTradeCountConstraint,
             passesDrawdownConstraint,
             qualifies,
           },
@@ -641,6 +2087,7 @@ function buildMetaLabelSweep(input: {
     selectionConstraints: {
       selectionModes: [...META_LABEL_SELECTION_MODES],
       minTradeCountRetentionPct: META_LABEL_MIN_TRADE_RETENTION_RATIO * 100,
+      minRealizedTradeCount: META_LABEL_MIN_REALIZED_TRADE_COUNT,
       requirePositiveAbsoluteNetExpectancy: true,
       requirePositiveNetExpectancyDelta: true,
       requireDrawdownNoWorseThanBaseline: true,
@@ -958,7 +2405,7 @@ function percentage(numerator: number, denominator: number): number {
 }
 
 function buildRegimeGateSweep(input: {
-  strategy: StrategyName
+  strategy: ValidationStrategyName
   candles: MarketData[]
   params: StrategyParams
   costModel: {
@@ -968,13 +2415,27 @@ function buildRegimeGateSweep(input: {
     fundingRatePer8h: number
   }
   baselineMetrics: BacktestMetrics
+  lockedRegimeGate?: {
+    allowedEntryRegimes: StrategyRegimeLabel[]
+    exitOnMismatch?: boolean
+  }
 }) {
-  if (input.strategy !== 'factorMeanReversion') {
+  if (input.lockedRegimeGate) {
     return {
       enabled: false,
-      reason: 'Regime-gating sweep is currently only wired for factorMeanReversion.',
+      reason: 'Regime-gating sweep is disabled when a fixed regimeGateJson is supplied.',
     }
   }
+
+  if (!isAdditiveSweepStrategy(input.strategy)) {
+    return unsupportedSweepResult(
+      'regime-gating sweep',
+      input.strategy,
+      'factorMeanReversion, shockFade',
+    )
+  }
+
+  const executionStrategy = resolveExecutionStrategy(input.strategy)
 
   const baseline = {
     metrics: summarizeMetrics(input.baselineMetrics),
@@ -983,7 +2444,7 @@ function buildRegimeGateSweep(input: {
   const arms = enumerateRegimeGateConfigs(ALL_REGIME_LABELS)
     .map((gate, index) => {
       const candidate = runStrategyBacktest({
-        strategy: input.strategy,
+        strategy: executionStrategy,
         candles: input.candles,
         params: input.params,
         costModel: input.costModel,
@@ -1106,10 +2567,562 @@ function summarizeMetrics(metrics: BacktestMetrics) {
     netExpectancyPct: metrics.netExpectancyPct,
     maxDrawdownPct: metrics.maxDrawdownPct,
     tradeCount: metrics.tradeCount,
+    turnoverPctOfInitialCapital: metrics.turnoverPctOfInitialCapital,
+    averageTurnoverPctPerTrade: metrics.averageTurnoverPctPerTrade,
     sharpe: metrics.sharpe,
     sortino: metrics.sortino,
     calmar: metrics.calmar,
   }
+}
+
+interface StrategySignalIcHorizon {
+  horizonBars: number
+  observations: number
+  activeSignalObservations: number
+  pearsonIc: number
+  meanForwardReturnWhenLongPct: number
+  meanForwardReturnWhenShortPct: number
+}
+
+function computeStrategySignalIcByHorizon(input: {
+  strategy: StrategyName
+  candles: MarketData[]
+  params: Required<StrategyParams>
+  horizons: number[]
+}): StrategySignalIcHorizon[] {
+  const minBars = getStrategyMinimumBars(input.strategy, input.params)
+  return input.horizons.map((horizonBars) => {
+    const signals: number[] = []
+    const forwardReturns: number[] = []
+    const longForwardReturns: number[] = []
+    const shortForwardReturns: number[] = []
+    let currentPosition: -1 | 0 | 1 = 0
+
+    for (
+      let index = minBars;
+      index + horizonBars < input.candles.length;
+      index += 1
+    ) {
+      const decision = evaluateStrategy({
+        strategy: input.strategy,
+        candles: input.candles,
+        index,
+        currentPosition,
+        params: input.params,
+      })
+      currentPosition = decision.signal
+      const currentClose = input.candles[index].close
+      const futureClose = input.candles[index + horizonBars].close
+      if (!Number.isFinite(currentClose) || currentClose <= 0 || !Number.isFinite(futureClose)) {
+        continue
+      }
+      const forwardReturnPct = ((futureClose - currentClose) / currentClose) * 100
+      signals.push(decision.signal)
+      forwardReturns.push(forwardReturnPct)
+      if (decision.signal > 0) {
+        longForwardReturns.push(forwardReturnPct)
+      } else if (decision.signal < 0) {
+        shortForwardReturns.push(forwardReturnPct)
+      }
+    }
+
+    return {
+      horizonBars,
+      observations: signals.length,
+      activeSignalObservations: signals.filter((signal) => signal !== 0).length,
+      pearsonIc: pearsonCorrelation(signals, forwardReturns),
+      meanForwardReturnWhenLongPct: mean(longForwardReturns),
+      meanForwardReturnWhenShortPct: mean(shortForwardReturns),
+    }
+  })
+}
+
+function buildValidationEvidence(input: {
+  symbol: string
+  candles: MarketData[]
+  assetCandlesBySymbol: Record<string, MarketData[]>
+  holdoutCandles: MarketData[]
+  selectedEvaluation: BacktestResult
+  strategySignalIcByHorizon: StrategySignalIcHorizon[]
+  releaseGate: ReturnType<typeof evaluateReleaseGate>
+  costModel: {
+    feeRate: number
+    slippageBps: number
+    latencyBars: number
+    fundingRatePer8h: number
+  }
+  strategyConfig: StrategyConfig
+  alphaPoolPath: string
+  strategyPlanEvidence: ReturnType<typeof buildStrategyPlanEvidence>
+}) {
+  const metrics = input.selectedEvaluation.metrics
+  const executionQualityCheck = input.releaseGate.checks.find(
+    (check) => check.name === 'execution_quality',
+  )
+  return {
+    turnover: {
+      available: true,
+      totalTurnoverUsd: metrics.totalTurnoverUsd,
+      turnoverPctOfInitialCapital: metrics.turnoverPctOfInitialCapital,
+      averageTurnoverPctPerTrade: metrics.averageTurnoverPctPerTrade,
+      tradeCount: metrics.tradeCount,
+    },
+    costAdjustedReturn: {
+      available: true,
+      totalReturnPct: metrics.totalReturnPct,
+      grossExpectancyPct: metrics.grossExpectancyPct,
+      netExpectancyPct: metrics.netExpectancyPct,
+      totalCostsPaid: metrics.totalCostsPaid,
+      costDragPctOfInitialCapital: metrics.costDragPctOfInitialCapital,
+    },
+    factorIcByHorizon: {
+      available: false,
+      reason:
+        'This validation run has strategy-level signals only. Factor-level IC requires runtime factor snapshot history.',
+      substitute: 'strategySignalIcByHorizon',
+    },
+    strategySignalIcByHorizon: input.strategySignalIcByHorizon,
+    regimeSplitPerformance: metrics.regimeSummary,
+    longShortSideAsymmetry: metrics.sideSummary,
+    paperExecutionSlippage: {
+      available: executionQualityCheck?.status === 'pass' || executionQualityCheck?.status === 'fail',
+      gateStatus: executionQualityCheck?.status ?? 'missing',
+      summary: executionQualityCheck?.summary ?? 'Execution quality gate not present in release gate output.',
+      reason:
+        executionQualityCheck?.status === 'skipped'
+          ? 'Paper/live fill telemetry is required before paper execution slippage can stand as evidence.'
+          : null,
+    },
+    strategyPlanEvidence: input.strategyPlanEvidence,
+  }
+}
+
+function buildStrategyPlanEvidence(input: {
+  symbol: string
+  candles: MarketData[]
+  assetCandlesBySymbol: Record<string, MarketData[]>
+  holdoutCandles: MarketData[]
+  selectedEvaluation: BacktestResult
+  costModel: {
+    feeRate: number
+    slippageBps: number
+    latencyBars: number
+    fundingRatePer8h: number
+  }
+  strategyConfig: StrategyConfig
+  alphaPoolPath: string
+}) {
+  const regimeIdentityBySymbol = Object.fromEntries(
+    Object.entries(input.assetCandlesBySymbol).map(([symbol, candles]) => [
+      symbol,
+      buildRegimeIdentityEvidence(candles, input.strategyConfig),
+    ]),
+  )
+  const regimeIdentity =
+    regimeIdentityBySymbol[input.symbol] ?? buildRegimeIdentityEvidence(input.candles, input.strategyConfig)
+  const regimeState = Object.entries(regimeIdentityBySymbol)
+    .flatMap(([symbol, evidence]) =>
+      evidence.latestRegimeEvaluation
+        ? [{
+            symbol,
+            regime: evidence.latestRegimeEvaluation.regime,
+            confidence: evidence.latestRegimeEvaluation.confidence,
+          }]
+        : [],
+    )
+  const crossAssetRegimeConsistency = evaluateCrossAssetRegimeConsistency({
+    states: regimeState,
+  })
+  const alphaAdmission = readAlphaPoolSummaryForEvidence(input.alphaPoolPath)
+  const rollingSharpeUniverse = selectUniverseByRollingSharpe([
+    ...Object.entries(input.assetCandlesBySymbol).map(([symbol, candles]) => ({
+      symbol,
+      returns: marketDataToReturns(candles),
+    })),
+  ])
+  const stableClusters = buildStableCorrelationClusters({
+    windows: buildValidationCorrelationWindows(input.assetCandlesBySymbol),
+    representativeScores: {
+      ...Object.fromEntries(Object.keys(input.assetCandlesBySymbol).map((symbol) => [symbol, 0])),
+      [input.symbol]: input.selectedEvaluation.metrics.sharpe,
+    },
+  })
+  const sessionAwareSlippage = summarizeSessionAwareSlippage({
+    trades: input.selectedEvaluation.trades,
+    baselineSlippageBps: input.costModel.slippageBps,
+  })
+
+  return {
+    regimeIdentityTracking: {
+      available: regimeIdentity.available,
+      runtimeHmmEnabled: regimeIdentity.runtimeHmmEnabled,
+      coldStartMode: regimeIdentity.coldStartMode,
+      effectiveSampleSize: regimeIdentity.effectiveSampleSize,
+      latestRegime: regimeIdentity.latestRegimeEvaluation
+        ? {
+            regime: regimeIdentity.latestRegimeEvaluation.regime,
+            confidence: regimeIdentity.latestRegimeEvaluation.confidence,
+            method: regimeIdentity.latestRegimeEvaluation.method ?? null,
+            reasons: regimeIdentity.latestRegimeEvaluation.reasons,
+          }
+        : null,
+      stateIdentity: regimeIdentity.stateIdentity,
+      reason: regimeIdentity.reason,
+      bySymbol: Object.fromEntries(
+        Object.entries(regimeIdentityBySymbol).map(([symbol, evidence]) => [
+          symbol,
+          {
+            available: evidence.available,
+            coldStartMode: evidence.coldStartMode,
+            effectiveSampleSize: evidence.effectiveSampleSize,
+            latestRegime: evidence.latestRegimeEvaluation
+              ? {
+                  regime: evidence.latestRegimeEvaluation.regime,
+                  confidence: evidence.latestRegimeEvaluation.confidence,
+                  method: evidence.latestRegimeEvaluation.method ?? null,
+                }
+              : null,
+            stateIdentity: evidence.stateIdentity,
+            reason: evidence.reason,
+          },
+        ]),
+      ),
+    },
+    crossAssetRegimeConsistency: {
+      available: regimeState.length >= 2,
+      result: crossAssetRegimeConsistency,
+      reason:
+        regimeState.length >= 2
+          ? null
+          : 'Validation input contains one symbol; cross-asset consistency needs BTC/ETH or a multi-symbol panel via --peerCsvJson.',
+    },
+    alphaFactorAdmission: {
+      ...alphaAdmission,
+      reason: alphaAdmission.available
+        ? null
+        : alphaAdmission.error
+          ? `Alpha pool artifact could not be read: ${alphaAdmission.error}`
+          : 'Alpha pool artifact not found; novelty/hypothesis-alignment gate is present but has no candidate pool to audit.',
+    },
+    rollingSharpeUniverseSelection: {
+      available: true,
+      selection: rollingSharpeUniverse,
+    },
+    stableCorrelationClustering: {
+      available: stableClusters.clusters.some((cluster) => cluster.symbols.length > 1),
+      clusters: stableClusters.clusters,
+      coAssignmentFrequency: stableClusters.coAssignmentFrequency,
+      reason:
+        stableClusters.clusters.some((cluster) => cluster.symbols.length > 1)
+          ? null
+          : 'Single-symbol validation cannot prove stable cross-asset clustering; pass a multi-symbol return panel for this evidence.',
+    },
+    sessionAwareSlippageEstimate: sessionAwareSlippage,
+  }
+}
+
+function buildRegimeIdentityEvidence(
+  candles: MarketData[],
+  strategyConfig: StrategyConfig,
+): {
+  available: boolean
+  runtimeHmmEnabled: boolean
+  coldStartMode: string | null
+  effectiveSampleSize: number
+  latestRegimeEvaluation: RegimeEvaluation | null
+  stateIdentity: Record<string, unknown> | null
+  reason: string | null
+} {
+  const hmmConfig = {
+    ...DEFAULT_REGIME_HMM_CONFIG,
+    ...(strategyConfig.regime?.hmm ?? {}),
+    enabled: true,
+  }
+  const observations = extractHmmObservations(toOhlcvCandles(candles), {
+    realizedVolWindow: hmmConfig.realizedVolWindow,
+    volumeBaselineWindow: hmmConfig.volumeBaselineWindow,
+    zScoreWindow: hmmConfig.zScoreWindow,
+  })
+  const hmmOutput = new RegimeHmm(hmmConfig).classify(observations)
+  if (!hmmOutput) {
+    return {
+      available: false,
+      runtimeHmmEnabled: strategyConfig.regime?.hmm?.enabled === true,
+      coldStartMode: null,
+      effectiveSampleSize: observations.length,
+      latestRegimeEvaluation: null,
+      stateIdentity: null,
+      reason: 'No HMM output could be produced from validation candles.',
+    }
+  }
+  const latestRegimeEvaluation = evaluateRegime(
+    buildRegimeFeaturesForValidation(candles),
+    {
+      hmm: hmmOutput,
+      hmmConfidenceFloor: hmmConfig.confidenceFloor,
+    },
+  )
+
+  return {
+    available: hmmOutput.stateIdentity != null,
+    runtimeHmmEnabled: strategyConfig.regime?.hmm?.enabled === true,
+    coldStartMode: hmmOutput.coldStartMode,
+    effectiveSampleSize: hmmOutput.effectiveSampleSize,
+    latestRegimeEvaluation,
+    stateIdentity: hmmOutput.stateIdentity
+      ? {
+          method: hmmOutput.stateIdentity.method,
+          rawState: hmmOutput.stateIdentity.rawState,
+          rawStateName: hmmOutput.stateIdentity.rawStateName,
+          matchedState: hmmOutput.stateIdentity.matchedState,
+          matchedStateName: hmmOutput.stateIdentity.matchedStateName,
+          wassersteinDistance: hmmOutput.stateIdentity.wassersteinDistance,
+          identityConfidence: hmmOutput.stateIdentity.identityConfidence,
+          activeStateCount: hmmOutput.stateIdentity.activeStateCount,
+          rawToCanonicalState: hmmOutput.stateIdentity.rawToCanonicalState,
+        }
+      : null,
+    reason: hmmOutput.stateIdentity
+      ? null
+      : 'HMM is still in threshold cold-start mode; Wasserstein state identity is available after EM activation.',
+  }
+}
+
+function readAlphaPoolSummaryForEvidence(path: string) {
+  try {
+    return {
+      ...summarizeAlphaPoolArtifact(readAlphaPoolArtifactSync(path), path),
+      error: null as string | null,
+    }
+  } catch (error) {
+    return {
+      ...summarizeAlphaPoolArtifact(null, path),
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function buildRegimeFeaturesForValidation(candles: MarketData[]) {
+  return {
+    trendStrength: computeValidationTrendStrength(candles),
+    realizedVolPct: computeValidationRealizedVolPct(candles),
+    realizedVolPercentile: computeValidationRealizedVolPercentile(candles),
+    rangeCompressionScore: computeValidationRangeCompressionScore(candles),
+    volumeChangeRate: computeValidationVolumeChangeRate(candles),
+  }
+}
+
+function computeValidationTrendStrength(candles: MarketData[]): number {
+  const closes = candles.map((candle) => candle.close).filter((value) => Number.isFinite(value))
+  if (closes.length < 25) {
+    return 0
+  }
+  const fast = mean(closes.slice(-12))
+  const slow = mean(closes.slice(-48))
+  if (slow <= 0) {
+    return 0
+  }
+  return clamp01(Math.abs(fast - slow) / slow * 20)
+}
+
+function computeValidationRealizedVolPct(candles: MarketData[]): number {
+  const returns = marketDataToReturns(candles).slice(-24)
+  if (returns.length < 2) {
+    return 0
+  }
+  return sampleStandardDeviation(returns) * Math.sqrt(24 * 365) * 100
+}
+
+function computeValidationRealizedVolPercentile(candles: MarketData[]): number {
+  const returns = marketDataToReturns(candles)
+  if (returns.length < 48) {
+    return 0.5
+  }
+  const rolling: number[] = []
+  for (let index = 23; index < returns.length; index += 1) {
+    rolling.push(sampleStandardDeviation(returns.slice(index - 23, index + 1)))
+  }
+  const latest = rolling[rolling.length - 1]
+  if (!Number.isFinite(latest)) {
+    return 0.5
+  }
+  return rolling.filter((value) => value <= latest).length / rolling.length
+}
+
+function computeValidationRangeCompressionScore(candles: MarketData[]): number {
+  const recent = candles.slice(-24)
+  const baseline = candles.slice(-96)
+  if (recent.length < 3 || baseline.length < 3) {
+    return 0
+  }
+  const recentRange = mean(recent.map((candle) => candle.high - candle.low))
+  const baselineRange = mean(baseline.map((candle) => candle.high - candle.low))
+  if (baselineRange <= 0) {
+    return 0
+  }
+  return clamp01(1 - recentRange / baselineRange)
+}
+
+function computeValidationVolumeChangeRate(candles: MarketData[]): number {
+  const latest = candles[candles.length - 1]?.volume ?? 0
+  const baseline = mean(candles.slice(-25, -1).map((candle) => candle.volume))
+  return baseline > 0 ? latest / baseline : 0
+}
+
+function marketDataToReturns(candles: MarketData[]): number[] {
+  const returns: number[] = []
+  for (let index = 1; index < candles.length; index += 1) {
+    const previous = candles[index - 1].close
+    const current = candles[index].close
+    if (previous > 0 && Number.isFinite(previous) && Number.isFinite(current)) {
+      returns.push(current / previous - 1)
+    }
+  }
+  return returns
+}
+
+function sampleStandardDeviation(values: number[]): number {
+  if (values.length < 2) {
+    return 0
+  }
+  const valueMean = mean(values)
+  const variance =
+    values.reduce((sum, value) => sum + (value - valueMean) ** 2, 0) / (values.length - 1)
+  return Math.sqrt(Math.max(variance, 0))
+}
+
+function buildValidationCorrelationWindows(assetCandlesBySymbol: Record<string, MarketData[]>) {
+  const series = Object.entries(assetCandlesBySymbol)
+    .map(([symbol, candles]) => ({
+      symbol,
+      returns: marketDataToReturns(candles),
+    }))
+    .filter((item) => item.returns.length >= 2)
+    .sort((left, right) => left.symbol.localeCompare(right.symbol))
+
+  if (series.length < 1) {
+    return []
+  }
+  if (series.length === 1) {
+    return [{
+      symbols: [series[0].symbol],
+      correlation: [[1]],
+    }]
+  }
+
+  const minLength = Math.min(...series.map((item) => item.returns.length))
+  if (minLength < 12) {
+    return [{
+      symbols: series.map((item) => item.symbol),
+      correlation: buildCorrelationMatrix(series.map((item) => item.returns.slice(-minLength))),
+    }]
+  }
+
+  const windowSize = Math.min(240, Math.max(12, Math.floor(minLength / 3)))
+  const aligned = series.map((item) => item.returns.slice(-minLength))
+  const windows = []
+  for (let end = windowSize; end <= minLength; end += windowSize) {
+    const slices = aligned.map((returns) => returns.slice(end - windowSize, end))
+    windows.push({
+      symbols: series.map((item) => item.symbol),
+      correlation: buildCorrelationMatrix(slices),
+    })
+  }
+  if (windows.length === 0 || windows[windows.length - 1]!.symbols.length !== series.length) {
+    windows.push({
+      symbols: series.map((item) => item.symbol),
+      correlation: buildCorrelationMatrix(aligned.map((returns) => returns.slice(-windowSize))),
+    })
+  }
+  return windows
+}
+
+function buildCorrelationMatrix(series: number[][]): number[][] {
+  return series.map((left, rowIndex) =>
+    series.map((right, columnIndex) => (
+      rowIndex === columnIndex ? 1 : pearsonCorrelation(left, right)
+    )),
+  )
+}
+
+function summarizeSessionAwareSlippage(input: {
+  trades: BacktestTrade[]
+  baselineSlippageBps: number
+}) {
+  const estimates = input.trades.map((trade) =>
+    sessionAwareSlippageEstimate(trade.entryTime * 1000, input.baselineSlippageBps),
+  )
+  const bySession = (['asia', 'europe', 'us', 'off_hours'] as const).map((session) => {
+    const bucket = estimates.filter((estimate) => estimate.session === session)
+    return {
+      session,
+      tradeCount: bucket.length,
+      averageEstimatedSlippageBps: mean(bucket.map((estimate) => estimate.estimatedSlippageBps)),
+      maxEstimatedSlippageBps:
+        bucket.length > 0 ? Math.max(...bucket.map((estimate) => estimate.estimatedSlippageBps)) : 0,
+      handoffTradeCount: bucket.filter((estimate) => estimate.handoffPenaltyBps > 0).length,
+    }
+  })
+
+  return {
+    available: estimates.length > 0,
+    tradeCount: estimates.length,
+    baselineSlippageBps: input.baselineSlippageBps,
+    averageEstimatedSlippageBps: mean(
+      estimates.map((estimate) => estimate.estimatedSlippageBps),
+    ),
+    maxEstimatedSlippageBps:
+      estimates.length > 0
+        ? Math.max(...estimates.map((estimate) => estimate.estimatedSlippageBps))
+        : 0,
+    bySession,
+    dominantSession: selectDominantLiquiditySession(bySession),
+    reason:
+      estimates.length > 0
+        ? null
+        : 'No holdout trades were available for session-aware slippage estimation.',
+  }
+}
+
+function selectDominantLiquiditySession(
+  bySession: Array<{
+    session: IntradayLiquiditySession
+    tradeCount: number
+    averageEstimatedSlippageBps: number
+  }>,
+): IntradayLiquiditySession | null {
+  const active = bySession.filter((bucket) => bucket.tradeCount > 0)
+  if (active.length === 0) {
+    return null
+  }
+  return [...active].sort((left, right) => right.tradeCount - left.tradeCount)[0].session
+}
+
+function pearsonCorrelation(x: number[], y: number[]): number {
+  if (x.length !== y.length || x.length < 3) {
+    return 0
+  }
+  const xMean = mean(x)
+  const yMean = mean(y)
+  let numerator = 0
+  let xVariance = 0
+  let yVariance = 0
+  for (let index = 0; index < x.length; index += 1) {
+    const dx = x[index] - xMean
+    const dy = y[index] - yMean
+    numerator += dx * dy
+    xVariance += dx * dx
+    yVariance += dy * dy
+  }
+  const denominator = Math.sqrt(xVariance * yVariance)
+  return denominator > 0 ? numerator / denominator : 0
+}
+
+function mean(values: number[]): number {
+  if (values.length < 1) {
+    return 0
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length
 }
 
 function buildMetricDelta(
@@ -1260,6 +3273,85 @@ function buildRecommendedCandidate(input: {
   }
 }
 
+function buildCanonicalScoreboardSummary(input: {
+  controlArm: ReturnType<typeof buildDeployableStrategyTarget>['controlArm']
+  selectedCandidate: {
+    candidateIndex: number
+    params: StrategyParams
+    metrics: ReturnType<typeof summarizeMetrics>
+    baselineReport: ReturnType<typeof buildBaselineReport>
+  }
+  recommendation: ReturnType<typeof buildRecommendedCandidate>['recommendation']
+  wfo: ReturnType<typeof runStrategyWalkForward>
+  significance: ReturnType<typeof evaluateSignificanceGate>
+  riskSimulation: ReturnType<typeof evaluateRiskSimulation>
+  releaseGate: ReturnType<typeof evaluateReleaseGate>
+}) {
+  return {
+    controlArm: input.controlArm,
+    selectedCandidate: {
+      source: 'selected_candidate',
+      selectionBasis: 'best_sharpe',
+      candidateIndex: input.selectedCandidate.candidateIndex,
+      params: input.selectedCandidate.params,
+      metrics: input.selectedCandidate.metrics,
+      baselineReport: input.selectedCandidate.baselineReport,
+    },
+    recommendation: input.recommendation,
+    wfo: {
+      overallPassed: input.wfo.overallPassed,
+      failedWindows: input.wfo.failedWindows,
+      windowCount: input.wfo.windows.length,
+      failedWindowRatio:
+        input.wfo.windows.length > 0 ? input.wfo.failedWindows / input.wfo.windows.length : 0,
+      windows: input.wfo.windows.map((window) => ({
+        windowIndex: window.windowIndex,
+        selectedCandidate: window.selectedCandidate.id,
+        inSampleSharpe: window.inSample.sharpe,
+        outOfSampleSharpe: window.outOfSample.sharpe,
+        degradationRate: window.degradationRate,
+        gatePassed: window.gatePassed,
+        gateReason: window.gateReason ?? null,
+      })),
+    },
+    significance: {
+      passed: input.significance.passed,
+      pbo: input.significance.pboResult.pbo,
+      pboThreshold: input.significance.pboThreshold,
+      dsrValue: input.significance.dsrResult.dsrValue,
+      dsrProbability: input.significance.dsrResult.dsrProbability,
+      dsrMin: input.significance.dsrMin,
+    },
+    risk: {
+      method: input.riskSimulation.method,
+      simulations: input.riskSimulation.simulations,
+      horizonBars: input.riskSimulation.horizonBars,
+      ruinDrawdownPct: input.riskSimulation.ruinDrawdownPct,
+      maxRuinProbability: input.riskSimulation.maxRuinProbability,
+      minProfitProbability: input.riskSimulation.minProfitProbability,
+      confidenceLevel: input.riskSimulation.confidenceLevel,
+      profitProbability: input.riskSimulation.profitProbability,
+      riskOfRuin: input.riskSimulation.riskOfRuin,
+      expectedFinalReturnPct: input.riskSimulation.expectedFinalReturnPct,
+      medianFinalReturnPct: input.riskSimulation.medianFinalReturnPct,
+      confidenceInterval: input.riskSimulation.confidenceInterval,
+      gatePassed: input.riskSimulation.gatePassed,
+    },
+    releaseGate: {
+      allowPaperTrading: input.releaseGate.allowPaperTrading,
+      allowLiveTrading: input.releaseGate.allowLiveTrading,
+      hardFail: input.releaseGate.hardFail,
+      failedChecks: input.releaseGate.failedChecks,
+      warningChecks: input.releaseGate.warningChecks,
+      checks: input.releaseGate.checks.map((check) => ({
+        name: check.name,
+        status: check.status,
+        summary: check.summary,
+      })),
+    },
+  }
+}
+
 function buildRecommendedSelectionDiagnosticsSummary(
   candidate: RecommendedArmCandidate | null,
 ) {
@@ -1333,8 +3425,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value != null && !Array.isArray(value)
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null
+}
+
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+function booleanOrNull(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false
+  }
+  return null
 }
 
 function buildRecommendedRegimeCollapseWarnings(
@@ -1595,6 +3705,12 @@ function buildBaselineReport(metrics: BacktestMetrics) {
         metrics.slippageExpectancyDragPct +
         metrics.fundingExpectancyDragPct,
     },
+    turnover: {
+      totalTurnoverUsd: metrics.totalTurnoverUsd,
+      turnoverPctOfInitialCapital: metrics.turnoverPctOfInitialCapital,
+      averageTurnoverPctPerTrade: metrics.averageTurnoverPctPerTrade,
+    },
+    bySide: metrics.sideSummary,
     byRegime: mapRegimeSummary(metrics.regimeSummary),
   }
 }
@@ -1625,11 +3741,15 @@ function mapSingleRegimeSummary(summary: BacktestRegimeSummary) {
   }
 }
 
-function parseStrategy(value: string): StrategyName {
-  if (!isStrategyName(value)) {
+function parseStrategy(value: string): ValidationStrategyName {
+  if (!isValidationStrategyName(value)) {
     throw new Error(`Unsupported strategy: ${value}`)
   }
   return value
+}
+
+function isValidationStrategyName(value: unknown): value is ValidationStrategyName {
+  return isStrategyName(value)
 }
 
 function parseJsonArg<T>(raw: string | undefined, fallback: T): T {
@@ -1664,7 +3784,7 @@ function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
 }
 
 function ensureCandidates(
-  strategy: StrategyName,
+  strategy: ValidationStrategyName,
   base: StrategyParams,
   provided?: StrategyParams[],
 ): StrategyParams[] {
@@ -1730,6 +3850,39 @@ function ensureCandidates(
           factorPositionPctOfEquity: Math.min(0.08, (base.factorPositionPctOfEquity ?? 0.03) + 0.01),
         },
       ]
+    case 'shockFade':
+      return [
+        { ...base },
+        {
+          ...base,
+          factorEntryThreshold: Math.max(0.35, (base.factorEntryThreshold ?? 0.45) - 0.05),
+          factorExitThreshold: Math.max(0.04, (base.factorExitThreshold ?? 0.08) - 0.02),
+          factorMaxHoldingBars: Math.max(18, (base.factorMaxHoldingBars ?? 30) - 6),
+          factorPositionPctOfEquity: Math.max(0.008, (base.factorPositionPctOfEquity ?? 0.015) - 0.003),
+          factorStopLossPct: Math.max(0.0075, (base.factorStopLossPct ?? 0.012) - 0.0025),
+          factorKillSwitchVolPct: Math.max(2.2, (base.factorKillSwitchVolPct ?? 2.8) - 0.3),
+          factorKillSwitchTrendStrengthPct: Math.max(
+            0.45,
+            (base.factorKillSwitchTrendStrengthPct ?? 0.6) - 0.08,
+          ),
+          shockMinVolumeRatio: Math.max(1.5, (base.shockMinVolumeRatio ?? 1.8) - 0.15),
+          shockMinAbsReturnPct: Math.max(1.4, (base.shockMinAbsReturnPct ?? 1.8) - 0.2),
+        },
+        {
+          ...base,
+          factorEntryThreshold: Math.min(0.75, (base.factorEntryThreshold ?? 0.45) + 0.08),
+          factorExitThreshold: Math.min(0.18, (base.factorExitThreshold ?? 0.08) + 0.03),
+          factorMaxHoldingBars: Math.max(24, (base.factorMaxHoldingBars ?? 30) + 6),
+          factorPositionPctOfEquity: Math.max(0.008, (base.factorPositionPctOfEquity ?? 0.015) - 0.002),
+          factorStopLossPct: Math.min(0.02, (base.factorStopLossPct ?? 0.012) + 0.003),
+          factorKillSwitchTrendStrengthPct: Math.max(
+            0.45,
+            (base.factorKillSwitchTrendStrengthPct ?? 0.6) - 0.05,
+          ),
+          shockMinVolumeRatio: Math.min(2.4, (base.shockMinVolumeRatio ?? 1.8) + 0.2),
+          shockMinAbsReturnPct: Math.min(3.0, (base.shockMinAbsReturnPct ?? 1.8) + 0.3),
+        },
+      ]
     case 'breakout':
       return [
         { ...base },
@@ -1757,6 +3910,25 @@ function ensureCandidates(
         },
       ]
   }
+}
+
+function isAdditiveSweepStrategy(strategy: ValidationStrategyName): boolean {
+  return strategy === 'factorMeanReversion' || strategy === 'shockFade'
+}
+
+function unsupportedSweepResult(
+  sweepName: string,
+  strategy: ValidationStrategyName,
+  supportedStrategies: string,
+) {
+  return {
+    enabled: false,
+    reason: `${sweepName} is only wired for ${supportedStrategies}; received ${strategy}.`,
+  }
+}
+
+function resolveExecutionStrategy(strategy: ValidationStrategyName): StrategyName {
+  return strategy
 }
 
 function equityCurveToReturns(curve: Array<{ time: number; equity: number }>): number[] {
@@ -1821,6 +3993,20 @@ async function loadCsvCandles(path: string, symbol: string): Promise<MarketData[
   return out
 }
 
+async function loadPeerCsvCandles(
+  peerCsvBySymbol: Record<string, string> | undefined,
+  lookbackBars: number,
+): Promise<Record<string, MarketData[]>> {
+  const entries = Object.entries(peerCsvBySymbol ?? {})
+    .filter(([symbol, path]) => symbol.trim().length > 0 && path.trim().length > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+  const out: Record<string, MarketData[]> = {}
+  for (const [symbol, path] of entries) {
+    out[symbol] = (await loadCsvCandles(path, symbol)).slice(-lookbackBars)
+  }
+  return out
+}
+
 async function runSelfCheck(): Promise<void> {
   const out = resolve('/tmp/openalice-validation-pipeline-self-check.json')
   const gate = resolve('/tmp/openalice-validation-pipeline-release-gate.json')
@@ -1862,8 +4048,10 @@ async function runSelfCheck(): Promise<void> {
 }
 
 export {
+  appendCompleteTrialUniverseMarkerIfReady,
   buildRecommendedCandidate,
   buildRegimeGateSweep,
+  evaluateSignificanceGateForReport,
   buildMetaLabelSweep,
   summarizeMetrics,
 }
