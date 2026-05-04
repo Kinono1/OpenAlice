@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,14 +22,25 @@ EXIT_TOOL_ERROR = 3
 GATE_IDS = ("G0", "G1", "G2", "G3", "G4")
 
 
+def env_default(name: str, fallback: str) -> str:
+    value = os.environ.get(name)
+    return value if value and value.strip() else fallback
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build machine-readable gate checkpoints (G0..G4) for decision packet traceability.",
     )
-    parser.add_argument("--output-dir", default="data/runtime/gates")
+    parser.add_argument(
+        "--output-dir",
+        default=env_default("OPENALICE_GATE_CHECKPOINT_DIR", "data/runtime/gates"),
+    )
     parser.add_argument(
         "--schema",
-        default="docs/research/templates/gate_checkpoint.schema.v1.json",
+        default=env_default(
+            "OPENALICE_GATE_CHECKPOINT_SCHEMA",
+            "docs/research/templates/gate_checkpoint.schema.v1.json",
+        ),
     )
     parser.add_argument(
         "--env-report",

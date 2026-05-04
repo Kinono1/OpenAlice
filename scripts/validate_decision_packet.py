@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -17,19 +18,33 @@ EXIT_TOOL_ERROR = 3
 REASON_CODE_PATTERN = re.compile(r"^(HARD|WARN|INFO)_[A-Z0-9_]+$")
 
 
+def env_default(name: str, fallback: str) -> str:
+    value = os.environ.get(name)
+    return value if value and value.strip() else fallback
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate decision_packet and emit machine-readable verdict."
     )
-    parser.add_argument("--packet-dir", default="decision_packet")
+    parser.add_argument(
+        "--packet-dir",
+        default=env_default("OPENALICE_DECISION_PACKET_DIR", "decision_packet"),
+    )
     parser.add_argument("--evidence-pack", default=None)
     parser.add_argument(
         "--reason-codes",
-        default="docs/research/templates/verdict_reason_codes.v1.json",
+        default=env_default(
+            "OPENALICE_VERDICT_REASON_CODES",
+            "docs/research/templates/verdict_reason_codes.v1.json",
+        ),
     )
     parser.add_argument(
         "--freeze-manifest",
-        default="docs/research/freeze_manifest.json",
+        default=env_default(
+            "OPENALICE_FREEZE_MANIFEST",
+            "docs/research/freeze_manifest.json",
+        ),
     )
     parser.add_argument("--output", default=None)
     return parser.parse_args()

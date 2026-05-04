@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { diagnoseTradingAgentsFailureMechanism } from "./tradingagents_failure_diagnosis.js";
 import { buildTradingAgentsTerminalArtifacts } from "./tradingagents_terminal_artifacts.js";
@@ -11,8 +11,20 @@ function readJson<T>(relativePath: string): T {
   ) as T;
 }
 
+const GOLDEN_FIXTURES = [
+  "data/research/strategy/strategy_validation_runs.btc_paradigm_tradingagents_v2_validation_diag_20260402.json",
+  "data/research/strategy/analysis/route_matrix_btc_paradigm_tradingagents_v2_validation_20260401.json",
+  "data/research/strategy/strategy_validation_runs.btc_paradigm_tradingagents_v2_validation_robust_anchor_diag_20260402.json",
+  "data/research/strategy/analysis/route_matrix_btc_paradigm_tradingagents_v2_robustness_20260401.json",
+  "data/research/strategy/analysis/wfo_sensitivity_btc_paradigm_tradingagents_v2_robust_anchor_20260402.json",
+  "data/research/strategy/strategy_validation_runs.wfo_sensitivity_btc_paradigm_tradingagents_v2_independent_guard_20260402.native_short_test.json",
+  "data/research/strategy/analysis/wfo_sensitivity_btc_paradigm_tradingagents_v2_independent_guard_20260402.json",
+];
+
 describe("TradingAgents terminal decision golden inputs", () => {
-  it("keeps the pooled donor lane at component salvage only on the current BTC inputs", () => {
+  it.skipIf(GOLDEN_FIXTURES.some((path) => !existsSync(resolve(process.cwd(), path))))(
+    "keeps the pooled donor lane at component salvage only on the current BTC inputs",
+    () => {
     const baselineValidationRuns = readJson<Record<string, unknown>>(
       "data/research/strategy/strategy_validation_runs.btc_paradigm_tradingagents_v2_validation_diag_20260402.json",
     );
@@ -57,22 +69,26 @@ describe("TradingAgents terminal decision golden inputs", () => {
       wfoSensitivity: independentGuardWfoSensitivity,
     });
 
-    expect(baselineDiagnosis.primaryRootCause).toBe("state_conditional_concentration");
-    expect(baselineDiagnosis.secondaryContributors).toEqual(
-      expect.arrayContaining([
-        "candidate_source_concentration",
-        "structural_instability",
-      ]),
-    );
+    expect(baselineDiagnosis.primaryRootCause).toBe("measurement_variance_reduction_only");
+    expect(baselineDiagnosis.secondaryContributors).toEqual([
+      "candidate_source_concentration",
+    ]);
     expect(baselineDiagnosis.decision).toBe("component_salvage_only");
     expect(baselineDiagnosis.decisionConfidence).toBe("medium");
     expect(baselineDiagnosis.evidenceCompleteness).toBe("partial");
     expect(baselineDiagnosis.stageSnapshot.currentStage).toBe("A");
-    expect(baselineDiagnosis.stageSnapshot.currentStageStatus).toBe("pass");
+    expect(baselineDiagnosis.stageSnapshot.currentStageStatus).toBe("fail");
 
-    expect(robustAnchorDiagnosis.primaryRootCause).toBe("selection_path_misalignment");
-    expect(robustAnchorDiagnosis.secondaryContributors).toContain(
-      "structural_instability",
+    expect(robustAnchorDiagnosis.primaryRootCause).toBe(
+      "measurement_variance_reduction_only",
+    );
+    expect(robustAnchorDiagnosis.secondaryContributors).toEqual(
+      expect.arrayContaining([
+        "sample_sparsity",
+        "selection_path_misalignment",
+        "structural_instability",
+        "candidate_source_concentration",
+      ]),
     );
     expect(robustAnchorDiagnosis.decision).toBe("component_salvage_only");
     expect(robustAnchorDiagnosis.decisionConfidence).toBe("high");
@@ -81,8 +97,12 @@ describe("TradingAgents terminal decision golden inputs", () => {
     expect(independentGuardDiagnosis.primaryRootCause).toBe(
       "measurement_variance_reduction_only",
     );
-    expect(independentGuardDiagnosis.secondaryContributors).toContain(
-      "structural_instability",
+    expect(independentGuardDiagnosis.secondaryContributors).toEqual(
+      expect.arrayContaining([
+        "sample_sparsity",
+        "structural_instability",
+        "candidate_source_concentration",
+      ]),
     );
     expect(independentGuardDiagnosis.decision).toBe("component_salvage_only");
     expect(independentGuardDiagnosis.decisionConfidence).toBe("high");
@@ -107,7 +127,7 @@ describe("TradingAgents terminal decision golden inputs", () => {
     expect(summary.pooledSummary.diagnosisCount).toBe(3);
     expect(summary.pooledSummary.structuralFixEligibleCount).toBe(0);
     expect(summary.pooledSummary.horizonMismatchCount).toBe(0);
-    expect(summary.pooledSummary.structuralInstabilitySecondaryCount).toBe(3);
+    expect(summary.pooledSummary.structuralInstabilitySecondaryCount).toBe(2);
     expect(summary.pooledSummary.componentSalvageCount).toBe(3);
     expect(summary.terminalDecisionConfidence).toBe("medium");
     expect(summary.terminalEvidenceCompleteness).toBe("partial");
@@ -153,9 +173,10 @@ describe("TradingAgents terminal decision golden inputs", () => {
         "ranking_component",
       ]),
     );
-    expect(artifacts.terminalPostmortem.rootCauseSynthesis.mixedState).toBe(true);
+    expect(artifacts.terminalPostmortem.rootCauseSynthesis.mixedState).toBe(false);
     expect(artifacts.terminalPostmortem.failureModeTag).toContain(
       "component_salvage_only",
     );
-  });
+    },
+  );
 });

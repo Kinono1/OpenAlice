@@ -5,6 +5,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -45,15 +46,26 @@ ALLOWED_TRANSITIONS = {
 }
 
 
+def env_default(name: str, fallback: str) -> str:
+    value = os.environ.get(name)
+    return value if value and value.strip() else fallback
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build decision_packet artifacts for Go/No-Go validation."
     )
     parser.add_argument(
         "--template",
-        default="docs/research/templates/go_no_go_evidence_pack.template.json",
+        default=env_default(
+            "OPENALICE_DECISION_PACKET_TEMPLATE",
+            "docs/research/templates/go_no_go_evidence_pack.template.json",
+        ),
     )
-    parser.add_argument("--output-dir", default="decision_packet")
+    parser.add_argument(
+        "--output-dir",
+        default=env_default("OPENALICE_DECISION_PACKET_DIR", "decision_packet"),
+    )
     parser.add_argument("--protocol-spec")
     parser.add_argument("--protocol-hash-file")
     parser.add_argument("--comparability-report")

@@ -1,5 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import type {
+  AdmissionIntent,
+  SourceValidity,
+} from "../../src/runtime/source_eligibility.js";
+import type { StrategyBacktestInput } from "../../src/backtest/strategy-validation/backtest.js";
+import type { StrategyName } from "../../src/backtest/strategy-validation/types.js";
 
 export interface CandidateManifest {
   schemaVersion?: string;
@@ -19,12 +25,19 @@ export interface CandidateManifest {
 export interface CandidateConfig {
   strategyId: string;
   strategyName: string;
-  strategy: "trend" | "regimeTrend" | "meanReversion" | "breakout" | "ensemble";
+  strategy: StrategyName;
   applicableSymbols: string[];
   hypothesisFamily: string;
   correlationBucket: string;
   role?: "donor" | "benchmark_control" | "robustness_anchor" | "independent_guard";
   params: Record<string, unknown>;
+  sourceValidity?: SourceValidity;
+  donorNative?: boolean;
+  promotionEligible?: boolean;
+  admissionIntent?: AdmissionIntent;
+  eligibilityBlockers?: string[];
+  regimeGate?: StrategyBacktestInput["regimeGate"];
+  volatilityGate?: StrategyBacktestInput["volatilityGate"];
 }
 
 export interface CompilerProvenance {
@@ -132,6 +145,7 @@ export function buildTrendCandidate(input: {
   confirmBars: number;
   minDiffPct: number;
   allowShort: boolean;
+  volatilityGate?: CandidateConfig["volatilityGate"];
 }): CandidateConfig {
   const symbolKey = normalizeSymbolKey(input.symbol);
   return {
@@ -149,6 +163,7 @@ export function buildTrendCandidate(input: {
       trendMinDiffPct: input.minDiffPct,
       allowShort: input.allowShort,
     },
+    volatilityGate: input.volatilityGate,
   };
 }
 
@@ -164,6 +179,8 @@ export function buildRegimeTrendCandidate(input: {
   allowShort: boolean;
   allowedEntryRegimes: string[];
   exitOnRegimeMismatch?: boolean;
+  regimeGate?: CandidateConfig["regimeGate"];
+  volatilityGate?: CandidateConfig["volatilityGate"];
 }): CandidateConfig {
   const symbolKey = normalizeSymbolKey(input.symbol);
   return {
@@ -181,6 +198,8 @@ export function buildRegimeTrendCandidate(input: {
       allowedEntryRegimes: input.allowedEntryRegimes,
       exitOnRegimeMismatch: input.exitOnRegimeMismatch ?? true,
     },
+    regimeGate: input.regimeGate,
+    volatilityGate: input.volatilityGate,
   };
 }
 
@@ -197,6 +216,8 @@ export function buildMeanReversionCandidate(input: {
   bbPeriod: number;
   bbStdDev: number;
   allowShort: boolean;
+  regimeGate?: CandidateConfig["regimeGate"];
+  volatilityGate?: CandidateConfig["volatilityGate"];
 }): CandidateConfig {
   const symbolKey = normalizeSymbolKey(input.symbol);
   return {
@@ -215,6 +236,8 @@ export function buildMeanReversionCandidate(input: {
       bbStdDev: input.bbStdDev,
       allowShort: input.allowShort,
     },
+    regimeGate: input.regimeGate,
+    volatilityGate: input.volatilityGate,
   };
 }
 
@@ -228,6 +251,8 @@ export function buildBreakoutCandidate(input: {
   breakoutPeriod: number;
   exitPeriod: number;
   allowShort: boolean;
+  regimeGate?: CandidateConfig["regimeGate"];
+  volatilityGate?: CandidateConfig["volatilityGate"];
 }): CandidateConfig {
   const symbolKey = normalizeSymbolKey(input.symbol);
   return {
@@ -243,6 +268,8 @@ export function buildBreakoutCandidate(input: {
       breakoutExitPeriod: input.exitPeriod,
       allowShort: input.allowShort,
     },
+    regimeGate: input.regimeGate,
+    volatilityGate: input.volatilityGate,
   };
 }
 
@@ -260,6 +287,8 @@ export function buildEnsembleCandidate(input: {
     meanReversion: number;
     breakout: number;
   };
+  regimeGate?: CandidateConfig["regimeGate"];
+  volatilityGate?: CandidateConfig["volatilityGate"];
 }): CandidateConfig {
   const symbolKey = normalizeSymbolKey(input.symbol);
   return {
@@ -275,6 +304,8 @@ export function buildEnsembleCandidate(input: {
       allowShort: input.allowShort,
       ensembleWeights: input.weights,
     },
+    regimeGate: input.regimeGate,
+    volatilityGate: input.volatilityGate,
   };
 }
 
