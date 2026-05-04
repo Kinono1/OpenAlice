@@ -202,7 +202,9 @@ export function createStrategyTools(
       inputSchema: z.object({
         trendStrength: z.number(),
         realizedVolPct: z.number().nonnegative(),
+        realizedVolPercentile: z.number().min(0).max(1).optional(),
         rangeCompressionScore: z.number(),
+        volumeChangeRate: z.number().optional(),
         eventWindowFrozen: z.boolean().optional(),
       }),
       execute: async (input) => evaluateRegime(input),
@@ -211,8 +213,8 @@ export function createStrategyTools(
     evaluateRegimeTransition: tool({
       description: 'Evaluate what should happen to existing tickets when market regime changes.',
       inputSchema: z.object({
-        previous: z.enum(['spot-defensive', 'range-rotation', 'trend-follow', 'event-risk-freeze']),
-        next: z.enum(['spot-defensive', 'range-rotation', 'trend-follow', 'event-risk-freeze']),
+        previous: z.enum(['spot-defensive', 'range-rotation', 'trend-follow', 'bear-trend', 'vol-stress', 'event-risk-freeze']),
+        next: z.enum(['spot-defensive', 'range-rotation', 'trend-follow', 'bear-trend', 'vol-stress', 'event-risk-freeze']),
       }),
       execute: async ({ previous, next }) => evaluateRegimeTransition(previous, next),
     }),

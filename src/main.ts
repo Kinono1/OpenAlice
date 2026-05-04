@@ -155,9 +155,9 @@ async function main() {
   accountManager.setStrategyConfig(config.strategy)
 
   const accountConfigs = await readAccountsConfig()
-  for (const accCfg of accountConfigs) {
-    if (accCfg.enabled === false) continue
-    await accountManager.initAccount(accCfg)
+  const accountInit = await accountManager.initConfiguredAccounts(accountConfigs)
+  for (const failure of accountInit.failed) {
+    console.error(`account init failed: ${failure.id}: ${failure.error}`)
   }
   accountManager.registerCcxtToolsIfNeeded()
 
