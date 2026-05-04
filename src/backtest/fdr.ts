@@ -29,6 +29,20 @@ export interface FdrDiagnostics {
   selectionCutoff: number | null
   benchmarkStrategyId: string | null
   benchmarkStrategyIndex: number | null
+  bootstrapDirectionStable?: boolean | null
+  unstableBootstrapCandidateIndexes?: number[] | null
+  blockSizeSet?: number[] | null
+  blockSensitivityByCandidate?: Array<{
+    candidateIndex: number
+    blockSensitivity: Array<{
+      blockSize: number
+      observedMeanExcess: number
+      pValue: number
+      passed: boolean
+    }>
+    bootstrapDirectionStable: boolean
+    unstableBootstrap: boolean
+  }> | null
 }
 
 export interface RunFdrCorrectionInput {
@@ -40,12 +54,33 @@ export interface RunFdrCorrectionInput {
   windowPValuesByCandidate?: number[][]
   benchmarkStrategyId?: string
   benchmarkStrategyIndex?: number
+  spaBootstrapDiagnostics?: Pick<
+    FdrDiagnostics,
+    | 'bootstrapDirectionStable'
+    | 'unstableBootstrapCandidateIndexes'
+    | 'blockSizeSet'
+    | 'blockSensitivityByCandidate'
+  >
 }
 
 export interface RunFdrCorrectionResult {
   items: FdrItem[]
   diagnostics: FdrDiagnostics
   effectivePValues: number[]
+}
+
+export interface LedgerBoundFdrTrialLedger {
+  rawM: number
+  effectiveM?: number | null
+  rawMComplete: boolean
+  includesFailedTrials: boolean
+  failedTrialCount?: number | null
+  survivingTrialCount?: number | null
+  fdrMethodPrimary: 'BY_raw_m' | string
+}
+
+export interface RunLedgerBoundFdrCorrectionInput extends RunFdrCorrectionInput {
+  trialLedger: LedgerBoundFdrTrialLedger
 }
 
 const DEFAULT_ALPHA = 0.1
@@ -145,6 +180,10 @@ export function runFdrCorrection(
   }
 
   if (method === 'spa') {
+    const spaBootstrapDiagnostics = validateSpaBootstrapDiagnostics(
+      input.spaBootstrapDiagnostics,
+      effectivePValues.length,
+    )
     const items = runIdentityCorrection({
       tuples: effectiveTuples,
       alpha,
@@ -162,6 +201,7 @@ export function runFdrCorrection(
         selectionCutoff,
         benchmarkStrategyId: input.benchmarkStrategyId ?? null,
         benchmarkStrategyIndex: input.benchmarkStrategyIndex ?? null,
+        spaBootstrapDiagnostics,
       }),
       effectivePValues,
     }
@@ -197,6 +237,16 @@ export function runFdrCorrection(
   }
 }
 
+export function runLedgerBoundFdrCorrection(
+  input: RunLedgerBoundFdrCorrectionInput,
+): RunFdrCorrectionResult {
+  validateLedgerBoundFdrInput(input)
+  return runFdrCorrection({
+    ...input,
+    method: input.method ?? 'by',
+  })
+}
+
 function buildBaseDiagnostics(input: {
   method: FdrMethod
   alpha: number
@@ -212,6 +262,7 @@ function buildBaseDiagnostics(input: {
   selectionCutoff?: number | null
   benchmarkStrategyId?: string | null
   benchmarkStrategyIndex?: number | null
+  spaBootstrapDiagnostics?: RunFdrCorrectionInput['spaBootstrapDiagnostics']
 }): FdrDiagnostics {
   return {
     method: input.method,
@@ -228,6 +279,58 @@ function buildBaseDiagnostics(input: {
     selectionCutoff: input.selectionCutoff ?? null,
     benchmarkStrategyId: input.benchmarkStrategyId ?? null,
     benchmarkStrategyIndex: input.benchmarkStrategyIndex ?? null,
+    bootstrapDirectionStable: input.spaBootstrapDiagnostics?.bootstrapDirectionStable ?? null,
+    unstableBootstrapCandidateIndexes: input.spaBootstrapDiagnostics?.unstableBootstrapCandidateIndexes ?? null,
+    blockSizeSet: input.spaBootstrapDiagnostics?.blockSizeSet ?? null,
+    blockSensitivityByCandidate: input.spaBootstrapDiagnostics?.blockSensitivityByCandidate ?? null,
+  }
+}
+
+function validateLedgerBoundFdrInput(input: RunLedgerBoundFdrCorrectionInput): void {
+  const tuples = validatePValues(input.pValues)
+  const trialLedger = input.trialLedger
+  if (!trialLedger || typeof trialLedger !== 'object') {
+    throw new Error('trialLedger is required for ledger-bound FDR.')
+  }
+  if (trialLedger.fdrMethodPrimary !== 'BY_raw_m') {
+    throw new Error('trialLedger.fdrMethodPrimary must be BY_raw_m for ledger-bound FDR.')
+  }
+  if (trialLedger.rawMComplete !== true) {
+    throw new Error('trialLedger.rawMComplete must be true for ledger-bound FDR.')
+  }
+  if (trialLedger.includesFailedTrials !== true) {
+    throw new Error('trialLedger.includesFailedTrials must be true for ledger-bound FDR.')
+  }
+  if (!Number.isFinite(trialLedger.rawM) || trialLedger.rawM <= 0) {
+    throw new Error('trialLedger.rawM must be a positive finite number.')
+  }
+  if (trialLedger.rawM < tuples.length) {
+    throw new Error('trialLedger.rawM must be >= pValues length for ledger-bound FDR.')
+  }
+  if (trialLedger.effectiveM != null && (!Number.isFinite(trialLedger.effectiveM) || trialLedger.effectiveM <= 0)) {
+    throw new Error('trialLedger.effectiveM must be a positive finite number when provided.')
+  }
+  if (
+    trialLedger.failedTrialCount != null &&
+    (!Number.isFinite(trialLedger.failedTrialCount) || trialLedger.failedTrialCount < 0)
+  ) {
+    throw new Error('trialLedger.failedTrialCount must be a non-negative finite number when provided.')
+  }
+  if (
+    trialLedger.survivingTrialCount != null &&
+    (!Number.isFinite(trialLedger.survivingTrialCount) || trialLedger.survivingTrialCount < 0)
+  ) {
+    throw new Error('trialLedger.survivingTrialCount must be a non-negative finite number when provided.')
+  }
+  if (
+    trialLedger.failedTrialCount != null &&
+    trialLedger.survivingTrialCount != null &&
+    trialLedger.failedTrialCount + trialLedger.survivingTrialCount > trialLedger.rawM
+  ) {
+    throw new Error('trialLedger failed + surviving counts must not exceed rawM.')
+  }
+  if (input.method != null && input.method !== 'by') {
+    throw new Error('ledger-bound FDR must use BY_raw_m; set method to by or omit it.')
   }
 }
 
@@ -425,6 +528,52 @@ function validateProbability(value: number, field: string): number {
     throw new Error(`${field} must be in (0, 1).`)
   }
   return value
+}
+
+function validateSpaBootstrapDiagnostics(
+  diagnostics: RunFdrCorrectionInput['spaBootstrapDiagnostics'],
+  candidateCount: number,
+): RunFdrCorrectionInput['spaBootstrapDiagnostics'] {
+  if (!diagnostics) return diagnostics
+  const blockSensitivity = diagnostics.blockSensitivityByCandidate
+  const blockSizeSet = diagnostics.blockSizeSet
+  if (blockSensitivity != null) {
+    if (!Array.isArray(blockSensitivity) || blockSensitivity.length !== candidateCount) {
+      throw new Error('spaBootstrapDiagnostics.blockSensitivityByCandidate length must match pValues length.')
+    }
+    const seen = new Set<number>()
+    for (const [rowIndex, row] of blockSensitivity.entries()) {
+      if (!Number.isInteger(row.candidateIndex) || row.candidateIndex < 0 || row.candidateIndex >= candidateCount) {
+        throw new Error(`spaBootstrapDiagnostics.blockSensitivityByCandidate[${rowIndex}].candidateIndex is out of range.`)
+      }
+      if (seen.has(row.candidateIndex)) {
+        throw new Error(`spaBootstrapDiagnostics.blockSensitivityByCandidate[${rowIndex}].candidateIndex is duplicated.`)
+      }
+      seen.add(row.candidateIndex)
+      if (blockSizeSet != null) {
+        const rowBlockSizes = row.blockSensitivity.map(item => item.blockSize)
+        if (!sameNumberArray(rowBlockSizes, blockSizeSet)) {
+          throw new Error(`spaBootstrapDiagnostics.blockSensitivityByCandidate[${rowIndex}].blockSensitivity block sizes must match blockSizeSet.`)
+        }
+      }
+    }
+  }
+  if (diagnostics.unstableBootstrapCandidateIndexes != null) {
+    const covered = new Set(blockSensitivity?.map(row => row.candidateIndex))
+    for (const [index, candidateIndex] of diagnostics.unstableBootstrapCandidateIndexes.entries()) {
+      if (!Number.isInteger(candidateIndex) || candidateIndex < 0 || candidateIndex >= candidateCount) {
+        throw new Error(`spaBootstrapDiagnostics.unstableBootstrapCandidateIndexes[${index}] is out of range.`)
+      }
+      if (blockSensitivity != null && !covered.has(candidateIndex)) {
+        throw new Error(`spaBootstrapDiagnostics.unstableBootstrapCandidateIndexes[${index}] is not covered by blockSensitivityByCandidate.`)
+      }
+    }
+  }
+  return diagnostics
+}
+
+function sameNumberArray(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function clamp(value: number, min: number, max: number): number {
