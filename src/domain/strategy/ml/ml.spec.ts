@@ -9,6 +9,8 @@ import {
   validateFeatureNormalizationStats,
 } from './feature-pipeline.js'
 import {
+  clearStrategyOnnxSessionCache,
+  getStrategyOnnxSessionCacheStats,
   runStrategyOnnxInference,
   StrategyOnnxInputError,
   StrategyOnnxModelNotFoundError,
@@ -132,5 +134,18 @@ describe('strategy ml feature pipeline', () => {
       window: [[1, 2, 3]],
       expectedFeatureCount: 3,
     })).rejects.toBeInstanceOf(StrategyOnnxModelNotFoundError)
+  })
+
+  it('exposes a bounded ONNX session cache without loading missing models', async () => {
+    clearStrategyOnnxSessionCache()
+    expect(getStrategyOnnxSessionCacheStats()).toEqual({ size: 0, maxSize: 4 })
+
+    await expect(runStrategyOnnxInference({
+      modelPath: '/tmp/definitely-missing-model.onnx',
+      window: [[1, 2, 3]],
+      expectedFeatureCount: 3,
+    })).rejects.toBeInstanceOf(StrategyOnnxModelNotFoundError)
+
+    expect(getStrategyOnnxSessionCacheStats()).toEqual({ size: 0, maxSize: 4 })
   })
 })

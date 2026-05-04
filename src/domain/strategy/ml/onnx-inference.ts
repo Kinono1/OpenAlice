@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 
 import type {
   StrategyForecastPrediction,
@@ -13,18 +13,28 @@ type OrtModule = {
     dims: number[],
   ) => unknown
   InferenceSession: {
-    create: (modelPath: string) => Promise<{
-      inputNames: string[]
-      outputNames: string[]
-      run: (feeds: Record<string, unknown>) => Promise<Record<string, { data: ArrayLike<number> }>>
-    }>
+    create: (modelPath: string) => Promise<OrtSession>
   }
+}
+
+type OrtSession = {
+  inputNames: string[]
+  outputNames: string[]
+  run: (feeds: Record<string, unknown>) => Promise<Record<string, { data: ArrayLike<number> }>>
+}
+
+interface CachedOrtSession {
+  cacheKey: string
+  session: OrtSession
 }
 
 const dynamicImport = new Function(
   'moduleName',
   'return import(moduleName)',
 ) as (moduleName: string) => Promise<OrtModule>
+
+const MAX_CACHED_ONNX_SESSIONS = 4
+const sessionCache = new Map<string, CachedOrtSession>()
 
 export class OnnxRuntimeUnavailableError extends Error {
   constructor() {
@@ -94,18 +104,54 @@ async function loadOrtModule(): Promise<OrtModule> {
   }
 }
 
+export function clearStrategyOnnxSessionCache(): void {
+  sessionCache.clear()
+}
+
+export function getStrategyOnnxSessionCacheStats(): { size: number; maxSize: number } {
+  return {
+    size: sessionCache.size,
+    maxSize: MAX_CACHED_ONNX_SESSIONS,
+  }
+}
+
+async function resolveSession(
+  modelPath: string,
+): Promise<{ ort: OrtModule; session: OrtSession }> {
+  let modelStat: Awaited<ReturnType<typeof stat>>
+  try {
+    modelStat = await stat(modelPath)
+  } catch {
+    throw new StrategyOnnxModelNotFoundError(modelPath)
+  }
+
+  const cacheKey = `${modelPath}:${modelStat.mtimeMs}:${modelStat.size}`
+  const cached = sessionCache.get(modelPath)
+  if (cached?.cacheKey === cacheKey) {
+    const ort = await loadOrtModule()
+    sessionCache.delete(modelPath)
+    sessionCache.set(modelPath, cached)
+    return { ort, session: cached.session }
+  }
+
+  const ort = await loadOrtModule()
+  const session = await ort.InferenceSession.create(modelPath)
+  sessionCache.set(modelPath, { cacheKey, session })
+  while (sessionCache.size > MAX_CACHED_ONNX_SESSIONS) {
+    const oldestKey = sessionCache.keys().next().value
+    if (typeof oldestKey !== 'string') {
+      break
+    }
+    sessionCache.delete(oldestKey)
+  }
+  return { ort, session }
+}
+
 export async function runStrategyOnnxInference(
   input: StrategyOnnxInferenceInput,
 ): Promise<StrategyOnnxInferenceResult> {
   validateInferenceWindow(input.window, input.expectedFeatureCount)
-  try {
-    await access(input.modelPath)
-  } catch {
-    throw new StrategyOnnxModelNotFoundError(input.modelPath)
-  }
-
-  const ort = await loadOrtModule()
-  const session = await ort.InferenceSession.create(input.modelPath)
+  const { ort, session } = await resolveSession(input.modelPath)
   const inputName = session.inputNames[0]
   const outputName = input.outputName ?? session.outputNames[0]
   const rows = input.window.length
