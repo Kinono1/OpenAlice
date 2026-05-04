@@ -18,11 +18,45 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { readFile, appendFile, mkdir } from 'node:fs/promises'
+import { readFile, mkdir, open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { getActiveEntries } from './compaction.js'
 
-// ==================== Types ====================
+function hasErrorCode(err: unknown, code: string): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === code
+}
+
+function isSessionEntry(value: unknown): value is SessionEntry {
+  if (typeof value !== 'object' || value === null) return false
+
+  const entry = value as Record<string, unknown>
+  const message = entry.message
+
+  if (entry.type !== 'user' && entry.type !== 'assistant' && entry.type !== 'system' && entry.type !== 'meta') {
+    return false
+  }
+
+  if (typeof entry.uuid !== 'string' || typeof entry.sessionId !== 'string' || typeof entry.timestamp !== 'string') {
+    return false
+  }
+
+  if (!(entry.parentUuid === null || typeof entry.parentUuid === 'string')) {
+    return false
+  }
+
+  if (typeof message !== 'object' || message === null) return false
+
+  const typedMessage = message as Record<string, unknown>
+  if (
+    typedMessage.role !== 'user' &&
+    typedMessage.role !== 'assistant' &&
+    typedMessage.role !== 'system'
+  ) {
+    return false
+  }
+
+  return typeof typedMessage.content === 'string' || Array.isArray(typedMessage.content)
+}
 
 /** A single entry in the session JSONL file. */
 export interface SessionEntry {
@@ -86,6 +120,7 @@ const SESSIONS_DIR = join(process.cwd(), 'data', 'sessions')
 export class SessionStore implements ISessionStore {
   private sessionId: string
   private lastUuid: string | null = null
+  private appendQueue: Promise<void> = Promise.resolve()
 
   constructor(sessionId?: string) {
     this.sessionId = sessionId ?? randomUUID()
@@ -126,13 +161,25 @@ export class SessionStore implements ISessionStore {
   async readAll(): Promise<SessionEntry[]> {
     try {
       const raw = await readFile(this.filePath, 'utf-8')
-      return raw
-        .split('\n')
-        .filter((line) => line.trim())
-        .map((line) => JSON.parse(line) as SessionEntry)
-        .filter((entry) => entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
+      const entries: SessionEntry[] = []
+
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+
+        try {
+          const parsed = JSON.parse(trimmed) as unknown
+          if (isSessionEntry(parsed) && (parsed.type === 'user' || parsed.type === 'assistant' || parsed.type === 'system')) {
+            entries.push(parsed)
+          }
+        } catch {
+          continue
+        }
+      }
+
+      return entries
     } catch (err: unknown) {
-      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (hasErrorCode(err, 'ENOENT')) {
         return []
       }
       throw err
@@ -147,9 +194,10 @@ export class SessionStore implements ISessionStore {
 
   /** Append a pre-built entry directly (used by compaction for boundary/summary). */
   async appendRaw(entry: SessionEntry): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true })
-    await appendFile(this.filePath, JSON.stringify(entry) + '\n')
-    this.lastUuid = entry.uuid
+    await this.withAppendLock(async () => {
+      await appendJsonlLineDurably(this.filePath, JSON.stringify(entry))
+      this.lastUuid = entry.uuid
+    })
   }
 
   /** Restore lastUuid from existing file so new entries chain correctly. */
@@ -165,26 +213,56 @@ export class SessionStore implements ISessionStore {
     try {
       await readFile(this.filePath, 'utf-8')
       return true
-    } catch {
-      return false
+    } catch (err: unknown) {
+      if (hasErrorCode(err, 'ENOENT')) {
+        return false
+      }
+      throw err
     }
   }
 
   private async append(partial: Omit<SessionEntry, 'uuid' | 'parentUuid' | 'sessionId' | 'timestamp'>): Promise<SessionEntry> {
-    const entry: SessionEntry = {
-      ...partial,
-      uuid: randomUUID(),
-      parentUuid: this.lastUuid,
-      sessionId: this.sessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
+    return this.withAppendLock(async () => {
+      const entry: SessionEntry = {
+        ...partial,
+        uuid: randomUUID(),
+        parentUuid: this.lastUuid,
+        sessionId: this.sessionId,
+        timestamp: new Date().toISOString(),
+        cwd: process.cwd(),
+      }
+
+      await appendJsonlLineDurably(this.filePath, JSON.stringify(entry))
+
+      this.lastUuid = entry.uuid
+      return entry
+    })
+  }
+
+  private async withAppendLock<T>(task: () => Promise<T>): Promise<T> {
+    const prev = this.appendQueue
+    let release!: () => void
+    this.appendQueue = new Promise<void>(resolve => {
+      release = resolve
+    })
+
+    await prev
+    try {
+      return await task()
+    } finally {
+      release()
     }
+  }
+}
 
-    await mkdir(dirname(this.filePath), { recursive: true })
-    await appendFile(this.filePath, JSON.stringify(entry) + '\n')
-
-    this.lastUuid = entry.uuid
-    return entry
+async function appendJsonlLineDurably(filePath: string, line: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true })
+  const file = await open(filePath, 'a')
+  try {
+    await file.write(line.endsWith('\n') ? line : `${line}\n`)
+    await file.datasync()
+  } finally {
+    await file.close()
   }
 }
 

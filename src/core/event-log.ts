@@ -1,17 +1,19 @@
 /**
  * Event Log — append-only persistent event log with in-memory ring buffer.
  *
- * Dual-write: every append goes to disk (JSONL) AND an in-memory buffer.
+ * Every append goes to a SQLite WAL table AND an in-memory buffer.
  * The memory buffer holds the most recent N entries (default 500) for fast
  * queries. Disk is the source of truth for crash recovery and full history.
  *
- * Storage: one JSON object per line (`events.jsonl`), append-only.
- * Recovery: on startup, loads the tail of the file into the memory buffer
- * and restores the seq counter.
+ * Storage: SQLite WAL (`event_log` table), append-only.
+ * Recovery: on startup, loads the tail of the table into the memory buffer
+ * and restores the observed seq counter. SQLite owns write serialization,
+ * crash recovery, and cross-process writer coordination.
  */
 
-import { appendFile, readFile, mkdir, unlink } from 'node:fs/promises'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
 // ==================== Types ====================
 
@@ -41,7 +43,7 @@ export interface EventLog {
   append<T>(type: string, payload: T): Promise<EventLogEntry<T>>
 
   /**
-   * Read events from the DISK log file.
+   * Read events from persistent storage.
    * - afterSeq: only return entries with seq > afterSeq (default: 0 = all)
    * - type: only return entries matching this type
    * - limit: max number of entries to return
@@ -49,7 +51,7 @@ export interface EventLog {
   read(opts?: { afterSeq?: number; limit?: number; type?: string }): Promise<EventLogEntry[]>
 
   /**
-   * Paginated query from DISK. Returns entries newest-first (descending seq).
+   * Paginated query from persistent storage. Returns entries newest-first (descending seq).
    * - page: 1-indexed page number (default: 1)
    * - pageSize: entries per page (default: 100)
    * - type: only return entries matching this type
@@ -78,7 +80,7 @@ export interface EventLog {
   /** Close the log (clear listeners and buffer). */
   close(): Promise<void>
 
-  /** Reset all state and delete the log file. For tests only. */
+  /** Reset all state and clear persistent storage. For tests only. */
   _resetForTest(): Promise<void>
 }
 
@@ -99,17 +101,36 @@ export async function createEventLog(opts?: {
   /** Max entries in the in-memory ring buffer. Default: 500. */
   bufferSize?: number
 }): Promise<EventLog> {
-  const logPath = opts?.logPath ?? 'data/event-log/events.jsonl'
+  const logPath = opts?.logPath ?? 'data/event-log/events.sqlite'
   const bufferSize = opts?.bufferSize ?? DEFAULT_BUFFER_SIZE
 
   // Ensure directory exists
-  await mkdir(dirname(logPath), { recursive: true })
+  mkdirSync(dirname(logPath), { recursive: true })
+  const db = new DatabaseSync(logPath)
+  try {
+    db.enableDefensive(true)
+  } catch {
+    // Older Node SQLite builds may not expose defensive mode.
+  }
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = FULL;
+    CREATE TABLE IF NOT EXISTS event_log (
+      seq INTEGER PRIMARY KEY,
+      ts INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_event_log_type_seq
+      ON event_log(type, seq);
+  `)
+  migrateLegacyJsonlIfEmpty(db, logPath)
 
   // In-memory ring buffer
   let buffer: EventLogEntry[] = []
 
   // Recover seq + buffer from existing file
-  let seq = await recoverState(logPath, buffer, bufferSize)
+  let seq = recoverState(db, buffer, bufferSize)
 
   // Listener sets
   const listeners = new Set<EventLogListener>()
@@ -118,17 +139,20 @@ export async function createEventLog(opts?: {
   // ---------- append ----------
 
   async function append<T>(type: string, payload: T): Promise<EventLogEntry<T>> {
-    seq += 1
+    const ts = Date.now()
+    const payloadJson = JSON.stringify(payload) ?? 'null'
+    const result = db.prepare(
+      `INSERT INTO event_log(ts, type, payload_json)
+       VALUES (?, ?, ?)`,
+    ).run(ts, type, payloadJson)
+    const entrySeq = Number(result.lastInsertRowid)
+    seq = Math.max(seq, entrySeq)
     const entry: EventLogEntry<T> = {
-      seq,
-      ts: Date.now(),
+      seq: entrySeq,
+      ts,
       type,
       payload,
     }
-
-    // Dual write: disk first, then memory
-    const line = JSON.stringify(entry) + '\n'
-    await appendFile(logPath, line, 'utf-8')
 
     // Push to ring buffer, truncate if over limit
     buffer.push(entry)
@@ -161,31 +185,8 @@ export async function createEventLog(opts?: {
     const limit = readOpts?.limit ?? Infinity
     const filterType = readOpts?.type
 
-    let raw: string
-    try {
-      raw = await readFile(logPath, 'utf-8')
-    } catch (err: unknown) {
-      if (isENOENT(err)) return []
-      throw err
-    }
-
-    const lines = raw.split('\n')
-    const results: EventLogEntry[] = []
-
-    for (const line of lines) {
-      if (!line.trim()) continue
-      try {
-        const entry: EventLogEntry = JSON.parse(line)
-        if (entry.seq <= afterSeq) continue
-        if (filterType && entry.type !== filterType) continue
-        results.push(entry)
-        if (results.length >= limit) break
-      } catch {
-        // Skip malformed lines
-      }
-    }
-
-    return results
+    const rows = queryRows(db, { afterSeq, limit, type: filterType, order: 'asc' })
+    return rows.map(rowToEventLogEntry).filter(isEventLogEntry)
   }
 
   // ---------- query (disk, paginated) ----------
@@ -261,6 +262,7 @@ export async function createEventLog(opts?: {
     listeners.clear()
     typeListeners.clear()
     buffer = []
+    db.close()
   }
 
   async function _resetForTest(): Promise<void> {
@@ -268,11 +270,7 @@ export async function createEventLog(opts?: {
     listeners.clear()
     typeListeners.clear()
     buffer = []
-    try {
-      await unlink(logPath)
-    } catch (err: unknown) {
-      if (!isENOENT(err)) throw err
-    }
+    db.exec('DELETE FROM event_log')
   }
 
   return {
@@ -291,46 +289,152 @@ export async function createEventLog(opts?: {
 // ==================== Helpers ====================
 
 /**
- * Read the log file, restore the seq counter, and populate the in-memory
+ * Read the log table, restore the seq counter, and populate the in-memory
  * buffer with the most recent `bufferSize` entries.
  */
-async function recoverState(
-  logPath: string,
+function recoverState(
+  db: DatabaseSync,
   buffer: EventLogEntry[],
   bufferSize: number,
-): Promise<number> {
-  let raw: string
-  try {
-    raw = await readFile(logPath, 'utf-8')
-  } catch (err: unknown) {
-    if (isENOENT(err)) return 0
-    throw err
-  }
+): number {
+  const tailRows = queryRows(db, {
+    afterSeq: 0,
+    limit: bufferSize,
+    order: 'desc',
+  })
+  const tail = tailRows
+    .map(rowToEventLogEntry)
+    .filter(isEventLogEntry)
+    .reverse()
+  buffer.push(...tail)
 
-  if (!raw.trim()) return 0
+  const row = db.prepare('SELECT MAX(seq) AS seq FROM event_log').get() as { seq?: unknown } | undefined
+  return typeof row?.seq === 'number' ? row.seq : 0
+}
 
-  // Parse all valid entries
+function migrateLegacyJsonlIfEmpty(db: DatabaseSync, sqlitePath: string): void {
+  const legacyPath = legacyJsonlPathFor(sqlitePath)
+  if (!legacyPath || !existsSync(legacyPath)) return
+
+  const countRow = db.prepare('SELECT COUNT(*) AS count FROM event_log').get() as { count?: unknown } | undefined
+  if (countRow?.count !== 0) return
+
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO event_log(seq, ts, type, payload_json)
+     VALUES (?, ?, ?, ?)`,
+  )
   const entries: EventLogEntry[] = []
-  const lines = raw.split('\n')
-  for (const line of lines) {
+  for (const line of readFileSync(legacyPath, 'utf-8').split('\n')) {
     if (!line.trim()) continue
     try {
-      entries.push(JSON.parse(line))
+      const parsed = JSON.parse(line) as unknown
+      if (isPersistedEventLogEntry(parsed)) entries.push(parsed)
     } catch {
-      // Skip malformed
+      continue
     }
   }
 
-  if (entries.length === 0) return 0
+  if (entries.length === 0) return
 
-  // Load tail into buffer
-  const tail = entries.slice(-bufferSize)
-  buffer.push(...tail)
-
-  // Return last seq
-  return entries[entries.length - 1].seq
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const entry of entries) {
+      insert.run(
+        entry.seq,
+        entry.ts,
+        entry.type,
+        JSON.stringify(entry.payload) ?? 'null',
+      )
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      // Preserve the original migration error.
+    }
+    throw error
+  }
 }
 
-function isENOENT(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT'
+function legacyJsonlPathFor(sqlitePath: string): string | null {
+  return sqlitePath.endsWith('.sqlite')
+    ? `${sqlitePath.slice(0, -'.sqlite'.length)}.jsonl`
+    : null
+}
+
+interface EventLogRow {
+  seq: unknown
+  ts: unknown
+  type: unknown
+  payload_json: unknown
+}
+
+function queryRows(
+  db: DatabaseSync,
+  opts: {
+    afterSeq: number
+    limit: number
+    type?: string
+    order: 'asc' | 'desc'
+  },
+): EventLogRow[] {
+  const limit = Number.isFinite(opts.limit)
+    ? Math.max(0, Math.floor(opts.limit))
+    : -1
+  const order = opts.order === 'desc' ? 'DESC' : 'ASC'
+  if (opts.type) {
+    return db.prepare(
+      `SELECT seq, ts, type, payload_json
+       FROM event_log
+       WHERE seq > ? AND type = ?
+       ORDER BY seq ${order}
+       LIMIT ?`,
+    ).all(opts.afterSeq, opts.type, limit) as unknown as EventLogRow[]
+  }
+
+  return db.prepare(
+    `SELECT seq, ts, type, payload_json
+     FROM event_log
+     WHERE seq > ?
+     ORDER BY seq ${order}
+     LIMIT ?`,
+  ).all(opts.afterSeq, limit) as unknown as EventLogRow[]
+}
+
+function rowToEventLogEntry(row: EventLogRow): EventLogEntry | null {
+  if (
+    typeof row.seq !== 'number' ||
+    typeof row.ts !== 'number' ||
+    typeof row.type !== 'string' ||
+    typeof row.payload_json !== 'string'
+  ) {
+    return null
+  }
+
+  try {
+    return {
+      seq: row.seq,
+      ts: row.ts,
+      type: row.type,
+      payload: JSON.parse(row.payload_json),
+    }
+  } catch {
+    return null
+  }
+}
+
+function isEventLogEntry(entry: EventLogEntry | null): entry is EventLogEntry {
+  return entry !== null
+}
+
+function isPersistedEventLogEntry(value: unknown): value is EventLogEntry {
+  if (typeof value !== 'object' || value === null) return false
+  const entry = value as Record<string, unknown>
+  return Number.isSafeInteger(entry.seq) &&
+    typeof entry.ts === 'number' &&
+    Number.isFinite(entry.ts) &&
+    typeof entry.type === 'string' &&
+    entry.type.length > 0 &&
+    'payload' in entry
 }

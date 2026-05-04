@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { createEventLog, type EventLog, type EventLogEntry } from './event-log.js'
 
@@ -45,6 +46,18 @@ describe('event-log', () => {
 
       const entries = await log.read()
       expect(entries.map((e) => e.seq)).toEqual([1, 2, 3])
+    })
+
+    it('should preserve monotonic seq numbers under concurrent appends', async () => {
+      await Promise.all(
+        Array.from({ length: 100 }, (_, i) => log.append('tick', { i })),
+      )
+
+      const entries = await log.read()
+      expect(entries).toHaveLength(100)
+      expect(entries.map((entry) => entry.seq)).toEqual(
+        Array.from({ length: 100 }, (_, i) => i + 1),
+      )
     })
 
     it('should include reasonable timestamps', async () => {
@@ -383,6 +396,53 @@ describe('event-log', () => {
       expect(recent).toHaveLength(2)
       expect(recent[0].type).toBe('a')
       expect(recent[1].type).toBe('b')
+
+      await log2._resetForTest()
+    })
+
+    it('should migrate same-name legacy JSONL entries into a new SQLite log', async () => {
+      const basePath = join(tmpdir(), `event-log-test-${randomUUID()}`)
+      const legacyPath = `${basePath}.jsonl`
+      const sqlitePath = `${basePath}.sqlite`
+      await writeFile(
+        legacyPath,
+        [
+          JSON.stringify({ seq: 1, ts: 1000, type: 'legacy.a', payload: { a: 1 } }),
+          '{broken json',
+          JSON.stringify({ seq: 2, ts: 2000, type: 'legacy.b', payload: { b: 2 } }),
+        ].join('\n') + '\n',
+      )
+
+      const migratedLog = await createEventLog({ logPath: sqlitePath })
+
+      expect(migratedLog.lastSeq()).toBe(2)
+      await expect(migratedLog.read()).resolves.toMatchObject([
+        { seq: 1, ts: 1000, type: 'legacy.a', payload: { a: 1 } },
+        { seq: 2, ts: 2000, type: 'legacy.b', payload: { b: 2 } },
+      ])
+      const appended = await migratedLog.append('new', {})
+      expect(appended.seq).toBe(3)
+
+      await migratedLog._resetForTest()
+    })
+
+    it('should not import legacy JSONL when SQLite already has rows', async () => {
+      const basePath = join(tmpdir(), `event-log-test-${randomUUID()}`)
+      const legacyPath = `${basePath}.jsonl`
+      const sqlitePath = `${basePath}.sqlite`
+      const log1 = await createEventLog({ logPath: sqlitePath })
+      await log1.append('sqlite.only', { source: 'sqlite' })
+      await log1.close()
+      await writeFile(
+        legacyPath,
+        JSON.stringify({ seq: 2, ts: 2000, type: 'legacy.only', payload: {} }) + '\n',
+      )
+
+      const log2 = await createEventLog({ logPath: sqlitePath })
+
+      await expect(log2.read()).resolves.toMatchObject([
+        { seq: 1, type: 'sqlite.only', payload: { source: 'sqlite' } },
+      ])
 
       await log2._resetForTest()
     })

@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { toModelMessages, toTextHistory, toChatHistory, SessionStore, MemorySessionStore, type SessionEntry, type ContentBlock } from './session.js'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 
 // ==================== Helpers ====================
 
@@ -441,30 +440,43 @@ describe('MemorySessionStore', () => {
 // ==================== SessionStore (filesystem) ====================
 
 describe('SessionStore', () => {
-  let tmpDir: string
-
   // HACK: SessionStore uses SESSIONS_DIR = join(process.cwd(), 'data', 'sessions') which is
   // a module-level constant, so we can't redirect it. We test using the default path
   // by cleaning up after ourselves instead.
-  // To keep tests isolated we use a custom sessionId that won't clash.
 
-  const testId = `test-session-${Date.now()}`
+  const makeTestId = () => `test-session-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+  async function writeSessionFile(sessionId: string, lines: string[]) {
+    const sessionDir = join(process.cwd(), 'data', 'sessions')
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(join(sessionDir, `${sessionId}.jsonl`), lines.join('\n') + '\n')
+  }
+
+  async function removeSessionFile(sessionId: string) {
+    try {
+      await rm(join(process.cwd(), 'data', 'sessions', `${sessionId}.jsonl`), { force: true })
+    } catch { /* ignore */ }
+  }
 
   afterEach(async () => {
-    // Clean up session file written during test
-    const { join: pathJoin } = await import('node:path')
-    const { rm: fsRm } = await import('node:fs/promises')
+    const sessionDir = join(process.cwd(), 'data', 'sessions')
     try {
-      await fsRm(pathJoin(process.cwd(), 'data', 'sessions', `${testId}.jsonl`), { force: true })
+      const entries = await import('node:fs/promises').then(({ readdir }) => readdir(sessionDir))
+      await Promise.all(
+        entries
+          .filter((name) => name.startsWith('test-session-'))
+          .map((name) => rm(join(sessionDir, name), { force: true })),
+      )
     } catch { /* ignore */ }
   })
 
   it('exists() returns false for a new session', async () => {
-    const store = new SessionStore(testId)
+    const store = new SessionStore(makeTestId())
     expect(await store.exists()).toBe(false)
   })
 
   it('appendUser() creates file and can be read back', async () => {
+    const testId = makeTestId()
     const store = new SessionStore(testId)
     await store.appendUser('hello from disk')
     expect(await store.exists()).toBe(true)
@@ -475,17 +487,33 @@ describe('SessionStore', () => {
   })
 
   it('multiple appends chain UUIDs correctly', async () => {
-    const store = new SessionStore(testId)
+    const store = new SessionStore(makeTestId())
     const e1 = await store.appendUser('first')
     const e2 = await store.appendAssistant('second')
     expect(e1.parentUuid).toBeNull()
     expect(e2.parentUuid).toBe(e1.uuid)
   })
 
+  it('concurrent appends serialize parentUuid chaining', async () => {
+    const store = new SessionStore(makeTestId())
+
+    await Promise.all([
+      store.appendUser('first'),
+      store.appendAssistant('second'),
+      store.appendUser('third'),
+    ])
+
+    const all = await store.readAll()
+    expect(all).toHaveLength(3)
+    expect(all[0].parentUuid).toBeNull()
+    expect(all[1].parentUuid).toBe(all[0].uuid)
+    expect(all[2].parentUuid).toBe(all[1].uuid)
+  })
+
   it('restore() reads lastUuid from file so next append chains correctly', async () => {
+    const testId = makeTestId()
     const store = new SessionStore(testId)
     const e1 = await store.appendUser('original')
-    // New store instance (simulates process restart)
     const store2 = new SessionStore(testId)
     await store2.restore()
     const e2 = await store2.appendUser('after restore')
@@ -493,7 +521,81 @@ describe('SessionStore', () => {
   })
 
   it('readAll() returns [] for non-existent session (ENOENT)', async () => {
-    const store = new SessionStore('definitely-does-not-exist-' + Date.now())
+    const store = new SessionStore(makeTestId())
     expect(await store.readAll()).toEqual([])
+  })
+
+  it('readAll() skips malformed middle lines but keeps valid entries', async () => {
+    const testId = makeTestId()
+    await writeSessionFile(testId, [
+      JSON.stringify(userText('first valid')),
+      '{not valid json',
+      JSON.stringify(assistantText('second valid')),
+    ])
+
+    const store = new SessionStore(testId)
+    await expect(store.readAll()).resolves.toMatchObject([
+      { type: 'user', message: { content: 'first valid' } },
+      { type: 'assistant', message: { content: 'second valid' } },
+    ])
+  })
+
+  it('readAll() skips a truncated final line but keeps earlier valid entries', async () => {
+    const testId = makeTestId()
+    const sessionDir = join(process.cwd(), 'data', 'sessions')
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(
+      join(sessionDir, `${testId}.jsonl`),
+      `${JSON.stringify(userText('first valid'))}\n{"type":"assistant"`,
+    )
+
+    const store = new SessionStore(testId)
+    await expect(store.readAll()).resolves.toMatchObject([
+      { type: 'user', message: { content: 'first valid' } },
+    ])
+  })
+
+  it('restore() uses the last valid entry when later lines are corrupt', async () => {
+    const testId = makeTestId()
+    const first = userText('first')
+    const second = assistantText('second')
+    await writeSessionFile(testId, [
+      JSON.stringify(first),
+      JSON.stringify(second),
+      '{broken',
+    ])
+
+    const store = new SessionStore(testId)
+    await store.restore()
+    const appended = await store.appendUser('after restore')
+    expect(appended.parentUuid).toBe(second.uuid)
+  })
+
+  it('readAll() ignores structurally invalid JSON entries', async () => {
+    const testId = makeTestId()
+    await writeSessionFile(testId, [
+      JSON.stringify({ nope: true }),
+      JSON.stringify(userText('kept entry')),
+    ])
+
+    const store = new SessionStore(testId)
+    await expect(store.readAll()).resolves.toMatchObject([
+      { type: 'user', message: { content: 'kept entry' } },
+    ])
+  })
+
+  it('exists() still returns true for malformed files that exist on disk', async () => {
+    const testId = makeTestId()
+    await writeSessionFile(testId, ['{broken'])
+
+    const store = new SessionStore(testId)
+    await expect(store.exists()).resolves.toBe(true)
+  })
+
+  it('removeSessionFile helper stays unused-safe', async () => {
+    const testId = makeTestId()
+    await removeSessionFile(testId)
+    const store = new SessionStore(testId)
+    expect(await store.exists()).toBe(false)
   })
 })
