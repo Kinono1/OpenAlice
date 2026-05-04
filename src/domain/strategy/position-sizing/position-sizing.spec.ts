@@ -8,14 +8,31 @@ describe('strategy position sizing', () => {
     expect(size).toBeLessThanOrEqual(1)
   })
 
-  it('returns zero Kelly size for weak edge', () => {
+  it('shrinks weak-edge Kelly toward prior via Bayesian shrinkage', () => {
     const size = fractionalKelly(0.45, 1.0, 0.15)
-    expect(size).toBe(0)
+    expect(size).toBeGreaterThan(0)
+    expect(size).toBeLessThan(0.15)
   })
 
   it('computes a capped volatility-target size', () => {
     const size = volatilityTargetSize(10, 20, 0.3)
     expect(size).toBe(0.3)
+  })
+
+  it('does not over-penalize normal crypto vol-of-vol', () => {
+    const baseline = volatilityTargetSize(10, 40, 0.5)
+    const withNormalVolOfVol = volatilityTargetSize(10, 40, 0.5, 30)
+
+    expect(withNormalVolOfVol).toBeCloseTo(baseline)
+  })
+
+  it('shrinks only elevated vol-of-vol above the crypto baseline', () => {
+    const baseline = volatilityTargetSize(30, 40, 1.0)
+    const stressed = volatilityTargetSize(30, 40, 1.0, 70)
+
+    // Baseline: 30/40 = 0.75. Stressed: 0.75 * 1/(1+55/30) ≈ 0.265
+    expect(stressed).toBeLessThan(baseline)
+    expect(stressed).toBeGreaterThan(0.2)
   })
 
   it('allows a core-layer probe inside limits', () => {
