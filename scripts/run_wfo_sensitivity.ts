@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { safePathComponent } from "../src/core/path-safety.js";
 import {
   appendExecutionJournal,
   extractSummaryMetrics,
@@ -435,7 +436,10 @@ function median(values: number[]): number {
 }
 
 function sanitizeTag(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return safePathComponent(value.replace(/[^a-zA-Z0-9._-]+/g, "_"), {
+    kind: "runtime tag",
+    maxLength: 128,
+  });
 }
 
 function renderMarkdown(payload: {

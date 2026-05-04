@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { safePathComponent } from "../src/core/path-safety.js";
 import {
   ensureRuntimeProofArtifacts,
   loadRuntimeProofTracking,
@@ -263,7 +264,10 @@ function buildEffectivePhaseReadiness(input: {
 
 function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
-  const tag = raw.get("tag") ?? "route_batch3.v1";
+  const tag = safePathComponent(raw.get("tag") ?? "route_batch3.v1", {
+    kind: "route tag",
+    maxLength: 128,
+  });
   return {
     candidates:
       raw.get("candidates") ??
