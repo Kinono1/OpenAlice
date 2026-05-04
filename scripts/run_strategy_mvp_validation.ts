@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   runFdrCorrection,
   type FdrDiagnostics,
@@ -14,15 +15,18 @@ import {
 } from '../src/backtest/release_gate.js'
 import { evaluateRiskSimulation } from '../src/backtest/risk_simulation.js'
 import {
+  buildTrialLedgerSummary,
   computeSpaLikePValues,
   computeDeflatedSharpe,
   evaluateSignificanceGate,
 } from '../src/backtest/statistical_significance.js'
 import { runStrategyWalkForward } from '../src/backtest/wfo.js'
 import { runStrategyBacktest } from '../src/backtest/strategy-validation/backtest.js'
+import type { StrategyBacktestInput } from '../src/backtest/strategy-validation/backtest.js'
 import { getStrategyMinimumBars } from '../src/backtest/strategy-validation/strategies.js'
 import type {
   MarketData,
+  StrategyRegimeLabel,
   StrategyName,
   StrategyParams,
 } from '../src/backtest/strategy-validation/types.js'
@@ -31,6 +35,14 @@ import {
   resolveStrategyParams,
 } from '../src/backtest/strategy-validation/types.js'
 import { writeReleaseGateStatus } from '../src/runtime/release_gate_status.js'
+import {
+  deriveManifestSourceDefaults,
+  resolveSourceEligibility,
+  type AdmissionIntent,
+  type SourceEligibility,
+  type SourceLineage,
+  type SourceValidity,
+} from '../src/runtime/source_eligibility.js'
 
 type BootstrapMethod = 'iid_bootstrap' | 'moving_block_bootstrap'
 type MultipleTestingUnit = 'candidate' | 'family'
@@ -46,6 +58,17 @@ interface CandidateConfig {
   hypothesisFamily?: string
   correlationBucket?: string
   role?: 'donor' | 'benchmark_control' | 'robustness_anchor' | 'independent_guard'
+  sourceValidity?: Partial<SourceValidity>
+  runtimeMode?: SourceValidity['runtimeMode']
+  sourceLineage?: SourceLineage
+  evidenceStrength?: string
+  fallbackReason?: string | null
+  donorNative?: boolean
+  promotionEligible?: boolean
+  admissionIntent?: AdmissionIntent
+  eligibilityBlockers?: string[]
+  regimeGate?: StrategyBacktestInput['regimeGate']
+  volatilityGate?: StrategyBacktestInput['volatilityGate']
 }
 
 interface DatasetSymbolConfig {
@@ -56,6 +79,7 @@ interface DatasetSymbolConfig {
 
 interface CandidatesFile {
   schemaVersion?: string
+  notes?: string[]
   dataset?: {
     inputCsv?: string
     symbol?: string
@@ -84,6 +108,7 @@ interface CandidatesFile {
     cvAggQuantile?: number
     spaBootstrapSamples?: number
     spaBlockSize?: number
+    spaBlockSizeSet?: number[]
     benchmarkStrategyIdBySymbol?: Record<string, string>
   }
   riskSimulation?: {
@@ -115,6 +140,7 @@ interface CliArgs {
   storeyLambda?: number
   cvAggQuantile?: number
   selfCheck: boolean
+  dryRun: boolean
 }
 
 interface DatasetSymbolTarget {
@@ -132,6 +158,9 @@ interface NormalizedCandidateConfig {
   hypothesisFamily?: string
   correlationBucket?: string
   role?: 'donor' | 'benchmark_control' | 'robustness_anchor' | 'independent_guard'
+  sourceEligibility: SourceEligibility
+  regimeGate?: StrategyBacktestInput['regimeGate']
+  volatilityGate?: StrategyBacktestInput['volatilityGate']
 }
 
 interface ThresholdConfig {
@@ -158,6 +187,7 @@ interface SignificanceConfig {
   cvAggQuantile: number
   spaBootstrapSamples: number
   spaBlockSize: number
+  spaBlockSizeSet: number[]
   benchmarkStrategyIdBySymbol: Record<string, string>
 }
 
@@ -277,12 +307,35 @@ async function main(): Promise<void> {
     console.log('run_strategy_mvp_validation self-check: ok')
     return
   }
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      command: 'run_strategy_mvp_validation',
+      executionMode: {
+        dryRun: true,
+        writesValidationRuns: false,
+        writesVerdict: false,
+        writesReleaseGateStatus: false,
+        promotionEligible: false,
+      },
+      inputPaths: {
+        candidatesFile: resolve(args.candidatesFile),
+        output: resolve(args.output),
+        verdictOutput: resolve(args.verdictOutput),
+        releaseGateStatusPath: resolve(args.releaseGateStatusPath),
+      },
+      optIn: {
+        runValidation: '--dryRun false',
+      },
+    }, null, 2))
+    return
+  }
 
   const config = await readCandidatesConfig(args.candidatesFile)
   const datasetSymbols = normalizeDatasetSymbols(config.dataset)
   const candidates = normalizeCandidates(
     config.candidates,
     datasetSymbols.map((item) => item.symbol),
+    config.notes,
   )
   const thresholds = resolveThresholds(config.thresholds)
   const wfoConfig = resolveWfoProfile({
@@ -423,6 +476,9 @@ async function main(): Promise<void> {
         familyKey: run.familyKey,
         correlationBucket: run.correlationBucket,
         familyRepresentative: run.familyRepresentative,
+        regimeGate: run.candidate.regimeGate ?? null,
+        volatilityGate: run.candidate.volatilityGate ?? null,
+        sourceEligibility: run.candidate.sourceEligibility,
         status: run.candidatePass ? 'pass' : 'fail',
         metrics: {
           pbo: run.admissionSignificance.pboResult.pbo,
@@ -480,6 +536,7 @@ function parseArgs(argv: string[]): CliArgs {
     storeyLambda: toOptionalNumber(raw.get('storey-lambda')),
     cvAggQuantile: toOptionalNumber(raw.get('cv-agg-quantile')),
     selfCheck: raw.get('self-check') === 'true',
+    dryRun: parseBoolArg(raw.get('dryRun'), true),
   }
 }
 
@@ -500,6 +557,14 @@ function parseRawArgs(argv: string[]): Map<string, string> {
     index += 1
   }
   return out
+}
+
+function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback
+  const normalized = raw.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false
+  throw new Error(`Invalid boolean value: ${raw}`)
 }
 
 async function readCandidatesConfig(path: string): Promise<CandidatesFile> {
@@ -545,11 +610,13 @@ function normalizeDatasetSymbols(dataset: CandidatesFile['dataset']): DatasetSym
 function normalizeCandidates(
   raw: CandidatesFile['candidates'],
   datasetSymbols: string[],
+  manifestNotes?: string[],
 ): NormalizedCandidateConfig[] {
   if (!Array.isArray(raw) || raw.length < 1) {
     throw new Error('candidates field must be a non-empty array.')
   }
   const allowedSymbols = new Set(datasetSymbols)
+  const sourceDefaults = deriveManifestSourceDefaults(manifestNotes)
   return raw.map((item, index) => {
     if (!isStrategyName(item?.strategy)) {
       throw new Error(`candidates[${index}].strategy is invalid.`)
@@ -563,6 +630,7 @@ function normalizeCandidates(
         throw new Error(`candidates[${index}] declares unsupported symbol "${symbol}".`)
       }
     }
+    const role = normalizeCandidateRole(item.role)
     return {
       strategyId: normalizeString(item.strategyId, `S${index + 1}`),
       strategyName: normalizeString(item.strategyName, item.strategyId ?? `S${index + 1}`),
@@ -571,7 +639,24 @@ function normalizeCandidates(
       applicableSymbols,
       hypothesisFamily: normalizeOptionalString(item.hypothesisFamily),
       correlationBucket: normalizeOptionalString(item.correlationBucket),
-      role: normalizeCandidateRole(item.role),
+      role,
+      sourceEligibility: resolveSourceEligibility(
+        {
+          sourceValidity: item.sourceValidity,
+          runtimeMode: item.runtimeMode,
+          sourceLineage: item.sourceLineage,
+          evidenceStrength: item.evidenceStrength,
+          fallbackReason: item.fallbackReason,
+          donorNative: item.donorNative,
+          promotionEligible: item.promotionEligible,
+          admissionIntent: item.admissionIntent,
+          eligibilityBlockers: item.eligibilityBlockers,
+          role,
+        },
+        sourceDefaults,
+      ),
+      regimeGate: normalizeRegimeGate(item.regimeGate),
+      volatilityGate: normalizeVolatilityGate(item.volatilityGate),
     }
   })
 }
@@ -585,6 +670,63 @@ function normalizeCandidateRole(
     value === 'independent_guard'
     ? value
     : undefined
+}
+
+function normalizeRegimeGate(value: unknown): StrategyBacktestInput['regimeGate'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const record = value as {
+    allowedEntryRegimes?: unknown
+    exitOnMismatch?: unknown
+  }
+  const allowedEntryRegimes = Array.isArray(record.allowedEntryRegimes)
+    ? record.allowedEntryRegimes.filter(isStrategyRegimeLabel)
+    : []
+  if (allowedEntryRegimes.length < 1) {
+    return undefined
+  }
+  return {
+    allowedEntryRegimes: Array.from(new Set(allowedEntryRegimes)),
+    exitOnMismatch:
+      typeof record.exitOnMismatch === 'boolean'
+        ? record.exitOnMismatch
+        : undefined,
+  }
+}
+
+function normalizeVolatilityGate(value: unknown): StrategyBacktestInput['volatilityGate'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const record = value as Record<string, unknown>
+  const out: NonNullable<StrategyBacktestInput['volatilityGate']> = {}
+  const minVolatilityPct = optionalFiniteNumber(record.minVolatilityPct)
+  const maxVolatilityPct = optionalFiniteNumber(record.maxVolatilityPct)
+  const minTrendStrengthPct = optionalFiniteNumber(record.minTrendStrengthPct)
+  const maxTrendStrengthPct = optionalFiniteNumber(record.maxTrendStrengthPct)
+  if (minVolatilityPct !== undefined) out.minVolatilityPct = minVolatilityPct
+  if (maxVolatilityPct !== undefined) out.maxVolatilityPct = maxVolatilityPct
+  if (minTrendStrengthPct !== undefined) out.minTrendStrengthPct = minTrendStrengthPct
+  if (maxTrendStrengthPct !== undefined) out.maxTrendStrengthPct = maxTrendStrengthPct
+  if (typeof record.exitOnMismatch === 'boolean') {
+    out.exitOnMismatch = record.exitOnMismatch
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function isStrategyRegimeLabel(value: unknown): value is StrategyRegimeLabel {
+  return (
+    value === 'HighVolTrend' ||
+    value === 'HighVolMeanRevert' ||
+    value === 'LowVolTrend' ||
+    value === 'LowVolCarry'
+  )
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function normalizeSymbolList(value: unknown, fallback: string[]): string[] {
@@ -655,6 +797,7 @@ function resolveSignificanceConfig(
       'spaBootstrapSamples',
     ),
     spaBlockSize: toPositiveInt(config?.spaBlockSize, 24, 'spaBlockSize'),
+    spaBlockSizeSet: normalizePositiveIntArray(config?.spaBlockSizeSet, 'spaBlockSizeSet'),
     benchmarkStrategyIdBySymbol: normalizeBenchmarkStrategyIdBySymbol(
       config?.benchmarkStrategyIdBySymbol,
       allowedSymbols,
@@ -729,6 +872,8 @@ async function evaluateSymbolSummary(input: {
       candles,
       params: candidate.params,
       costModel: input.costModel,
+      regimeGate: candidate.regimeGate,
+      volatilityGate: candidate.volatilityGate,
     }),
   )
   const returnsByCandidate = backtests.map((report) =>
@@ -742,6 +887,13 @@ async function evaluateSymbolSummary(input: {
   })
 
   const rawRuns: RawRun[] = applicableCandidates.map((candidate, index) => {
+    const trialLedger = buildTrialLedgerSummary({
+      rawM: applicableCandidates.length,
+      effectiveM: applicableCandidates.length,
+      survivingTrialCount: 1,
+      rawMComplete: true,
+      includesFailedTrials: true,
+    })
     const significance = evaluateSignificanceGate({
       candidateReturns: returnsByCandidate,
       selectedReturns: returnsByCandidate[index],
@@ -749,6 +901,7 @@ async function evaluateSymbolSummary(input: {
       pboThreshold: input.significanceConfig.pboThreshold,
       dsrMin: input.significanceConfig.dsrMin,
       trialCount: applicableCandidates.length,
+      trialLedger,
     })
     const riskSimulation = evaluateRiskSimulation(returnsByCandidate[index], {
       method: input.riskConfig.method,
@@ -764,6 +917,8 @@ async function evaluateSymbolSummary(input: {
       candles,
       candidates: [candidate.params],
       costModel: input.costModel,
+      regimeGate: candidate.regimeGate,
+      volatilityGate: candidate.volatilityGate,
       config: {
         trainBars: adjustedWfoConfig.trainBars,
         testBars: adjustedWfoConfig.testBars,
@@ -798,6 +953,8 @@ async function evaluateSymbolSummary(input: {
         candles,
         params: candidate.params,
         costModel: input.costModel,
+        regimeGate: candidate.regimeGate,
+        volatilityGate: candidate.volatilityGate,
       }),
       significance,
       riskSimulation,
@@ -823,12 +980,40 @@ async function evaluateSymbolSummary(input: {
     const admissionSignificance = admissionView.admissionSignificanceByIndex[index]
     const fdr = admissionView.admissionFdrByIndex[index]
     const familyRepresentative = familyRepresentativeIndex === index
+    const spaBootstrapBlockReason = resolveSpaBootstrapBlockReason({
+      diagnostics: admissionView.admissionFdrDiagnostics,
+      candidateIndex: fdr.index,
+    })
+    const releaseGate = evaluateReleaseGate({
+      wfo: run.wfo,
+      significance: {
+        ...admissionSignificance,
+        fdrDiagnostics: admissionView.admissionFdrDiagnostics,
+      },
+      riskSimulation: run.riskSimulation,
+      economics: {
+        grossExpectancyPct: run.backtest.metrics.grossExpectancyPct,
+        netExpectancyPct: run.backtest.metrics.netExpectancyPct,
+        feeExpectancyDragPct: run.backtest.metrics.feeExpectancyDragPct,
+        slippageExpectancyDragPct: run.backtest.metrics.slippageExpectancyDragPct,
+        fundingExpectancyDragPct: run.backtest.metrics.fundingExpectancyDragPct,
+        totalCostsPaid: run.backtest.metrics.totalCostsPaid,
+        costDragPctOfInitialCapital: run.backtest.metrics.costDragPctOfInitialCapital,
+        averageHoldingHours: run.backtest.metrics.averageHoldingHours,
+        medianHoldingHours: run.backtest.metrics.medianHoldingHours,
+        tradeCount: run.backtest.metrics.tradeCount,
+      },
+    })
     const candidatePass =
       admissionSignificance.pboResult.pbo <= input.thresholds.meanPboMax &&
-      admissionSignificance.dsrResult.dsrProbability >=
-        input.thresholds.meanDsrProbabilityMin &&
+      dsrProbabilityPasses(
+        admissionSignificance.dsrResult.dsrProbability,
+        input.thresholds.meanDsrProbabilityMin,
+      ) &&
       fdr.qValue <= input.thresholds.fdrQMax &&
-      run.releaseGate.allowPaperTrading &&
+      spaBootstrapBlockReason === null &&
+      releaseGate.allowPaperTrading &&
+      run.candidate.sourceEligibility.promotionEligible &&
       (input.significanceConfig.multipleTestingUnit !== 'family' ||
         familyRepresentative)
     const failureReasons: string[] = []
@@ -836,16 +1021,27 @@ async function evaluateSymbolSummary(input: {
       failureReasons.push('HARD_PBO_THRESHOLD_FAIL')
     }
     if (
-      admissionSignificance.dsrResult.dsrProbability <
-      input.thresholds.meanDsrProbabilityMin
+      !dsrProbabilityPasses(
+        admissionSignificance.dsrResult.dsrProbability,
+        input.thresholds.meanDsrProbabilityMin,
+      )
     ) {
-      failureReasons.push('HARD_DSR_PROBABILITY_THRESHOLD_FAIL')
+      failureReasons.push(admissionSignificance.dsrResult.dsrProbability == null
+        ? 'HARD_DSR_LOW_SAMPLE'
+        : 'HARD_DSR_PROBABILITY_THRESHOLD_FAIL')
     }
     if (fdr.qValue > input.thresholds.fdrQMax) {
       failureReasons.push('HARD_FDR_THRESHOLD_FAIL')
     }
-    if (!run.releaseGate.allowPaperTrading) {
+    if (spaBootstrapBlockReason) {
+      failureReasons.push(spaBootstrapBlockReason)
+    }
+    if (!releaseGate.allowPaperTrading) {
       failureReasons.push('HARD_RELEASE_GATE_BLOCKED')
+    }
+    if (!run.candidate.sourceEligibility.promotionEligible) {
+      failureReasons.push('HARD_SOURCE_ELIGIBILITY_BLOCKED')
+      failureReasons.push(...run.candidate.sourceEligibility.eligibilityBlockers)
     }
     if (
       input.significanceConfig.multipleTestingUnit === 'family' &&
@@ -855,6 +1051,7 @@ async function evaluateSymbolSummary(input: {
     }
     return {
       ...run,
+      releaseGate,
       familyKey,
       correlationBucket: admissionView.correlationBucketByIndex[index],
       familyRepresentative,
@@ -882,7 +1079,7 @@ async function evaluateSymbolSummary(input: {
     meanPbo: mean(aggregateRuns.map((run) => run.admissionSignificance.pboResult.pbo)),
     meanDsrProbability: mean(
       aggregateRuns.map(
-        (run) => run.admissionSignificance.dsrResult.dsrProbability,
+        (run) => dsrProbabilityForAggregate(run.admissionSignificance.dsrResult.dsrProbability),
       ),
     ),
     fdrQ: champion ? champion.fdr.qValue : 1,
@@ -900,7 +1097,11 @@ async function evaluateSymbolSummary(input: {
   const reasonCodes = buildSymbolReasonCodes({
     thresholds: input.thresholds,
     aggregateMetrics,
+    fdrDiagnostics: admissionView.admissionFdrDiagnostics,
     champion,
+    sourceEligibilityBlocked: enrichedRuns.some(
+      (run) => !run.candidate.sourceEligibility.promotionEligible,
+    ),
     aggregatePass,
   })
 
@@ -940,6 +1141,16 @@ function buildAdmissionView(input: {
           partitions: input.significanceConfig.partitions,
         })
       : undefined
+  const candidateSpaDiagnostics =
+    input.significanceConfig.fdrMethod === 'spa'
+      ? buildSpaBootstrapDiagnostics({
+          rawCandidates: input.rawCandidates,
+          returnsByCandidate: input.returnsByCandidate,
+          significanceConfig: input.significanceConfig,
+          fdrQMax: input.fdrQMax,
+          symbol: input.symbol,
+        })
+      : undefined
   const candidateLevelFdr = runFdrCorrection({
     pValues: input.rawRuns.map((run) => run.pValue),
     alpha: input.fdrQMax,
@@ -956,6 +1167,7 @@ function buildAdmissionView(input: {
       significanceConfig: input.significanceConfig,
       symbol: input.symbol,
     }),
+    spaBootstrapDiagnostics: candidateSpaDiagnostics,
   })
   const familyRepresentativeIndexByFamily =
     resolveFamilyRepresentativeIndexByFamily(input.rawRuns, familyKeyByIndex)
@@ -984,6 +1196,16 @@ function buildAdmissionView(input: {
     input.significanceConfig.fdrMethod === 'cv_storey_bh'
       ? representativeIndices.map((index) => candidateWindowPValues?.[index] ?? [input.rawRuns[index].pValue])
       : undefined
+  const representativeSpaDiagnostics =
+    input.significanceConfig.fdrMethod === 'spa'
+      ? buildSpaBootstrapDiagnostics({
+          rawCandidates: representativeRuns.map((run) => run.candidate),
+          returnsByCandidate: representativeReturns,
+          significanceConfig: input.significanceConfig,
+          fdrQMax: input.fdrQMax,
+          symbol: input.symbol,
+        })
+      : undefined
   const representativeFdr = runFdrCorrection({
     pValues: representativePValues,
     alpha: input.fdrQMax,
@@ -1000,6 +1222,7 @@ function buildAdmissionView(input: {
       significanceConfig: input.significanceConfig,
       symbol: input.symbol,
     }),
+    spaBootstrapDiagnostics: representativeSpaDiagnostics,
   })
   const representativeSignificance = representativeIndices.map((_, index) =>
     evaluateSignificanceGate({
@@ -1009,6 +1232,13 @@ function buildAdmissionView(input: {
       pboThreshold: input.significanceConfig.pboThreshold,
       dsrMin: input.significanceConfig.dsrMin,
       trialCount: representativeIndices.length,
+      trialLedger: buildTrialLedgerSummary({
+        rawM: representativeIndices.length,
+        effectiveM: representativeIndices.length,
+        survivingTrialCount: 1,
+        rawMComplete: true,
+        includesFailedTrials: true,
+      }),
     }),
   )
   const familyRank = new Map<string, number>()
@@ -1042,11 +1272,10 @@ function buildCandidatePValues(input: {
   if (input.significanceConfig.fdrMethod !== 'spa') {
     return input.returnsByCandidate.map((returns) =>
       clamp01(
-        1 -
-          computeDeflatedSharpe({
-            returns,
-            trialCount: input.rawCandidates.length,
-          }).dsrProbability,
+        dsrProbabilityToPValue(computeDeflatedSharpe({
+          returns,
+          trialCount: input.rawCandidates.length,
+        }).dsrProbability),
       ),
     )
   }
@@ -1061,7 +1290,41 @@ function buildCandidatePValues(input: {
     benchmarkIndex,
     bootstrapSamples: input.significanceConfig.spaBootstrapSamples,
     blockSize: input.significanceConfig.spaBlockSize,
+    blockSizeSet: input.significanceConfig.spaBlockSizeSet,
   }).items.map((item) => clamp01(item.pValue))
+}
+
+function buildSpaBootstrapDiagnostics(input: {
+  rawCandidates: NormalizedCandidateConfig[]
+  returnsByCandidate: number[][]
+  significanceConfig: SignificanceConfig
+  fdrQMax: number
+  symbol: string
+}): NonNullable<Parameters<typeof runFdrCorrection>[0]['spaBootstrapDiagnostics']> {
+  const benchmarkIndex = resolveSymbolBenchmarkIndex({
+    candidates: input.rawCandidates,
+    significanceConfig: input.significanceConfig,
+    symbol: input.symbol,
+  })
+  const spa = computeSpaLikePValues({
+    candidateReturns: input.returnsByCandidate,
+    benchmarkIndex,
+    bootstrapSamples: input.significanceConfig.spaBootstrapSamples,
+    blockSize: input.significanceConfig.spaBlockSize,
+    blockSizeSet: input.significanceConfig.spaBlockSizeSet,
+    alpha: input.fdrQMax,
+  })
+  return {
+    bootstrapDirectionStable: spa.bootstrapDirectionStable,
+    unstableBootstrapCandidateIndexes: spa.unstableBootstrapCandidateIndexes,
+    blockSizeSet: spa.blockSizeSet,
+    blockSensitivityByCandidate: spa.items.map(item => ({
+      candidateIndex: item.candidateIndex,
+      blockSensitivity: item.blockSensitivity,
+      bootstrapDirectionStable: item.bootstrapDirectionStable,
+      unstableBootstrap: item.unstableBootstrap,
+    })),
+  }
 }
 
 function buildWindowPValuesByCandidate(input: {
@@ -1073,11 +1336,10 @@ function buildWindowPValuesByCandidate(input: {
     const windows = splitReturnsIntoCvWindows(returns, input.partitions)
     return windows.map((windowReturns) =>
       clamp01(
-        1 -
-          computeDeflatedSharpe({
-            returns: windowReturns,
-            trialCount: input.trialCount,
-          }).dsrProbability,
+        dsrProbabilityToPValue(computeDeflatedSharpe({
+          returns: windowReturns,
+          trialCount: input.trialCount,
+        }).dsrProbability),
       ),
     )
   })
@@ -1181,6 +1443,9 @@ function buildChampionPayload(symbol: string, run: EnrichedRun) {
     familyKey: run.familyKey,
     correlationBucket: run.correlationBucket,
     applicableSymbols: run.candidate.applicableSymbols,
+    regimeGate: run.candidate.regimeGate ?? null,
+    volatilityGate: run.candidate.volatilityGate ?? null,
+    sourceEligibility: run.candidate.sourceEligibility,
   }
 }
 
@@ -1199,6 +1464,9 @@ function buildDetailedCandidatePayload(symbol: string, run: EnrichedRun) {
     familyRepresentativeStrategyId: run.familyRepresentativeStrategyId,
     params: run.candidate.params,
     applicableSymbols: run.candidate.applicableSymbols,
+    regimeGate: run.candidate.regimeGate ?? null,
+    volatilityGate: run.candidate.volatilityGate ?? null,
+    sourceEligibility: run.candidate.sourceEligibility,
     status: run.candidatePass ? 'pass' : 'fail',
     failureReasons: run.failureReasons,
     blockerSummary: buildCandidateBlockerSummary(run, failedWindowRatio),
@@ -1249,6 +1517,14 @@ function buildCandidateBlockerSummary(run: EnrichedRun, failedWindowRatio: numbe
       allowLiveTrading: run.releaseGate.allowLiveTrading,
       failedChecks: releaseGateFailedChecks,
     },
+    sourceEligibility: {
+      passed: run.candidate.sourceEligibility.promotionEligible,
+      runtimeMode: run.candidate.sourceEligibility.sourceValidity.runtimeMode,
+      sourceLineage: run.candidate.sourceEligibility.sourceValidity.sourceLineage,
+      donorNative: run.candidate.sourceEligibility.donorNative,
+      admissionIntent: run.candidate.sourceEligibility.admissionIntent,
+      eligibilityBlockers: [...run.candidate.sourceEligibility.eligibilityBlockers],
+    },
     wfo: {
       passed: run.wfo.overallPassed,
       failedWindows: run.wfo.failedWindows,
@@ -1261,7 +1537,10 @@ function buildCandidateBlockerSummary(run: EnrichedRun, failedWindowRatio: numbe
 function resolvePrimaryBlocker(
   run: EnrichedRun,
   releaseGateFailedChecks: ReleaseGateCheck['name'][],
-): 'fdr' | 'release_gate' | 'wfo' | 'economics' | 'candidate_pass' {
+): 'source_eligibility' | 'fdr' | 'release_gate' | 'wfo' | 'economics' | 'candidate_pass' {
+  if (!run.candidate.sourceEligibility.promotionEligible) {
+    return 'source_eligibility'
+  }
   if (!run.fdr.passed) {
     return 'fdr'
   }
@@ -1314,6 +1593,8 @@ function buildSampleSplitAssessment(input: {
   candles: MarketData[]
   params: StrategyParams
   costModel: CostModelConfig
+  regimeGate?: StrategyBacktestInput['regimeGate']
+  volatilityGate?: StrategyBacktestInput['volatilityGate']
 }): SampleSplitAssessment {
   const splitRatio = 0.7
   const minBars = getStrategyMinimumBars(
@@ -1348,12 +1629,16 @@ function buildSampleSplitAssessment(input: {
       candles: inSampleCandles,
       params: input.params,
       costModel: input.costModel,
+      regimeGate: input.regimeGate,
+      volatilityGate: input.volatilityGate,
     })
     const outOfSample = runStrategyBacktest({
       strategy: input.strategy,
       candles: outOfSampleCandles,
       params: input.params,
       costModel: input.costModel,
+      regimeGate: input.regimeGate,
+      volatilityGate: input.volatilityGate,
     })
     return {
       available: true,
@@ -1388,7 +1673,9 @@ function buildSymbolReasonCodes(input: {
     meanDsrProbability: number
     fdrQ: number
   }
+  fdrDiagnostics: FdrDiagnostics
   champion: EnrichedRun | null
+  sourceEligibilityBlocked: boolean
   aggregatePass: boolean
 }): string[] {
   const reasonCodes: string[] = []
@@ -1401,15 +1688,48 @@ function buildSymbolReasonCodes(input: {
   if (input.aggregateMetrics.fdrQ > input.thresholds.fdrQMax) {
     reasonCodes.push('HARD_FDR_THRESHOLD_FAIL')
   }
+  const spaAggregateBlockReason = resolveSpaBootstrapAggregateBlockReason(input.fdrDiagnostics)
+  if (spaAggregateBlockReason) {
+    reasonCodes.push(spaAggregateBlockReason)
+  }
   if (input.champion === null) {
     reasonCodes.push('HARD_NO_CANDIDATE_PASS')
   } else if (!input.champion.releaseGate.allowPaperTrading) {
     reasonCodes.push('HARD_RELEASE_GATE_BLOCKED')
   }
+  if (input.sourceEligibilityBlocked) {
+    reasonCodes.push('HARD_SOURCE_ELIGIBILITY_BLOCKED')
+  }
   if (reasonCodes.length === 0 && input.aggregatePass) {
     reasonCodes.push('INFO_MVP_THRESHOLDS_PASS')
   }
   return reasonCodes
+}
+
+function resolveSpaBootstrapBlockReason(input: {
+  diagnostics: FdrDiagnostics
+  candidateIndex: number
+}): 'HARD_SPA_BOOTSTRAP_UNSTABLE' | 'HARD_SPA_BOOTSTRAP_MISSING' | null {
+  if (input.diagnostics.method !== 'spa') return null
+  if (input.diagnostics.bootstrapDirectionStable == null) {
+    return 'HARD_SPA_BOOTSTRAP_MISSING'
+  }
+  const unstable = input.diagnostics.unstableBootstrapCandidateIndexes ?? []
+  return unstable.includes(input.candidateIndex)
+    ? 'HARD_SPA_BOOTSTRAP_UNSTABLE'
+    : null
+}
+
+function resolveSpaBootstrapAggregateBlockReason(
+  diagnostics: FdrDiagnostics,
+): 'HARD_SPA_BOOTSTRAP_UNSTABLE' | 'HARD_SPA_BOOTSTRAP_MISSING' | null {
+  if (diagnostics.method !== 'spa') return null
+  if (diagnostics.bootstrapDirectionStable == null) {
+    return 'HARD_SPA_BOOTSTRAP_MISSING'
+  }
+  return diagnostics.unstableBootstrapCandidateIndexes?.length
+    ? 'HARD_SPA_BOOTSTRAP_UNSTABLE'
+    : null
 }
 
 function buildPortfolioReasonCodes(input: {
@@ -1444,6 +1764,18 @@ function buildPortfolioReasonCodes(input: {
   if (!input.portfolioReleaseGate.allowPaperTrading) {
     reasonCodes.push('HARD_RELEASE_GATE_BLOCKED')
   }
+  if (
+    input.symbolSummaries.some((summary) =>
+      summary.reasonCodes.includes('HARD_SOURCE_ELIGIBILITY_BLOCKED'),
+    )
+  ) {
+    reasonCodes.push('HARD_SOURCE_ELIGIBILITY_BLOCKED')
+  }
+  for (const spaReason of ['HARD_SPA_BOOTSTRAP_UNSTABLE', 'HARD_SPA_BOOTSTRAP_MISSING']) {
+    if (input.symbolSummaries.some((summary) => summary.reasonCodes.includes(spaReason))) {
+      reasonCodes.push(spaReason)
+    }
+  }
   for (const summary of input.symbolSummaries) {
     if (summary.result !== 'GO') {
       reasonCodes.push(`HARD_SYMBOL_NO_GO:${summary.symbol}`)
@@ -1472,6 +1804,7 @@ function aggregateReleaseGate(summaries: SymbolSummary[]): ReleaseGateResult {
     'wfo',
     'significance',
     'risk_simulation',
+    'strategy_plan_evidence',
     'execution_quality',
     'ramp_up',
     'regime_shift',
@@ -1497,11 +1830,17 @@ function aggregateReleaseGate(summaries: SymbolSummary[]): ReleaseGateResult {
 
   const failedChecks = checks.filter((check) => check.status === 'fail').map((check) => check.name)
   const warningChecks = checks.filter((check) => check.status === 'warn').map((check) => check.name)
-  const paperBlockingNames: ReleaseGateCheck['name'][] = ['wfo', 'significance', 'risk_simulation']
+  const paperBlockingNames: ReleaseGateCheck['name'][] = [
+    'wfo',
+    'significance',
+    'risk_simulation',
+    'strategy_plan_evidence',
+  ]
   const liveBlockingNames: ReleaseGateCheck['name'][] = [
     'wfo',
     'significance',
     'risk_simulation',
+    'strategy_plan_evidence',
     'execution_quality',
     'ramp_up',
     'regime_shift',
@@ -1628,6 +1967,13 @@ function normalizeBenchmarkStrategyIdBySymbol(
   return out
 }
 
+function normalizePositiveIntArray(value: unknown, label: string): number[] {
+  if (value == null) return []
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array of positive integers.`)
+  return [...new Set(value.map((item) => toPositiveInt(item, 1, label)))]
+    .sort((left, right) => left - right)
+}
+
 function resolveOptionalFdrMethod(value: unknown): FdrMethod | undefined {
   return value === 'bh' ||
     value === 'by' ||
@@ -1689,6 +2035,18 @@ function clamp01(value: number): number {
   return value
 }
 
+function dsrProbabilityPasses(value: number | null, threshold: number): boolean {
+  return value != null && value >= threshold
+}
+
+function dsrProbabilityForAggregate(value: number | null): number {
+  return value ?? 0
+}
+
+function dsrProbabilityToPValue(value: number | null): number {
+  return value == null ? 1 : clamp01(1 - value)
+}
+
 function mean(values: number[]): number {
   if (values.length < 1) return 0
   return values.reduce((sum, value) => sum + value, 0) / values.length
@@ -1706,6 +2064,7 @@ function runSelfCheck(): void {
       hypothesisFamily: 'trend_family',
       correlationBucket: 'trend_family',
       role: 'benchmark_control',
+      sourceEligibility: resolveSourceEligibility({ sourceLineage: 'control' }),
     },
     {
       strategyId: 'breakout_a',
@@ -1716,6 +2075,10 @@ function runSelfCheck(): void {
       hypothesisFamily: 'breakout_family',
       correlationBucket: 'breakout_family',
       role: 'donor',
+      sourceEligibility: resolveSourceEligibility({
+        sourceLineage: 'openalice_native',
+        donorNative: true,
+      }),
     },
     {
       strategyId: 'ensemble_a',
@@ -1726,6 +2089,7 @@ function runSelfCheck(): void {
       hypothesisFamily: 'ensemble_family',
       correlationBucket: 'ensemble_family',
       role: 'robustness_anchor',
+      sourceEligibility: resolveSourceEligibility({ sourceLineage: 'control' }),
     },
   ]
   const thresholds: ThresholdConfig = {
@@ -1803,12 +2167,21 @@ function evaluateLoadedSymbolSummary(input: {
       candles,
       params: candidate.params,
       costModel: input.costModel,
+      regimeGate: candidate.regimeGate,
+      volatilityGate: candidate.volatilityGate,
     }),
   )
   const returnsByCandidate = backtests.map((report) =>
     equityCurveToReturns(report.equityCurve),
   )
   const rawRuns: RawRun[] = applicableCandidates.map((candidate, index) => {
+    const trialLedger = buildTrialLedgerSummary({
+      rawM: applicableCandidates.length,
+      effectiveM: applicableCandidates.length,
+      survivingTrialCount: 1,
+      rawMComplete: true,
+      includesFailedTrials: true,
+    })
     const significance = evaluateSignificanceGate({
       candidateReturns: returnsByCandidate,
       selectedReturns: returnsByCandidate[index],
@@ -1816,6 +2189,7 @@ function evaluateLoadedSymbolSummary(input: {
       pboThreshold: input.significanceConfig.pboThreshold,
       dsrMin: input.significanceConfig.dsrMin,
       trialCount: applicableCandidates.length,
+      trialLedger,
     })
     const riskSimulation = evaluateRiskSimulation(returnsByCandidate[index], {
       method: input.riskConfig.method,
@@ -1831,6 +2205,8 @@ function evaluateLoadedSymbolSummary(input: {
       candles,
       candidates: [candidate.params],
       costModel: input.costModel,
+      regimeGate: candidate.regimeGate,
+      volatilityGate: candidate.volatilityGate,
       config: {
         trainBars: adjustedWfoConfig.trainBars,
         testBars: adjustedWfoConfig.testBars,
@@ -1850,13 +2226,10 @@ function evaluateLoadedSymbolSummary(input: {
         significance,
         riskSimulation,
       }),
-      pValue: clamp01(
-        1 -
-          computeDeflatedSharpe({
-            returns: returnsByCandidate[index],
-            trialCount: applicableCandidates.length,
-          }).dsrProbability,
-      ),
+      pValue: dsrProbabilityToPValue(computeDeflatedSharpe({
+        returns: returnsByCandidate[index],
+        trialCount: applicableCandidates.length,
+      }).dsrProbability),
     }
   })
   const admissionView = buildAdmissionView({
@@ -1891,7 +2264,7 @@ function evaluateLoadedSymbolSummary(input: {
     aggregateMetrics: {
       meanPbo: mean(enrichedRuns.map((run) => run.admissionSignificance.pboResult.pbo)),
       meanDsrProbability: mean(
-        enrichedRuns.map((run) => run.admissionSignificance.dsrResult.dsrProbability),
+        enrichedRuns.map((run) => dsrProbabilityForAggregate(run.admissionSignificance.dsrResult.dsrProbability)),
       ),
       fdrQ: Math.max(...enrichedRuns.map((run) => run.fdr.qValue)),
       fdrMethod: input.significanceConfig.fdrMethod,
@@ -1930,7 +2303,14 @@ function buildSyntheticCandles(symbol: string, count: number): MarketData[] {
   return out
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exitCode = 1
-})
+export {
+  parseArgs,
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : ''
+if (import.meta.url === invokedPath) {
+  main().catch((err) => {
+    console.error(err)
+    process.exitCode = 1
+  })
+}
