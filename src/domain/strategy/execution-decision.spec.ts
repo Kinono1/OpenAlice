@@ -79,7 +79,7 @@ function makeSnapshot(overrides?: Partial<RuntimeFactorSnapshot>): RuntimeFactor
 }
 
 describe('buildStrategyExecutionDecision', () => {
-  it('applies cap-only sizing to usd_size orders', () => {
+  it('applies cap-only sizing to open exposures', () => {
     const decision = buildStrategyExecutionDecision({
       snapshot: makeSnapshot(),
       request: {
@@ -88,7 +88,7 @@ describe('buildStrategyExecutionDecision', () => {
         type: 'market',
         usd_size: 2500,
       },
-      isNewOpen: true,
+      exposureClassification: 'open',
     })
     expect(decision.mode).toBe('applied')
     expect(decision.effectiveUsdSize).toBe(1000)
@@ -109,7 +109,7 @@ describe('buildStrategyExecutionDecision', () => {
         type: 'market',
         usd_size: 2500,
       },
-      isNewOpen: true,
+      exposureClassification: 'open',
     })
     expect(decision.mode).toBe('pass-through')
     expect(decision.effectiveUsdSize).toBe(2500)
@@ -124,7 +124,7 @@ describe('buildStrategyExecutionDecision', () => {
         type: 'market',
         size: 0.2,
       },
-      isNewOpen: true,
+      exposureClassification: 'open',
     })
     expect(decision.mode).toBe('fallback')
     expect(decision.fallbackReason).toContain('could not be resolved')
@@ -145,17 +145,46 @@ describe('buildStrategyExecutionDecision', () => {
         type: 'market',
         usd_size: 2500,
       },
-      isNewOpen: true,
+      exposureClassification: 'open',
     })
     expect(decision.mode).toBe('blocked')
     expect(decision.blockReason).toContain('no-trade')
   })
 
-  it('blocks new opens when the meta-label admission gate rejects the trade', () => {
+  it('keeps rejected meta-label decisions shadow-only by default', () => {
     const decision = buildStrategyExecutionDecision({
       snapshot: makeSnapshot({
         metaLabeling: {
           enabled: true,
+          enforcementMode: 'shadow_only',
+          score: 0.42,
+          threshold: 0.55,
+          primaryObjective: 'outperform_skip_after_cost',
+          canControlLiveLeverage: false,
+          admitted: false,
+          reasons: ['meta-label score 0.42 below threshold 0.55'],
+        },
+      }),
+      request: {
+        symbol: 'BTC/USDT:USDT',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2500,
+      },
+      exposureClassification: 'open',
+    })
+    expect(decision.mode).toBe('applied')
+    expect(decision.blockReason).toBeUndefined()
+    expect(decision.metaLabeling?.admitted).toBe(false)
+    expect(decision.metaLabeling?.enforcementMode).toBe('shadow_only')
+  })
+
+  it('blocks new opens only when the meta-label admission gate is explicitly enforced', () => {
+    const decision = buildStrategyExecutionDecision({
+      snapshot: makeSnapshot({
+        metaLabeling: {
+          enabled: true,
+          enforcementMode: 'gate',
           score: 0.42,
           threshold: 0.55,
           admitted: false,
@@ -168,7 +197,7 @@ describe('buildStrategyExecutionDecision', () => {
         type: 'market',
         usd_size: 2500,
       },
-      isNewOpen: true,
+      exposureClassification: 'open',
     })
     expect(decision.mode).toBe('blocked')
     expect(decision.blockReason).toContain('meta-label admission gate blocked new open')
@@ -176,26 +205,36 @@ describe('buildStrategyExecutionDecision', () => {
     expect(decision.reasons).toContain('meta-label score 0.42 below threshold 0.55')
   })
 
-  it('passes through reduce-only orders', () => {
+  it('routes flip exposures through sizing even when reduceOnly is set', () => {
     const decision = buildStrategyExecutionDecision({
-      snapshot: makeSnapshot({
-        governance: {
-          ...makeSnapshot().governance,
-          actionStatus: 'no-trade',
-          baseActionStatus: 'no-trade',
-        },
-      }),
+      snapshot: makeSnapshot(),
+      request: {
+        symbol: 'BTC/USDT:USDT',
+        side: 'sell',
+        type: 'market',
+        usd_size: 2500,
+        reduceOnly: true,
+      },
+      exposureClassification: 'flip',
+    })
+    expect(decision.mode).toBe('applied')
+    expect(decision.effectiveUsdSize).toBe(1000)
+  })
+
+  it('passes through genuine reductions and closes', () => {
+    const decision = buildStrategyExecutionDecision({
+      snapshot: makeSnapshot(),
       request: {
         symbol: 'BTC/USDT:USDT',
         side: 'sell',
         type: 'market',
         size: 0.1,
-        reduceOnly: true,
       },
-      isNewOpen: false,
+      exposureClassification: 'close',
       referencePrice: 50000,
     })
     expect(decision.mode).toBe('pass-through')
     expect(decision.effectiveSize).toBe(0.1)
+    expect(decision.reasons[0]).toContain('close')
   })
 })

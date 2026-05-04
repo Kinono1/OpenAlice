@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateRuntimeFactorSnapshot } from '../runtime-evaluator.js'
 import { buildMetaLabelFeatureVector } from './feature-builder.js'
+import { evaluateMetaLabelAdmission } from './admission.js'
 import { evaluateTripleBarrierLabel } from './triple-barrier.js'
 import type { StrategyConfig } from '../../../core/config.js'
 
@@ -72,6 +73,39 @@ describe('strategy meta-labeling', () => {
     expect(result.exitReason).toBe('take-profit')
   })
 
+  it('scales triple barriers by high-low volatility when requested', () => {
+    const candles = [
+      { date: '2026-03-01', open: 100, high: 101, low: 99, close: 100, volume: 1000 },
+      { date: '2026-03-02', open: 100, high: 101, low: 99, close: 100, volume: 1000 },
+      { date: '2026-03-03', open: 100, high: 111, low: 89, close: 100, volume: 1000 },
+      { date: '2026-03-04', open: 100, high: 101.2, low: 99.8, close: 100.5, volume: 1000 },
+    ]
+
+    const staticBarrier = evaluateTripleBarrierLabel({
+      candles,
+      entryIndex: 2,
+      upperBarrierPct: 1,
+      lowerBarrierPct: 1,
+      maxHoldingBars: 1,
+      side: 'long',
+    })
+    const dynamicBarrier = evaluateTripleBarrierLabel({
+      candles,
+      entryIndex: 2,
+      upperBarrierPct: 1,
+      lowerBarrierPct: 1,
+      maxHoldingBars: 1,
+      side: 'long',
+      barrierMode: 'volatility_scaled',
+      volatilityLookbackBars: 3,
+      volatilityEstimator: 'garman_klass',
+    })
+
+    expect(staticBarrier.hitUpperBarrier).toBe(true)
+    expect(dynamicBarrier.exitReason).toBe('time-expiry')
+    expect(dynamicBarrier.hitUpperBarrier).toBe(false)
+  })
+
   it('labels stop-loss before take-profit for short trades', () => {
     const result = evaluateTripleBarrierLabel({
       candles: makeCandles(),
@@ -91,14 +125,17 @@ describe('strategy meta-labeling', () => {
   it('labels take-profit on the lower price barrier for short trades', () => {
     const result = evaluateTripleBarrierLabel({
       candles: makeCandles(),
-      entryIndex: 0,
+      entryIndex: 2,
       upperBarrierPct: 2,
       lowerBarrierPct: 1,
-      maxHoldingBars: 3,
+      maxHoldingBars: 1,
       side: 'short',
     })
 
-    expect(result.exitReason).toBe('stop-loss')
+    expect(result.exitReason).toBe('take-profit')
+    expect(result.label).toBe(1)
+    expect(result.hitUpperBarrier).toBe(false)
+    expect(result.hitLowerBarrier).toBe(true)
   })
 
   it('builds meta-label features from a strategy snapshot', () => {
@@ -124,5 +161,98 @@ describe('strategy meta-labeling', () => {
     expect(vector.names).toContain('hmm-stress-prob')
     expect(vector.names).toContain('return-24h-pct')
     expect(vector.values.length).toBe(vector.names.length)
+  })
+
+  it('falls back to the static meta-label threshold when feedback samples are unavailable', () => {
+    const snapshot = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: Array.from({ length: 48 }, (_, index) => ({
+        date: `2026-03-${String((index % 28) + 1).padStart(2, '0')}`,
+        open: 100 + index,
+        high: 101 + index,
+        low: 99 + index,
+        close: 100 + index,
+        volume: 1000 + index * 10,
+      })),
+      strategyConfig: config,
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      fundingRatePct: 0.02,
+    })
+
+    const admission = evaluateMetaLabelAdmission({
+      snapshot,
+      minConfidenceToTrade: 0.55,
+    })
+
+    expect(admission.adaptiveThresholdStatus).toBe('fallback_static')
+    expect(admission.enforcementMode).toBe('shadow_only')
+    expect(admission.primaryObjective).toBe('outperform_skip_after_cost')
+    expect(admission.canControlLiveLeverage).toBe(false)
+    expect(admission.staticThreshold).toBe(0.55)
+    expect(admission.dynamicThreshold).toBe(0.55)
+    expect(admission.effectiveThreshold).toBe(0.55)
+  })
+
+  it('activates dynamic thresholding when feedback samples are supplied', () => {
+    const snapshot = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: Array.from({ length: 48 }, (_, index) => ({
+        date: `2026-03-${String((index % 28) + 1).padStart(2, '0')}`,
+        open: 100 + index,
+        high: 101 + index,
+        low: 99 + index,
+        close: 100 + index,
+        volume: 1000 + index * 10,
+      })),
+      strategyConfig: config,
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      fundingRatePct: 0.02,
+    })
+
+    const admission = evaluateMetaLabelAdmission({
+      snapshot,
+      minConfidenceToTrade: 0.55,
+      adaptiveThresholdFeedback: {
+        recentWinRate: 0.3,
+        sampleCount: 12,
+      },
+    })
+
+    expect(admission.adaptiveThresholdStatus).toBe('active')
+    expect(admission.dynamicThreshold).toBeDefined()
+    expect(admission.effectiveThreshold).toBeGreaterThanOrEqual(admission.staticThreshold ?? 0)
+  })
+
+  it('can report explicit gate mode while still keeping leverage control disabled', () => {
+    const snapshot = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: Array.from({ length: 48 }, (_, index) => ({
+        date: `2026-03-${String((index % 28) + 1).padStart(2, '0')}`,
+        open: 100 + index,
+        high: 101 + index,
+        low: 99 + index,
+        close: 100 + index,
+        volume: 1000 + index * 10,
+      })),
+      strategyConfig: config,
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      fundingRatePct: 0.02,
+    })
+
+    const admission = evaluateMetaLabelAdmission({
+      snapshot,
+      minConfidenceToTrade: 0.55,
+      enforcementMode: 'gate',
+    })
+
+    expect(admission.enforcementMode).toBe('gate')
+    expect(admission.primaryObjective).toBe('outperform_skip_after_cost')
+    expect(admission.canControlLiveLeverage).toBe(false)
   })
 })

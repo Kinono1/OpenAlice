@@ -38,8 +38,15 @@ export interface StrategyFreezeSummary {
 
 export interface MetaLabelAdmissionSummary {
   enabled: boolean
+  enforcementMode?: 'shadow_only' | 'gate'
   score: number
   threshold: number
+  staticThreshold?: number
+  dynamicThreshold?: number
+  effectiveThreshold?: number
+  adaptiveThresholdStatus?: 'active' | 'fallback_static'
+  primaryObjective?: 'outperform_skip_after_cost'
+  canControlLiveLeverage?: boolean
   admitted: boolean
   reasons: string[]
 }

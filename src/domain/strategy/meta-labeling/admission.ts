@@ -2,6 +2,8 @@ import { clamp } from '../factors/helpers.js'
 import type { RuntimeFactorSnapshot } from '../runtime-evaluator.js'
 import type { MetaLabelAdmissionSummary } from '../runtime-types.js'
 import { buildMetaLabelFeatureVector } from './feature-builder.js'
+import { computeDynamicThreshold, DEFAULT_ADAPTIVE_THRESHOLD_CONFIG } from './feedback-loop.js'
+import type { RegimeType } from './feedback-loop.js'
 
 function roundScore(value: number): number {
   return Math.round(value * 10_000) / 10_000
@@ -10,9 +12,30 @@ function roundScore(value: number): number {
 export function evaluateMetaLabelAdmission(input: {
   snapshot: RuntimeFactorSnapshot
   minConfidenceToTrade: number
+  enforcementMode?: 'shadow_only' | 'gate'
+  adaptiveThresholdFeedback?: {
+    recentWinRate: number
+    sampleCount: number
+  }
 }): MetaLabelAdmissionSummary {
-  const threshold = clamp(input.minConfidenceToTrade, 0, 1)
+  const enforcementMode = input.enforcementMode ?? 'shadow_only'
+  const staticThreshold = clamp(input.minConfidenceToTrade, 0, 1)
   const features = buildMetaLabelFeatureVector({ snapshot: input.snapshot }).record
+  const adaptiveRegime = inferAdaptiveRegime(features)
+  const feedback = input.adaptiveThresholdFeedback
+  const hasFeedback =
+    feedback != null &&
+    feedback.sampleCount > 0 &&
+    Number.isFinite(feedback.recentWinRate)
+  const dynamicThreshold = hasFeedback
+    ? computeDynamicThreshold(
+        staticThreshold,
+        adaptiveRegime,
+        feedback.recentWinRate,
+        DEFAULT_ADAPTIVE_THRESHOLD_CONFIG,
+      )
+    : staticThreshold
+  const threshold = roundScore(Math.max(staticThreshold, dynamicThreshold))
 
   const ensembleConfidence = clamp(features['ensemble-confidence'] ?? 0, 0, 1)
   const governanceScore = clamp((features['governance-total-score'] ?? 0) / 100, 0, 1)
@@ -65,9 +88,35 @@ export function evaluateMetaLabelAdmission(input: {
 
   return {
     enabled: true,
+    enforcementMode,
     score: normalizedScore,
     threshold,
+    staticThreshold,
+    dynamicThreshold: roundScore(dynamicThreshold),
+    effectiveThreshold: threshold,
+    adaptiveThresholdStatus: hasFeedback ? 'active' : 'fallback_static',
+    primaryObjective: 'outperform_skip_after_cost',
+    canControlLiveLeverage: false,
     admitted,
     reasons,
   }
+}
+
+function inferAdaptiveRegime(features: Record<string, number>): RegimeType {
+  const stressProb = clamp(features['hmm-stress-prob'] ?? 0, 0, 1)
+  if (stressProb > 0.25) return 'stressed'
+
+  const trendStrength = Math.max(
+    features['trend-strength'] ?? 0,
+    features['volatility-trend-strength'] ?? 0,
+  )
+  if (trendStrength > 0.5) return 'trending'
+
+  const meanReversion = Math.max(
+    features['mean-reversion-score'] ?? 0,
+    features['mean-reversion-confidence'] ?? 0,
+  )
+  if (meanReversion > 0.5) return 'meanReverting'
+
+  return 'neutral'
 }

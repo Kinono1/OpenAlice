@@ -10,6 +10,9 @@ export interface TripleBarrierInput {
   lowerBarrierPct: number
   maxHoldingBars: number
   side?: TripleBarrierSide
+  barrierMode?: 'static_pct' | 'volatility_scaled'
+  volatilityLookbackBars?: number
+  volatilityEstimator?: 'garman_klass' | 'parkinson' | 'close_to_close'
 }
 
 export interface TripleBarrierLabel {
@@ -42,12 +45,9 @@ export function evaluateTripleBarrierLabel(
   }
 
   const entryPrice = entryCandle.close
-  const upperBarrierPrice = side === 'long'
-    ? entryPrice * (1 + input.upperBarrierPct / 100)
-    : entryPrice * (1 + input.lowerBarrierPct / 100)
-  const lowerBarrierPrice = side === 'long'
-    ? entryPrice * (1 - input.lowerBarrierPct / 100)
-    : entryPrice * (1 - input.upperBarrierPct / 100)
+  const barrierPct = resolveBarrierPct(input)
+  const upperBarrierPrice = entryPrice * (1 + barrierPct.upper / 100)
+  const lowerBarrierPrice = entryPrice * (1 - barrierPct.lower / 100)
   const finalIndex = Math.min(
     input.candles.length - 1,
     input.entryIndex + Math.max(1, input.maxHoldingBars),
@@ -59,9 +59,7 @@ export function evaluateTripleBarrierLabel(
       break
     }
 
-    const upperHit = side === 'long'
-      ? candle.high >= upperBarrierPrice
-      : candle.high >= upperBarrierPrice
+    const upperHit = candle.high >= upperBarrierPrice
     if (upperHit) {
       const exitPrice = upperBarrierPrice
       return {
@@ -76,9 +74,7 @@ export function evaluateTripleBarrierLabel(
       }
     }
 
-    const lowerHit = side === 'long'
-      ? candle.low <= lowerBarrierPrice
-      : candle.low <= lowerBarrierPrice
+    const lowerHit = candle.low <= lowerBarrierPrice
     if (lowerHit) {
       const exitPrice = lowerBarrierPrice
       return {
@@ -106,4 +102,77 @@ export function evaluateTripleBarrierLabel(
     hitUpperBarrier: false,
     hitLowerBarrier: false,
   }
+}
+
+function resolveBarrierPct(input: TripleBarrierInput): { upper: number; lower: number } {
+  if (input.barrierMode !== 'volatility_scaled') {
+    return {
+      upper: input.upperBarrierPct,
+      lower: input.lowerBarrierPct,
+    }
+  }
+
+  const volPct = estimateVolatilityPct({
+    candles: input.candles,
+    entryIndex: input.entryIndex,
+    lookbackBars: input.volatilityLookbackBars ?? 24,
+    estimator: input.volatilityEstimator ?? 'garman_klass',
+  })
+  const safeVolPct = Math.max(volPct, 0.01)
+  return {
+    upper: Math.max(0.01, input.upperBarrierPct * safeVolPct),
+    lower: Math.max(0.01, input.lowerBarrierPct * safeVolPct),
+  }
+}
+
+function estimateVolatilityPct(input: {
+  candles: OhlcvData[]
+  entryIndex: number
+  lookbackBars: number
+  estimator: 'garman_klass' | 'parkinson' | 'close_to_close'
+}): number {
+  const start = Math.max(0, input.entryIndex - Math.max(2, input.lookbackBars) + 1)
+  const window = input.candles.slice(start, input.entryIndex + 1)
+  if (window.length < 2) return 0
+
+  if (input.estimator === 'garman_klass') {
+    const terms = window
+      .filter((candle) => candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0)
+      .map((candle) => {
+        const highLow = Math.log(candle.high / candle.low)
+        const closeOpen = Math.log(candle.close / candle.open)
+        return 0.5 * highLow * highLow - (2 * Math.log(2) - 1) * closeOpen * closeOpen
+      })
+    if (terms.length > 0) {
+      return Math.sqrt(Math.max(mean(terms), 0)) * 100
+    }
+  }
+
+  if (input.estimator === 'parkinson') {
+    const terms = window
+      .filter((candle) => candle.high > 0 && candle.low > 0)
+      .map((candle) => {
+        const highLow = Math.log(candle.high / candle.low)
+        return highLow * highLow / (4 * Math.log(2))
+      })
+    if (terms.length > 0) {
+      return Math.sqrt(Math.max(mean(terms), 0)) * 100
+    }
+  }
+
+  const returns: number[] = []
+  for (let index = 1; index < window.length; index += 1) {
+    const prev = window[index - 1].close
+    const current = window[index].close
+    if (prev > 0 && current > 0) {
+      returns.push(Math.log(current / prev))
+    }
+  }
+  if (returns.length === 0) return 0
+  const avg = mean(returns)
+  return Math.sqrt(mean(returns.map((value) => (value - avg) ** 2))) * 100
+}
+
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length
 }

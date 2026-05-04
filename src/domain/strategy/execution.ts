@@ -2,7 +2,15 @@ import type { CryptoPlaceOrderRequest } from '../trading/operation-dispatcher.ty
 import type { RuntimeFactorSnapshot } from './runtime-evaluator.js'
 import type { StrategyDataProvenance, StrategyExecutionDecision } from './runtime-types.js'
 
-function estimateRequestedNotionalUsd(
+export type ExposureClassification =
+  | 'open'
+  | 'add'
+  | 'reduce'
+  | 'close'
+  | 'flip'
+  | 'unresolved'
+
+export function estimateRequestedNotionalUsd(
   request: Pick<CryptoPlaceOrderRequest, 'size' | 'usd_size' | 'price'>,
   referencePrice?: number,
 ): number | null {
@@ -53,10 +61,16 @@ function withReferencePrice(
 export function buildStrategyExecutionDecision(input: {
   snapshot: RuntimeFactorSnapshot
   request: CryptoPlaceOrderRequest
-  isNewOpen: boolean
+  isNewOpen?: boolean
+  exposureClassification?: ExposureClassification
   referencePrice?: number
 }): StrategyExecutionDecision {
-  const { snapshot, request, isNewOpen, referencePrice } = input
+  const { snapshot, request, referencePrice } = input
+  const exposureClassification: ExposureClassification =
+    input.exposureClassification
+    ?? (typeof input.isNewOpen === 'boolean'
+      ? (input.isNewOpen ? 'open' : 'reduce')
+      : 'unresolved')
   const actionStatus = snapshot.governance.actionStatus
   const requestedNotionalUsd = estimateRequestedNotionalUsd(request, referencePrice)
   const recommendedNotionalUsd = snapshot.positionSizing.recommendedNotionalUsd
@@ -67,8 +81,9 @@ export function buildStrategyExecutionDecision(input: {
     activeEvents: snapshot.freeze.activeWindows.map((window) => window.event.name),
   } as const
   const metaLabeling = snapshot.metaLabeling
+  const bypassSizing = exposureClassification === 'reduce' || exposureClassification === 'close'
 
-  if (!isNewOpen || request.reduceOnly) {
+  if (bypassSizing) {
     return withReason(
       {
         mode: 'pass-through',
@@ -83,11 +98,11 @@ export function buildStrategyExecutionDecision(input: {
         freeze,
         metaLabeling,
       },
-      request.reduceOnly ? 'reduce-only order bypasses strategy sizing' : 'existing position path bypasses new-open sizing gate',
+      `exposure classified as ${exposureClassification} bypasses new-open sizing gate`,
     )
   }
 
-  if (metaLabeling?.enabled && !metaLabeling.admitted) {
+  if (metaLabeling?.enabled && metaLabeling.enforcementMode === 'gate' && !metaLabeling.admitted) {
     const blockReason = 'meta-label admission gate blocked new open'
     return withReason(
       {

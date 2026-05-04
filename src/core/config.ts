@@ -260,6 +260,7 @@ const strategyMlSchema = z.object({
 
 const strategyMetaLabelingSchema = z.object({
   enabled: z.boolean().default(false),
+  enforcementMode: z.enum(['shadow_only', 'gate']).default('shadow_only'),
   upperBarrierPct: z.number().positive().default(2),
   lowerBarrierPct: z.number().positive().default(1),
   maxHoldingBars: z.number().int().positive().default(24),
@@ -433,6 +434,8 @@ const cryptoExecutionSchema = z.object({
   ticketTtlMs: z.number().int().positive().default(600_000),
   idempotencyTtlMs: z.number().int().positive().default(1_800_000),
   killSwitchDefaultPolicy: z.enum(['block_new_only', 'block_all']).default('block_new_only'),
+  killSwitchStatePath: z.string().default('data/runtime/kill-switch.sqlite'),
+  operationTimeoutMs: z.number().int().positive().default(30_000),
 })
 
 export const accountConfigSchema = z.object({

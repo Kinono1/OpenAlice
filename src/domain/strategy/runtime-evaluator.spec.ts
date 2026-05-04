@@ -72,6 +72,7 @@ const baseConfig: StrategyConfig = {
   },
   metaLabeling: {
     enabled: false,
+    enforcementMode: 'shadow_only',
     upperBarrierPct: 2,
     lowerBarrierPct: 1,
     maxHoldingBars: 24,
@@ -192,6 +193,176 @@ describe('strategy runtime evaluator', () => {
     expect(result.ensemble.weights['funding-rate']).toBeUndefined()
   })
 
+  it('normalizes funding-rate with rolling history instead of a fixed divisor', () => {
+    const result = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: makeCandles(48),
+      strategyConfig: {
+        ...baseConfig,
+        factors: {
+          fundingRate: { enabled: true, weight: 1 },
+          basis: { enabled: false, weight: 0 },
+          volumeSurge: { enabled: false, weight: 0 },
+          momentumComposite: { enabled: false, weight: 0 },
+          meanReversion: { enabled: false, weight: 0 },
+          volatilityRegime: { enabled: false, weight: 0 },
+          liquidationPressure: { enabled: false, weight: 0 },
+          crossTimeframeDivergence: { enabled: false, weight: 0 },
+        },
+      },
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      fundingRatePct: 0.06,
+      fundingRateHistoryPct: [0.02, 0.04, 0.06],
+    })
+
+    const fundingSignal = result.factorSignals.find((signal) => signal.name === 'funding-rate')
+    expect(fundingSignal).toBeTruthy()
+    expect(fundingSignal?.metadata.rollingMeanPct).toBeCloseTo(0.04, 6)
+    expect(fundingSignal?.metadata.rollingStdPct).toBeCloseTo(0.01632993, 6)
+    expect(fundingSignal?.value).toBeCloseTo(-0.408248, 6)
+    expect(result.ensemble.weights['funding-rate']).toBe(1)
+  })
+
+  it('uses carry-spread as the funding/basis replacement when both legs are available', () => {
+    const result = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USDT:USDT',
+      candles: makeCandles(48),
+      strategyConfig: {
+        ...baseConfig,
+        factors: {
+          fundingRate: { enabled: true, weight: 1 },
+          basis: { enabled: true, weight: 1 },
+          volumeSurge: { enabled: false, weight: 0 },
+          momentumComposite: { enabled: false, weight: 0 },
+          meanReversion: { enabled: false, weight: 0 },
+          volatilityRegime: { enabled: false, weight: 0 },
+          liquidationPressure: { enabled: false, weight: 0 },
+          crossTimeframeDivergence: { enabled: false, weight: 0 },
+        },
+      },
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      fundingRatePct: 0.06,
+      fundingRateHistoryPct: [0.02, 0.04, 0.06],
+      basisInput: {
+        futuresPrice: 102,
+        spotPrice: 100,
+      },
+    })
+
+    expect(result.factorSignals.map((signal) => signal.name)).toEqual(['carry-spread'])
+    expect(result.ensemble.weights['carry-spread']).toBe(1)
+    expect(result.ensemble.weights['funding-rate']).toBeUndefined()
+    expect(result.ensemble.weights.basis).toBeUndefined()
+  })
+
+  it('rolls IC monitor state through snapshots without same-timestamp signal/return pairing', () => {
+    const hourMs = 60 * 60 * 1000
+    const baseTime = 1_700_000_000_000
+    const icMonitorConfig = {
+      enabled: true,
+      mode: 'shadow' as const,
+      icHorizons: [1],
+      lookbackWindows: [24],
+      minSamples: 5,
+      minSampleCount: 5,
+      warmupWindows: 1,
+      decayThresholds: {
+        meanIcFloor: 0.03,
+        icIrFloor: 0.5,
+        signStabilityFloor: 0.6,
+      },
+      autoDisable: true,
+    }
+    let icMonitorSnapshot = undefined
+
+    for (let index = 0; index < 8; index += 1) {
+      const snapshot = evaluateRuntimeFactorSnapshot({
+        symbol: 'BTC/USD',
+        candles: makeCandles(48 + index),
+        strategyConfig: {
+          ...baseConfig,
+          factors: {
+            fundingRate: { enabled: false, weight: 0 },
+            basis: { enabled: false, weight: 0 },
+            volumeSurge: { enabled: false, weight: 0 },
+            momentumComposite: { enabled: true, weight: 1 },
+            meanReversion: { enabled: false, weight: 0 },
+            volatilityRegime: { enabled: false, weight: 0 },
+            liquidationPressure: { enabled: false, weight: 0 },
+            crossTimeframeDivergence: { enabled: false, weight: 0 },
+          },
+        },
+        sourceTier: 'L2',
+        useType: 'U1',
+        sentiment: 'S0',
+        nowUtcMs: baseTime + index * hourMs,
+        icMonitorConfig,
+        icMonitorSnapshot,
+      })
+      icMonitorSnapshot = snapshot.icMonitorSnapshot
+    }
+
+    expect(icMonitorSnapshot?.signals).toHaveLength(8)
+    expect(icMonitorSnapshot?.returns).toHaveLength(8)
+    expect(icMonitorSnapshot?.signals[7]?.timestamp).toBe(baseTime + 7 * hourMs)
+    expect(icMonitorSnapshot?.returns[7]?.timestamp).toBe(baseTime + 7 * hourMs)
+    expect(icMonitorSnapshot?.signals[7]?.symbol).toBe('BTC/USD')
+    expect(icMonitorSnapshot?.returns[7]?.symbol).toBe('BTC/USD')
+  })
+
+  it('feeds open-interest crowding into liquidation pressure only when OI data exists', () => {
+    const strategyConfig: StrategyConfig = {
+      ...baseConfig,
+      factors: {
+        fundingRate: { enabled: false, weight: 0 },
+        basis: { enabled: false, weight: 0 },
+        volumeSurge: { enabled: true, weight: 1 },
+        momentumComposite: { enabled: false, weight: 0 },
+        meanReversion: { enabled: false, weight: 0 },
+        volatilityRegime: { enabled: false, weight: 0 },
+        liquidationPressure: { enabled: true, weight: 1 },
+        crossTimeframeDivergence: { enabled: false, weight: 0 },
+      },
+    }
+
+    const withOpenInterest = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: makeCandles(48),
+      strategyConfig,
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+      openInterest: 1000,
+      openInterestValue: 5_000_000,
+    })
+
+    const withoutOpenInterest = evaluateRuntimeFactorSnapshot({
+      symbol: 'BTC/USD',
+      candles: makeCandles(48),
+      strategyConfig,
+      sourceTier: 'L2',
+      useType: 'U1',
+      sentiment: 'S0',
+    })
+
+    const withSignal = withOpenInterest.factorSignals.find((signal) => signal.name === 'liquidation-pressure')
+    const withoutSignal = withoutOpenInterest.factorSignals.find((signal) => signal.name === 'liquidation-pressure')
+
+    expect(withSignal).toBeTruthy()
+    expect(withSignal?.metadata.openInterestPressure).toBeLessThan(0)
+    expect(withSignal?.metadata.weightOpenInterestPressure).toBeGreaterThan(0)
+    expect(withOpenInterest.ensemble.weights['liquidation-pressure']).toBe(1)
+
+    expect(withoutSignal).toBeTruthy()
+    expect(withoutSignal?.metadata.openInterestPressure).toBe(0)
+    expect(withoutSignal?.metadata.weightOpenInterestPressure).toBe(0)
+    expect(withoutOpenInterest.ensemble.weights['liquidation-pressure']).toBeCloseTo(2 / 3, 6)
+  })
+
   it('computes kelly-driven position recommendation when equity is available', () => {
     const result = evaluateRuntimeFactorSnapshot({
       symbol: 'BTC/USD',
@@ -264,7 +435,9 @@ describe('strategy runtime evaluator', () => {
     })
 
     expect(result.metaLabeling?.enabled).toBe(true)
+    expect(result.metaLabeling?.enforcementMode).toBe('shadow_only')
     expect(result.metaLabeling?.threshold).toBe(0.6)
+    expect(result.metaLabeling?.canControlLiveLeverage).toBe(false)
     expect(result.metaLabeling?.score).toBeGreaterThanOrEqual(0)
     expect(result.metaLabeling?.score).toBeLessThanOrEqual(1)
     expect(result.metaLabeling?.reasons.length).toBeGreaterThan(0)

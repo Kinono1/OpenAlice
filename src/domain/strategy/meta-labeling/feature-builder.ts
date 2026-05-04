@@ -10,6 +10,8 @@ export interface MetaLabelFeatureVector {
 export function buildMetaLabelFeatureVector(input: {
   snapshot: RuntimeFactorSnapshot
   decision?: StrategyExecutionDecision
+  consecutiveLossCount?: number
+  hoursSinceLastTrade?: number
 }): MetaLabelFeatureVector {
   const { snapshot, decision } = input
   const featureEntries: Array<[string, number]> = [
@@ -29,10 +31,15 @@ export function buildMetaLabelFeatureVector(input: {
     ['realized-vol-pct', snapshot.derivedMetrics.realizedVolPct],
     ['position-sizing-pct', snapshot.positionSizing.recommendedPctOfEquity],
     ['freeze-active', snapshot.freeze.active ? 1 : 0],
+    ['consecutive-loss-count', input.consecutiveLossCount ?? 0],
+    ['hours-since-last-trade', input.hoursSinceLastTrade ?? 0],
     ['decision-mode-applied', decision?.mode === 'applied' ? 1 : 0],
     ['decision-mode-blocked', decision?.mode === 'blocked' ? 1 : 0],
     ['decision-requested-notional', decision?.requestedNotionalUsd ?? 0],
     ['decision-effective-notional', decision?.effectiveNotionalUsd ?? 0],
+    ['trend-strength', snapshot.regimeEvaluation?.features?.trendStrength ?? 0],
+    ['mean-reversion-score', snapshot.factorSignals.find((s) => s.name === 'mean-reversion')?.value ?? 0],
+    ['volatility-trend-strength', snapshot.factorSignals.find((s) => s.name === 'volatility-regime')?.value ?? 0],
   ]
 
   return {
