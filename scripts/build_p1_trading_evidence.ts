@@ -170,6 +170,7 @@ export interface TrialLedgerReport {
     entries: Array<{
       policyId: string
       pValue: number | null
+      diagnosticPValue: number | null
       eligibleForFdrComputation: boolean
       includedInFdrComputation: boolean
       fdrComputationExclusionReason: string | null
@@ -3602,7 +3603,7 @@ function summarizeTrialLedgerReadinessGaps(entries: TrialLedgerEntry[]): TrialLe
   const includedRawMTrials = entries.filter(entry => entry.includedInRawM).length
   const visibleFailedTrials = entries.filter(entry => entry.status === 'graveyard' || entry.status === 'killed').length
   const visibleSurvivingTrials = entries.filter(entry => entry.status === 'active' || entry.status === 'registered').length
-  const missingPValueTrials = entries.filter(entry => entry.includedInRawM && numericMetric(entry.metrics.pValue) == null).length
+  const missingPValueTrials = entries.filter(entry => entry.includedInRawM && promotionGradePValueMetric(entry) == null).length
   const invalidPValueTrials = entries.filter(entry => {
     const raw = (entry.metrics as Record<string, unknown>).pValue
     return raw != null && numericMetric(raw) == null
@@ -3641,11 +3642,16 @@ function summarizeTrialLedgerReadinessGaps(entries: TrialLedgerEntry[]): TrialLe
   ).length
   const fdrPValueAvailableTrials = entries.filter(entry =>
     entry.includedInRawM &&
-    (entry.metrics.fdrPValuesAvailable === true || numericMetric(entry.metrics.pValue) != null),
+    promotionGradePValueMetric(entry) != null,
   ).length
   const fdrPValueUnavailableTrials = entries.filter(entry =>
     entry.includedInRawM &&
-    (entry.metrics.fdrPValuesAvailable === false || numericMetric(entry.metrics.fdrMissingPValueCount) != null && Number(entry.metrics.fdrMissingPValueCount) > 0),
+    promotionGradePValueMetric(entry) == null &&
+    (
+      entry.metrics.fdrPValuesAvailable === false ||
+      numericMetric(entry.metrics.fdrMissingPValueCount) != null && Number(entry.metrics.fdrMissingPValueCount) > 0 ||
+      numericMetric(entry.metrics.pValue) != null && entry.metrics.fdrPValueIsPromotionGrade === false
+    ),
   ).length
   const fdrPValueNonPromotionGradeTrials = entries.filter(entry =>
     entry.includedInRawM &&
@@ -3656,7 +3662,7 @@ function summarizeTrialLedgerReadinessGaps(entries: TrialLedgerEntry[]): TrialLe
     entries,
     'fdrPValueBlockedReason',
     'unspecified',
-    entry => entry.includedInRawM && numericMetric(entry.metrics.pValue) == null,
+    entry => entry.includedInRawM && promotionGradePValueMetric(entry) == null,
   )
   const fdrBlockedReasonCounts = countMetricStringValues(
     entries,
@@ -3798,7 +3804,7 @@ function buildTrialSourceCoverageBucket(key: string, entries: TrialLedgerEntry[]
     .map(([code, count]) => ({ code, count }))
     .sort((left, right) => right.count - left.count || left.code.localeCompare(right.code))
     .slice(0, 10)
-  const missingPValueTrials = entries.filter(entry => entry.includedInRawM && numericMetric(entry.metrics.pValue) == null).length
+  const missingPValueTrials = entries.filter(entry => entry.includedInRawM && promotionGradePValueMetric(entry) == null).length
   const invalidPValueTrials = entries.filter(entry => {
     const raw = (entry.metrics as Record<string, unknown>).pValue
     return raw != null && numericMetric(raw) == null
@@ -3825,11 +3831,16 @@ function buildTrialSourceCoverageBucket(key: string, entries: TrialLedgerEntry[]
   ).length
   const fdrPValueAvailableTrials = entries.filter(entry =>
     entry.includedInRawM &&
-    (entry.metrics.fdrPValuesAvailable === true || numericMetric(entry.metrics.pValue) != null),
+    promotionGradePValueMetric(entry) != null,
   ).length
   const fdrPValueUnavailableTrials = entries.filter(entry =>
     entry.includedInRawM &&
-    (entry.metrics.fdrPValuesAvailable === false || numericMetric(entry.metrics.fdrMissingPValueCount) != null && Number(entry.metrics.fdrMissingPValueCount) > 0),
+    promotionGradePValueMetric(entry) == null &&
+    (
+      entry.metrics.fdrPValuesAvailable === false ||
+      numericMetric(entry.metrics.fdrMissingPValueCount) != null && Number(entry.metrics.fdrMissingPValueCount) > 0 ||
+      numericMetric(entry.metrics.pValue) != null && entry.metrics.fdrPValueIsPromotionGrade === false
+    ),
   ).length
   const fdrPValueNonPromotionGradeTrials = entries.filter(entry =>
     entry.includedInRawM &&
@@ -3840,7 +3851,7 @@ function buildTrialSourceCoverageBucket(key: string, entries: TrialLedgerEntry[]
     entries,
     'fdrPValueBlockedReason',
     'unspecified',
-    entry => entry.includedInRawM && numericMetric(entry.metrics.pValue) == null,
+    entry => entry.includedInRawM && promotionGradePValueMetric(entry) == null,
   )
   const fdrBlockedReasonCounts = countMetricStringValues(
     entries,
@@ -4933,12 +4944,14 @@ function buildFdrDiagnostics(input: {
   const includedEntries = entries.filter(entry => entry.includedInRawM)
   const effectiveClusters = buildEffectivePValueClusters(entries)
   const pValueDiagnostics = includedEntries.map(entry => {
-    const pValue = numericMetric(entry.metrics.pValue)
-    const nonPromotionGrade = pValue != null && entry.metrics.fdrPValueIsPromotionGrade === false
-    const eligibleForFdrComputation = pValue != null && !nonPromotionGrade
+    const diagnosticPValue = numericMetric(entry.metrics.pValue)
+    const nonPromotionGrade = diagnosticPValue != null && entry.metrics.fdrPValueIsPromotionGrade === false
+    const pValue = promotionGradePValueMetric(entry)
+    const eligibleForFdrComputation = pValue != null
     return {
       entry,
       pValue,
+      diagnosticPValue,
       nonPromotionGrade,
       eligibleForFdrComputation,
     }
@@ -4950,7 +4963,7 @@ function buildFdrDiagnostics(input: {
     .filter(item => item.eligibleForFdrComputation)
     .map(item => item.pValue)
     .filter((value): value is number => value != null)
-  const missingPValueEntries = pValueDiagnostics.filter(item => item.pValue == null)
+  const missingPValueEntries = pValueDiagnostics.filter(item => item.pValue == null && !item.nonPromotionGrade)
   const nonPromotionGradePValueEntries = pValueDiagnostics.filter(item => item.nonPromotionGrade)
   const hasAllPValues = pValueDiagnostics.length > 0 && missingPValueEntries.length === 0 && nonPromotionGradePValueEntries.length === 0
   const effectivePValues = effectiveClusters.map(cluster => cluster.pValue)
@@ -4995,30 +5008,31 @@ function buildFdrDiagnostics(input: {
   const pValueEntries = entries.map(entry => {
     const fdrIndex = fdrIndexByTrialId.get(entry.trialId)
     const effectiveFdrIndex = effectiveFdrIndexByTrialId.get(entry.trialId)
-    const pValue = typeof entry.metrics.pValue === 'number' && Number.isFinite(entry.metrics.pValue)
-      ? entry.metrics.pValue
-      : null
+    const diagnosticPValue = numericMetric(entry.metrics.pValue)
+    const pValue = promotionGradePValueMetric(entry)
+    const nonPromotionGrade = diagnosticPValue != null && entry.metrics.fdrPValueIsPromotionGrade === false
     const eligibleForFdrComputation = entry.includedInRawM &&
       pValue != null &&
       entry.metrics.fdrPValueIsPromotionGrade !== false
     const includedInFdrComputation = canRunPromotionFdr && eligibleForFdrComputation
     const fdrComputationExclusionReason = !entry.includedInRawM
       ? 'excluded_from_raw_m'
-      : pValue == null
-        ? 'missing_p_value'
-        : entry.metrics.fdrPValueIsPromotionGrade === false
+      : nonPromotionGrade
           ? 'p_value_not_promotion_grade'
-          : !input.rawMComplete || !input.includesFailedTrials
-            ? 'complete_trial_universe_required'
-            : !canRunPromotionFdr
-              ? 'fdr_inputs_not_ready'
-              : null
+          : pValue == null
+            ? 'missing_p_value'
+            : !input.rawMComplete || !input.includesFailedTrials
+              ? 'complete_trial_universe_required'
+              : !canRunPromotionFdr
+                ? 'fdr_inputs_not_ready'
+                : null
     const rawItem = fdrIndex == null ? null : byRaw?.items[fdrIndex] ?? null
     const effectiveItem = effectiveFdrIndex == null ? null : byEffective?.items[effectiveFdrIndex] ?? null
     const bhItem = fdrIndex == null ? null : bhSecondary?.items[fdrIndex] ?? null
     return {
       policyId: entry.policyId,
       pValue,
+      diagnosticPValue,
       eligibleForFdrComputation,
       includedInFdrComputation,
       fdrComputationExclusionReason,
@@ -5028,15 +5042,15 @@ function buildFdrDiagnostics(input: {
       promotionAllowed: false as const,
       reason: !entry.includedInRawM
         ? 'excluded_from_raw_m'
-        : pValue == null
-        ? 'missing_p_value_p1_skeleton'
-        : entry.metrics.fdrPValueIsPromotionGrade === false
+        : nonPromotionGrade
           ? 'p_value_not_promotion_grade'
-        : !input.rawMComplete || !input.includesFailedTrials
-          ? 'complete_trial_universe_required_for_promotion_fdr'
-          : canRunPromotionFdr
-            ? 'p1_report_explanatory_only'
-            : 'p1_fdr_blocked',
+          : pValue == null
+            ? 'missing_p_value_p1_skeleton'
+            : !input.rawMComplete || !input.includesFailedTrials
+              ? 'complete_trial_universe_required_for_promotion_fdr'
+              : canRunPromotionFdr
+                ? 'p1_report_explanatory_only'
+                : 'p1_fdr_blocked',
     }
   })
   return {
@@ -5082,6 +5096,13 @@ function buildFdrDiagnostics(input: {
     },
     entries: pValueEntries,
   }
+}
+
+function promotionGradePValueMetric(entry: TrialLedgerEntry): number | null {
+  const pValue = numericMetric(entry.metrics.pValue)
+  if (pValue == null) return null
+  if (entry.metrics.fdrPValueIsPromotionGrade === false) return null
+  return pValue
 }
 
 function numericMetric(value: unknown): number | null {

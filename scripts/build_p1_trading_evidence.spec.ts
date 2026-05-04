@@ -690,7 +690,8 @@ describe('build_p1_trading_evidence', () => {
       pAdjustedBHSecondary: null,
     })
     expect(ledger.fdrDiagnostics.entries.find(entry => entry.policyId === 'explanatory-pvalue')).toMatchObject({
-      pValue: 0.02,
+      pValue: null,
+      diagnosticPValue: 0.02,
       eligibleForFdrComputation: false,
       includedInFdrComputation: false,
       fdrComputationExclusionReason: 'p_value_not_promotion_grade',
@@ -829,21 +830,23 @@ describe('build_p1_trading_evidence', () => {
       fdrReportPresentTrials: 2,
       fdrReportBlockedTrials: 2,
       fdrInputsIncompleteTrials: 2,
-      fdrPValueAvailableTrials: 1,
-      fdrPValueUnavailableTrials: 1,
+      fdrPValueAvailableTrials: 0,
+      fdrPValueUnavailableTrials: 2,
       fdrPValueNonPromotionGradeTrials: 1,
-      missingPValueTrials: 1,
+      missingPValueTrials: 2,
     })
     expect(ledger.readinessGaps.blockerSummary).toEqual(expect.arrayContaining([
       'fdr_inputs_incomplete_trials:2',
       'fdr_p_value_non_promotion_grade_trials:1',
-      'missing_p_value_trials:1',
+      'missing_p_value_trials:2',
     ]))
     expect(ledger.readinessGaps.pValueUnavailableReasonCounts).toEqual([
       { reason: 'selected_candidate_p_value_not_finite', count: 1 },
+      { reason: 'unspecified', count: 1 },
     ])
     expect(ledger.fdrDiagnostics.entries.find(entry => entry.policyId === 'runtime-explanatory-pvalue')).toMatchObject({
-      pValue: 0.42,
+      pValue: null,
+      diagnosticPValue: 0.42,
       eligibleForFdrComputation: false,
       includedInFdrComputation: false,
       fdrComputationExclusionReason: 'p_value_not_promotion_grade',
@@ -864,8 +867,8 @@ describe('build_p1_trading_evidence', () => {
       fdrReportPresentTrials: 2,
       fdrReportBlockedTrials: 2,
       fdrInputsIncompleteTrials: 2,
-      fdrPValueAvailableTrials: 1,
-      fdrPValueUnavailableTrials: 1,
+      fdrPValueAvailableTrials: 0,
+      fdrPValueUnavailableTrials: 2,
       fdrPValueNonPromotionGradeTrials: 1,
     })
     expect(coverage.runtimeRegistryDiagnostics).toMatchObject({
