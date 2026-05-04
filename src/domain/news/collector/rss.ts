@@ -8,6 +8,7 @@
 import { fetchAndParseFeed } from './rss-parser.js'
 import { computeDedupKey, type NewsCollectorStore } from '../store.js'
 import type { RSSFeedConfig } from '../types.js'
+import { randomUUID } from 'node:crypto'
 
 export interface CollectorOpts {
   store: NewsCollectorStore
@@ -52,10 +53,11 @@ export class NewsCollector {
   async fetchAll(): Promise<{ total: number; new: number }> {
     let totalItems = 0
     let totalNew = 0
+    const collectorRoundId = randomUUID()
 
     for (const feed of this.feeds) {
       try {
-        const { fetched, ingested } = await this.fetchFeed(feed)
+        const { fetched, ingested } = await this.fetchFeed(feed, collectorRoundId)
         totalItems += fetched
         totalNew += ingested
       } catch (err) {
@@ -75,9 +77,14 @@ export class NewsCollector {
   }
 
   /** Fetch a single feed and ingest its items. */
-  private async fetchFeed(feed: RSSFeedConfig): Promise<{ fetched: number; ingested: number }> {
+  private async fetchFeed(
+    feed: RSSFeedConfig,
+    collectorRoundId: string,
+  ): Promise<{ fetched: number; ingested: number }> {
     const items = await fetchAndParseFeed(feed.url)
     let ingested = 0
+    const feedBatchId = randomUUID()
+    const ingestedAt = new Date().toISOString()
 
     for (const item of items) {
       const dedupKey = computeDedupKey({
@@ -98,6 +105,9 @@ export class NewsCollector {
           guid: item.guid,
           ingestSource: 'rss',
           dedupKey,
+          collectorRoundId,
+          feedBatchId,
+          ingestedAt,
           ...(feed.categories ? { categories: feed.categories.join(',') } : {}),
         },
       })
