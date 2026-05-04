@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateRuntimeFactorSnapshot } from '../runtime-evaluator.js'
 import { buildMetaLabelFeatureVector } from './feature-builder.js'
+import { computeDynamicThreshold, evaluateFeedbackMetrics } from './feedback-loop.js'
 import { evaluateMetaLabelAdmission } from './admission.js'
+import { MetaLabelShadowModel } from './shadow-model.js'
+import { TradeOutcomeStore } from './trade-outcome-store.js'
 import { evaluateTripleBarrierLabel } from './triple-barrier.js'
 import type { StrategyConfig } from '../../../core/config.js'
 
@@ -254,5 +257,50 @@ describe('strategy meta-labeling', () => {
     expect(admission.enforcementMode).toBe('gate')
     expect(admission.primaryObjective).toBe('outperform_skip_after_cost')
     expect(admission.canControlLiveLeverage).toBe(false)
+  })
+
+  it('computes feedback metrics without creating execution authority', () => {
+    const metrics = evaluateFeedbackMetrics([
+      { admissionScore: 0.8, tripleBarrierLabel: 1, realizedReturnPct: 0.4 },
+      { admissionScore: 0.7, tripleBarrierLabel: 1, realizedReturnPct: 0.2 },
+      { admissionScore: 0.2, tripleBarrierLabel: 0, realizedReturnPct: -0.3 },
+    ])
+
+    expect(metrics.recentWinRate).toBeCloseTo(2 / 3)
+    expect(metrics.admissionScoreVsPnlCorrelation).toBeGreaterThan(0)
+    expect(metrics.retrainRecommended).toBe(false)
+    expect(computeDynamicThreshold(0.55, 'stressed', 0.35)).toBeGreaterThan(0.55)
+  })
+
+  it('keeps shadow model training readiness separate from trading permission', () => {
+    const model = new MetaLabelShadowModel()
+    model.record({
+      timestampMs: 1,
+      features: { edge: 1 },
+      ruleBasedScore: 0.7,
+      ruleBasedAdmitted: true,
+    })
+    model.labelOutcome(1, 1, 0.2)
+
+    expect(model.getLabeledCount()).toBe(1)
+    expect(model.isReadyForTraining()).toBe(false)
+    expect(model.getDiagnostics()).toMatchObject({
+      totalRecords: 1,
+      labeledRecords: 1,
+      readyForTraining: false,
+      admissionRate: 1,
+    })
+  })
+
+  it('stores shadow trade outcomes without duplicating settled entries', () => {
+    const store = new TradeOutcomeStore({ maxRecords: 10, exportBatchSize: 5 })
+    store.recordEntry('trade-1', { edge: 0.4 }, 0.6)
+    store.recordExit('trade-1', 0.3, 'take-profit')
+    store.recordExit('trade-1', -0.4, 'stop-loss')
+
+    expect(store.size).toBe(1)
+    expect(store.pendingCount).toBe(0)
+    expect(store.getRecentWinRate()).toBe(1)
+    expect(store.exportForRetraining()).toHaveLength(1)
   })
 })

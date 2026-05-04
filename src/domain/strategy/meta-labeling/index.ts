@@ -1,3 +1,6 @@
 export * from './admission.js'
 export * from './triple-barrier.js'
 export * from './feature-builder.js'
+export * from './feedback-loop.js'
+export * from './shadow-model.js'
+export * from './trade-outcome-store.js'
