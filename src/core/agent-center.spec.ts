@@ -42,7 +42,7 @@ function makeAgentCenter(overrides: MakeAgentCenterOpts = {}): AgentCenter {
   const maxSteps = overrides.maxSteps ?? 1
   const compaction = overrides.compaction ?? DEFAULT_COMPACTION_CONFIG
 
-  vi.mocked(createModelFromConfig).mockResolvedValue({ model, key: 'test:mock-model' })
+  vi.mocked(createModelFromConfig).mockResolvedValue({ model, key: 'test:mock-model', providerName: 'openai' })
   const provider = new VercelAIProvider(async () => tools, instructions, maxSteps)
   const router = new GenerateRouter(provider, null)
 

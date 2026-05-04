@@ -1,5 +1,6 @@
 import { ToolLoopAgent, stepCountIs } from 'ai'
 import type { LanguageModel, Tool } from 'ai'
+import type { SharedV3ProviderOptions } from '@ai-sdk/provider'
 
 /**
  * Create a generic ToolLoopAgent with externally-provided tools.
@@ -12,12 +13,14 @@ export function createAgent(
   tools: Record<string, Tool>,
   instructions: string,
   maxSteps = 20,
+  providerOptions?: SharedV3ProviderOptions,
 ) {
   return new ToolLoopAgent({
     model,
     tools,
     instructions,
     stopWhen: stepCountIs(maxSteps),
+    providerOptions,
   })
 }
 

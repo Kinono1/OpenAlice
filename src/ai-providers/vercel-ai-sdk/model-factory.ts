@@ -27,6 +27,7 @@ interface CodexProviderConfig {
 export interface ModelFromConfig {
   model: LanguageModel
   key: string
+  providerName: string
 }
 
 export interface ModelOverride {
@@ -40,24 +41,31 @@ export interface ModelOverride {
   codexProvider?: string
 }
 
+interface ConfiguredModelResult {
+  model: LanguageModel
+  providerName: string
+}
+
 /** Create a Vercel AI SDK model from OpenAlice config. */
-export async function createConfiguredModel(model: ModelConfig): Promise<LanguageModel> {
+export async function createConfiguredModel(model: ModelConfig): Promise<ConfiguredModelResult> {
   const provider = model.provider.trim().toLowerCase()
 
   if (provider === 'anthropic') {
+    const apiKey = model.apiKey ?? (model.apiKeyEnv ? process.env[model.apiKeyEnv] : undefined)
     const client = createAnthropic({
-      apiKey: model.apiKey,
+      apiKey,
       baseURL: model.baseURL,
     })
-    return client(model.model)
+    return { model: client(model.model), providerName: 'anthropic' }
   }
 
   if (provider === 'google') {
+    const apiKey = model.apiKey ?? (model.apiKeyEnv ? process.env[model.apiKeyEnv] : undefined)
     const client = createGoogleGenerativeAI({
-      apiKey: model.apiKey,
+      apiKey,
       baseURL: model.baseURL,
     })
-    return client(model.model)
+    return { model: client(model.model), providerName: 'google' }
   }
 
   if (provider === 'gmn') {
@@ -67,7 +75,7 @@ export async function createConfiguredModel(model: ModelConfig): Promise<Languag
       apiKey: codex.bearerToken,
       name: codex.provider,
     })
-    return openai(codex.model)
+    return { model: openai(codex.model), providerName: codex.provider }
   }
 
   if (provider === 'openai' || provider === 'openai-compatible') {
@@ -79,12 +87,16 @@ export async function createConfiguredModel(model: ModelConfig): Promise<Languag
       )
     }
 
+    const providerName = provider === 'openai-compatible' ? 'openai-compatible' : 'openai'
     const openai = createOpenAI({
       baseURL: model.baseURL,
       apiKey,
-      name: provider === 'openai-compatible' ? 'openai-compatible' : undefined,
+      name: providerName,
     })
-    return openai(model.model)
+    const modelInstance = provider === 'openai-compatible'
+      ? openai.chat(model.model)
+      : openai(model.model)
+    return { model: modelInstance, providerName }
   }
 
   throw new Error(
@@ -98,7 +110,7 @@ export async function createModelFromConfig(override?: ModelOverride): Promise<M
   const model = override?.model ?? config.model
   const baseURL = override?.baseUrl ?? override?.baseURL ?? config.baseUrl
   const apiKey = resolveLegacyApiKey(provider, override?.apiKey, config.apiKeys)
-  const configuredModel = await createConfiguredModel({
+  const configured = await createConfiguredModel({
     provider,
     model,
     baseURL,
@@ -109,8 +121,9 @@ export async function createModelFromConfig(override?: ModelOverride): Promise<M
   })
 
   return {
-    model: configuredModel,
+    model: configured.model,
     key: `${provider}:${model}:${baseURL ?? ''}`,
+    providerName: configured.providerName,
   }
 }
 

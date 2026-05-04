@@ -37,7 +37,7 @@ function makeProvider(overrides?: { getTools?: () => Promise<Record<string, any>
 describe('VercelAIProvider — agent caching', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o', providerName: 'openai' })
     mockCreateAgent.mockReturnValue(makeAgent() as any)
   })
 
@@ -58,7 +58,7 @@ describe('VercelAIProvider — agent caching', () => {
     const provider = makeProvider()
     await provider.ask('first')
     // Simulate config key change
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'claude-3-5-sonnet' })
+    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'claude-3-5-sonnet', providerName: 'anthropic' })
     await provider.ask('second')
     expect(mockCreateAgent).toHaveBeenCalledTimes(2)
   })
@@ -78,7 +78,7 @@ describe('VercelAIProvider — agent caching', () => {
 describe('VercelAIProvider — per-request overrides', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o', providerName: 'openai' })
     mockCreateAgent.mockReturnValue(makeAgent() as any)
   })
 
@@ -88,7 +88,7 @@ describe('VercelAIProvider — per-request overrides', () => {
     // warm cache
     await provider.ask('warm')
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o', providerName: 'openai' })
     mockCreateAgent.mockReturnValue(makeAgent() as any)
 
     // generate with disabledTools
@@ -109,7 +109,7 @@ describe('VercelAIProvider — per-request overrides', () => {
     const provider = makeProvider()
     await provider.ask('warm')
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o', providerName: 'openai-compatible' })
     mockCreateAgent.mockReturnValue(makeAgent() as any)
 
     const override = {
@@ -125,6 +125,13 @@ describe('VercelAIProvider — per-request overrides', () => {
 
     expect(mockCreateAgent).toHaveBeenCalledOnce()
     expect(mockCreateModelFromConfig).toHaveBeenCalledWith(override)
+    expect(mockCreateAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.any(String),
+      expect.any(Number),
+      { 'openai-compatible': { reasoningEffort: 'xhigh', forceReasoning: true } },
+    )
   })
 })
 
@@ -133,7 +140,7 @@ describe('VercelAIProvider — per-request overrides', () => {
 describe('VercelAIProvider — generate()', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o', providerName: 'openai' })
     mockCreateAgent.mockReturnValue(makeAgent() as any)
   })
 

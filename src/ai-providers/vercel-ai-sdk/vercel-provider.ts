@@ -32,8 +32,12 @@ export class VercelAIProvider implements AIProvider {
 
   /** Lazily create or return the cached agent, re-creating when config, tools, or system prompt change. */
   private async resolveAgent(systemPrompt?: string, disabledTools?: string[], modelOverride?: ModelOverride): Promise<Agent> {
-    const { model, key } = await createModelFromConfig(modelOverride)
+    const { model, key, providerName } = await createModelFromConfig(modelOverride)
     const allTools = await this.getTools()
+
+    const providerOptions = providerName === 'openai-compatible'
+      ? { 'openai-compatible': { reasoningEffort: 'xhigh', forceReasoning: true } }
+      : undefined
 
     // Per-channel overrides: skip cache and create a fresh agent
     if (disabledTools?.length || modelOverride) {
@@ -41,13 +45,13 @@ export class VercelAIProvider implements AIProvider {
       const tools = disabledSet
         ? Object.fromEntries(Object.entries(allTools).filter(([name]) => !disabledSet.has(name)))
         : allTools
-      return createAgent(model, tools, systemPrompt ?? this.instructions, this.maxSteps)
+      return createAgent(model, tools, systemPrompt ?? this.instructions, this.maxSteps, providerOptions)
     }
 
     const toolCount = Object.keys(allTools).length
     const effectivePrompt = systemPrompt ?? null
     if (key !== this.cachedKey || toolCount !== this.cachedToolCount || effectivePrompt !== this.cachedSystemPrompt) {
-      this.cachedAgent = createAgent(model, allTools, systemPrompt ?? this.instructions, this.maxSteps)
+      this.cachedAgent = createAgent(model, allTools, systemPrompt ?? this.instructions, this.maxSteps, providerOptions)
       this.cachedKey = key
       this.cachedToolCount = toolCount
       this.cachedSystemPrompt = effectivePrompt
