@@ -40,6 +40,7 @@ export interface HmmTrainingDiagnostics {
 
 export interface HmmRegimeOutput {
   state: HmmState
+  rawState?: HmmState
   stateName: HmmStateName
   stateProbs: number[]
   confidence: number
@@ -49,6 +50,20 @@ export interface HmmRegimeOutput {
   method: 'threshold' | 'hmm'
   coldStartMode: HmmColdStartMode
   effectiveSampleSize: number
+  stateIdentity?: HmmStateIdentity
+}
+
+export interface HmmStateIdentity {
+  method: 'wasserstein_template'
+  rawState: HmmState
+  rawStateName: HmmStateName
+  matchedState: HmmState
+  matchedStateName: HmmStateName
+  wassersteinDistance: number
+  identityConfidence: number
+  activeStateCount: number
+  canonicalStateProbs: number[]
+  rawToCanonicalState: HmmState[]
 }
 
 export interface RegimeHmmConfig {
@@ -90,6 +105,26 @@ export const DEFAULT_HMM_PARAMS: HmmParams = {
   ],
 }
 
+/**
+ * Progressive HMM activation schedule:
+ *
+ * Phase 1 — threshold_only  (< minObservations):
+ *   Pure heuristic classification, no HMM training. The system boots with
+ *   rule-of-thumb state assignments until enough data accumulates.
+ *
+ * Phase 2 — threshold_seeded (minObservations <= n < seedObservations):
+ *   Heuristic state assignments seed the initial HMM parameters, but the
+ *   forward-backward + Viterbi pipeline is NOT yet active. The seed params
+ *   are held in reserve for the first real EM run.
+ *
+ * Phase 3 — regularized_em  (seedObservations <= n < stableObservations):
+ *   Baum-Welch EM runs with L2 regularization on the transition matrix to
+ *   prevent overfitting on limited data. Confidence is still discounted.
+ *
+ * Phase 4 — standard_em     (n >= stableObservations):
+ *   Full Baum-Welch without regularization. Transition predictor and
+ *   steady-state analysis are active from this phase onward.
+ */
 export const DEFAULT_REGIME_HMM_CONFIG: RegimeHmmConfig = {
   enabled: false,
   minObservations: 30,

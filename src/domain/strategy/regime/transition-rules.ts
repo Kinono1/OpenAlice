@@ -13,12 +13,15 @@ export function evaluateRegimeTransition(
     }
   }
 
-  if (next === 'event-risk-freeze') {
+  if (next === 'event-risk-freeze' || next === 'vol-stress') {
     return {
       previous,
       next,
       action: 'cancel',
-      reason: 'event-risk-freeze requires cancelling stale directional tickets',
+      reason:
+        next === 'event-risk-freeze'
+          ? 'event-risk-freeze requires cancelling stale directional tickets'
+          : 'vol-stress requires cancelling stale directional tickets',
     }
   }
 

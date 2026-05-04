@@ -4,11 +4,14 @@ export type MarketRegime =
   | 'spot-defensive'
   | 'range-rotation'
   | 'trend-follow'
+  | 'bear-trend'
+  | 'vol-stress'
   | 'event-risk-freeze'
 
 export interface RegimeFeatures {
   trendStrength: number
   realizedVolPct: number
+  realizedVolPercentile?: number
   rangeCompressionScore: number
   volumeChangeRate?: number
   eventWindowFrozen?: boolean
@@ -21,6 +24,7 @@ export interface RegimeEvaluation {
   method?: 'threshold' | 'hmm'
   fallbackRegime?: MarketRegime
   hmm?: HmmRegimeOutput | null
+  features?: RegimeFeatures
 }
 
 export type { HmmState, HmmStateName }

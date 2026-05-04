@@ -11,6 +11,7 @@ export type {
   HmmParams,
   HmmRegimeOutput,
   HmmState,
+  HmmStateIdentity,
   HmmStateName,
   HmmTrainingDiagnostics,
   RegimeHmmConfig,
@@ -33,4 +34,8 @@ export { decodeViterbiPath } from './viterbi.js'
 export { trainBaumWelch } from './baum-welch.js'
 export { extractHmmObservations } from './observation-buffer.js'
 export { calibrateStateConditionedFactorWeights } from './factor-weights.js'
+export {
+  matchHmmStateIdentity,
+  wassersteinDistanceSquared,
+} from './state-identity.js'
 export { RegimeHmm } from './regime-hmm.js'

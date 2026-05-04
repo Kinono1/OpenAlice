@@ -11,6 +11,7 @@ import {
   type HmmState,
   type RegimeHmmConfig,
 } from './types.js'
+import { matchHmmStateIdentity } from './state-identity.js'
 import { decodeViterbiPath } from './viterbi.js'
 
 function clampProbability(value: number): number {
@@ -187,8 +188,15 @@ export class RegimeHmm {
     })
     const fb = runForwardBackward(usableObservations, trained.params)
     const viterbi = decodeViterbiPath(usableObservations, trained.params)
-    const state = viterbi.path[viterbi.path.length - 1] ?? 2
-    const stateProbs = fb.gamma[fb.gamma.length - 1] ?? [0.25, 0.25, 0.25, 0.25]
+    const rawState = viterbi.path[viterbi.path.length - 1] ?? 2
+    const rawStateProbs = fb.gamma[fb.gamma.length - 1] ?? [0.25, 0.25, 0.25, 0.25]
+    const stateIdentity = matchHmmStateIdentity({
+      params: trained.params,
+      rawState,
+      stateProbs: rawStateProbs,
+    })
+    const state = stateIdentity.matchedState
+    const stateProbs = stateIdentity.canonicalStateProbs
     const confidence = clampProbability(Math.max(...stateProbs))
     const latest = usableObservations[usableObservations.length - 1]
     const anomaly =
@@ -198,6 +206,7 @@ export class RegimeHmm {
 
     return {
       state,
+      rawState,
       stateName: hmmStateName(state),
       stateProbs: stateProbs.map(clampProbability),
       confidence,
@@ -206,11 +215,13 @@ export class RegimeHmm {
       reasons: [
         `cold-start mode=${coldStartMode}`,
         `baum-welch iterations=${trained.diagnostics.iterations}`,
-        `viterbi terminal state=${hmmStateName(state)}`,
+        `viterbi terminal state=${hmmStateName(rawState)}`,
+        `wasserstein identity=${hmmStateName(rawState)}→${hmmStateName(state)} d=${stateIdentity.wassersteinDistance.toFixed(3)}`,
       ],
       method: 'hmm',
       coldStartMode,
       effectiveSampleSize: usableObservations.length,
+      stateIdentity,
     }
   }
 

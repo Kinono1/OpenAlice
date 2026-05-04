@@ -5,6 +5,7 @@ import { calibrateStateConditionedFactorWeights } from './factor-weights.js'
 import { runForwardBackward } from './forward-backward.js'
 import { extractHmmObservations } from './observation-buffer.js'
 import { RegimeHmm } from './regime-hmm.js'
+import { matchHmmStateIdentity } from './state-identity.js'
 import { DEFAULT_HMM_PARAMS, type HmmObservation } from './types.js'
 import { decodeViterbiPath } from './viterbi.js'
 
@@ -71,6 +72,28 @@ describe('strategy regime hmm', () => {
     trained.params.transitionMatrix.forEach((row) => {
       expect(row.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1, 6)
     })
+  })
+
+  it('matches drifted HMM component identities by Wasserstein template distance', () => {
+    const driftedParams = {
+      emissionParams: [
+        DEFAULT_HMM_PARAMS.emissionParams[3],
+        DEFAULT_HMM_PARAMS.emissionParams[0],
+        DEFAULT_HMM_PARAMS.emissionParams[1],
+        DEFAULT_HMM_PARAMS.emissionParams[2],
+      ],
+    }
+
+    const identity = matchHmmStateIdentity({
+      params: driftedParams,
+      rawState: 0,
+      stateProbs: [0.82, 0.06, 0.08, 0.04],
+    })
+
+    expect(identity.rawStateName).toBe('bull')
+    expect(identity.matchedStateName).toBe('stress')
+    expect(identity.canonicalStateProbs[3]).toBeCloseTo(0.82, 6)
+    expect(identity.identityConfidence).toBeGreaterThan(0.5)
   })
 
   it('extracts z-scored observations from candles', () => {

@@ -23,6 +23,27 @@ describe('strategy regime', () => {
     expect(result.regime).toBe('trend-follow')
   })
 
+  it('does not force normal crypto volatility into defensive mode', () => {
+    const result = evaluateRegime({
+      trendStrength: 0.82,
+      realizedVolPct: 55,
+      rangeCompressionScore: 0.2,
+    })
+
+    expect(result.regime).toBe('trend-follow')
+  })
+
+  it('classifies relative volatility stress before trend-follow', () => {
+    const result = evaluateRegime({
+      trendStrength: 0.9,
+      realizedVolPct: 65,
+      realizedVolPercentile: 0.94,
+      rangeCompressionScore: 0.2,
+    })
+
+    expect(result.regime).toBe('vol-stress')
+  })
+
   it('classifies compressed low-vol markets as range-rotation', () => {
     const result = evaluateRegime({
       trendStrength: 0.3,
@@ -64,6 +85,86 @@ describe('strategy regime', () => {
     expect(result.regime).toBe('trend-follow')
     expect(result.method).toBe('hmm')
     expect(result.fallbackRegime).toBe('spot-defensive')
+  })
+
+  it('maps HMM bear and stress states to directional regimes', () => {
+    const baseFeatures = {
+      trendStrength: 0.2,
+      realizedVolPct: 45,
+      rangeCompressionScore: 0.2,
+    }
+
+    const bear = evaluateRegime(baseFeatures, {
+      hmm: {
+        state: 1,
+        stateName: 'bear',
+        stateProbs: [0.05, 0.8, 0.05, 0.1],
+        confidence: 0.8,
+        logLikelihood: -10,
+        anomaly: false,
+        reasons: [],
+        method: 'hmm',
+        coldStartMode: 'standard_em',
+        effectiveSampleSize: 300,
+      },
+    })
+    const stress = evaluateRegime(baseFeatures, {
+      hmm: {
+        state: 3,
+        stateName: 'stress',
+        stateProbs: [0.05, 0.1, 0.05, 0.8],
+        confidence: 0.8,
+        logLikelihood: -10,
+        anomaly: true,
+        reasons: [],
+        method: 'hmm',
+        coldStartMode: 'standard_em',
+        effectiveSampleSize: 300,
+      },
+    })
+
+    expect(bear.regime).toBe('bear-trend')
+    expect(stress.regime).toBe('vol-stress')
+  })
+
+  it('uses Wasserstein HMM identity when raw state index drifts', () => {
+    const result = evaluateRegime(
+      {
+        trendStrength: 0.8,
+        realizedVolPct: 45,
+        rangeCompressionScore: 0.2,
+      },
+      {
+        hmm: {
+          state: 0,
+          rawState: 0,
+          stateName: 'bull',
+          stateProbs: [0.05, 0.08, 0.07, 0.8],
+          confidence: 0.8,
+          logLikelihood: -10,
+          anomaly: true,
+          reasons: [],
+          method: 'hmm',
+          coldStartMode: 'standard_em',
+          effectiveSampleSize: 300,
+          stateIdentity: {
+            method: 'wasserstein_template',
+            rawState: 0,
+            rawStateName: 'bull',
+            matchedState: 3,
+            matchedStateName: 'stress',
+            wassersteinDistance: 0.1,
+            identityConfidence: 0.9,
+            activeStateCount: 2,
+            canonicalStateProbs: [0.05, 0.08, 0.07, 0.8],
+            rawToCanonicalState: [3, 0, 1, 2],
+          },
+        },
+      },
+    )
+
+    expect(result.regime).toBe('vol-stress')
+    expect(result.reasons.some((reason) => reason.includes('hmm identity bull→stress'))).toBe(true)
   })
 
   it('falls back to threshold regime on low-confidence hmm output', () => {
