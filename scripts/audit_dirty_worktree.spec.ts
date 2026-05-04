@@ -112,6 +112,7 @@ describe('audit_dirty_worktree', () => {
       'docs/research/archive.md',
       'private.key',
     ])
+    expect(audit.samples.promotionCriticalSamples).toEqual([])
     expect(audit.samples.generatedArtifactOnlySamples.map((entry) => entry.path)).toEqual([
       'logs/runtime.log',
     ])
@@ -153,7 +154,41 @@ describe('audit_dirty_worktree', () => {
     expect(markdown).toContain('evidenceTrust: quarantine')
     expect(markdown).toContain('p2PromotionAllowed: false')
     expect(markdown).toContain('runtimeArtifactsQuarantined: true')
+    expect(markdown).toContain('Promotion-critical scope dirty entries: 0')
+    expect(markdown).toContain('promotionCriticalScope: clean')
     expect(markdown).toContain('`data/runtime/result.json`')
+  })
+
+  it('separates promotion-critical executable scope from docs/readme churn', () => {
+    const audit = buildDirtyWorktreeAudit({
+      repoRoot: '/repo',
+      generatedAt: '2026-05-02T00:00:00.000Z',
+      porcelain: [
+        ' D src/domain/trading/README.md',
+        ' M src/domain/trading/production-leverage-guard.ts',
+        ' D docs/research/archive.md',
+        '?? packages/opentypebb/README.md',
+      ].join('\n'),
+    })
+
+    expect(audit.promotionCriticalScope).toMatchObject({
+      dirtyTotal: 3,
+      sourceCodeDirtyTotal: 1,
+      docsOrReadmeDirtyTotal: 2,
+      generatedArtifactDirtyTotal: 0,
+      clean: false,
+      status: 'dirty',
+    })
+    expect(audit.samples.promotionCriticalSamples.map((entry) => entry.path)).toEqual([
+      'src/domain/trading/README.md',
+      'src/domain/trading/production-leverage-guard.ts',
+      'packages/opentypebb/README.md',
+    ])
+    expect(audit.governance).toMatchObject({
+      evidenceTrust: 'quarantine',
+      p2PromotionAllowed: false,
+      runtimeArtifactsQuarantined: true,
+    })
   })
 
   it('blocks P2 promotion and monetization conclusions for source-lane dirty files', () => {

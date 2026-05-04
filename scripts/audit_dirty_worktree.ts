@@ -44,9 +44,21 @@ export interface DirtyWorktreeAudit {
   }
   samples: {
     promotionRelevantSamples: DirtyWorktreeEntry[]
+    promotionCriticalSamples: DirtyWorktreeEntry[]
     generatedArtifactOnlySamples: DirtyWorktreeEntry[]
     secretRiskSamples: DirtyWorktreeEntry[]
     deletedTrackedSamples: DirtyWorktreeEntry[]
+  }
+  promotionCriticalScope: {
+    description: string
+    paths: string[]
+    dirtyTotal: number
+    sourceCodeDirtyTotal: number
+    docsOrReadmeDirtyTotal: number
+    generatedArtifactDirtyTotal: number
+    clean: boolean
+    status: 'clean' | 'dirty'
+    entries: DirtyWorktreeEntry[]
   }
   entries: DirtyWorktreeEntry[]
   protocol: Record<ProtocolClass, {
@@ -95,6 +107,13 @@ const PROTOCOL_ACTIONS: Record<ProtocolClass, string> = {
   D: 'Do not commit; rotate exposed credentials if real and isolate the file immediately.',
 }
 
+const PROMOTION_CRITICAL_SCOPE_PATHS = [
+  'src/domain',
+  'src/runtime',
+  'scripts/lib',
+  'packages/opentypebb',
+]
+
 export function parseAuditArgs(argv: string[]): AuditCliArgs {
   const raw = parseRawArgs(argv)
   return {
@@ -133,6 +152,7 @@ export function buildDirtyWorktreeAudit(input: {
     scopeCounts: buildDirtyScopeCounts(entries),
   }
   const samples = buildDirtySamples(entries)
+  const promotionCriticalScope = buildPromotionCriticalScope(entries)
 
   const protocol = Object.fromEntries(
     PROTOCOL_CLASSES.map((protocolClass) => [
@@ -153,6 +173,7 @@ export function buildDirtyWorktreeAudit(input: {
     isDirty: entries.length > 0,
     counts,
     samples,
+    promotionCriticalScope,
     entries,
     protocol,
     governance,
@@ -167,6 +188,7 @@ export function renderDirtyWorktreeMarkdown(audit: DirtyWorktreeAudit): string {
   lines.push(`Generated: \`${audit.generatedAt}\``)
   lines.push(`Dirty entries: ${audit.counts.total}`)
   lines.push(`Promotion-relevant dirty entries: ${audit.counts.scopeCounts.promotionRelevantTotal}`)
+  lines.push(`Promotion-critical scope dirty entries: ${audit.promotionCriticalScope.dirtyTotal}`)
   lines.push(`Generated-artifact-only dirty entries: ${audit.counts.scopeCounts.generatedArtifactOnlyTotal}`)
   lines.push(`Secret-risk dirty entries: ${audit.counts.scopeCounts.secretRiskTotal}`)
   lines.push(`Deleted tracked dirty entries: ${audit.counts.scopeCounts.deletedTrackedTotal}`)
@@ -186,6 +208,7 @@ export function renderDirtyWorktreeMarkdown(audit: DirtyWorktreeAudit): string {
   lines.push(`- p2PromotionAllowed: ${audit.governance.p2PromotionAllowed}`)
   lines.push(`- monetizationConclusionAllowed: ${audit.governance.monetizationConclusionAllowed}`)
   lines.push(`- runtimeArtifactsQuarantined: ${audit.governance.runtimeArtifactsQuarantined}`)
+  lines.push(`- promotionCriticalScope: ${audit.promotionCriticalScope.status}`)
   lines.push(`- blockingReasons: ${audit.governance.blockingReasons.join(',') || 'none'}`)
   lines.push('')
   lines.push('### Required Actions')
@@ -215,6 +238,7 @@ export function renderDirtyWorktreeMarkdown(audit: DirtyWorktreeAudit): string {
   lines.push('## Top-Level Samples')
   lines.push('')
   appendSampleSection(lines, 'Promotion Relevant', audit.samples.promotionRelevantSamples)
+  appendSampleSection(lines, 'Promotion Critical', audit.samples.promotionCriticalSamples)
   appendSampleSection(lines, 'Generated Artifact Only', audit.samples.generatedArtifactOnlySamples)
   appendSampleSection(lines, 'Secret Risk', audit.samples.secretRiskSamples)
   appendSampleSection(lines, 'Deleted Tracked', audit.samples.deletedTrackedSamples)
@@ -458,14 +482,55 @@ function buildDirtyScopeCounts(entries: DirtyWorktreeEntry[]): DirtyWorktreeAudi
 function buildDirtySamples(entries: DirtyWorktreeEntry[]): DirtyWorktreeAudit['samples'] {
   const generatedArtifactOnly = entries.filter(isGeneratedArtifactOnlyEntry)
   const generatedSet = new Set(generatedArtifactOnly)
+  const promotionCriticalScope = buildPromotionCriticalScope(entries)
   return {
     promotionRelevantSamples: sampleEntries(entries.filter(entry => !generatedSet.has(entry))),
+    promotionCriticalSamples: sampleEntries(promotionCriticalScope.entries),
     generatedArtifactOnlySamples: sampleEntries(generatedArtifactOnly),
     secretRiskSamples: sampleEntries(entries.filter(entry => entry.protocolClass === 'D')),
     deletedTrackedSamples: sampleEntries(entries.filter(
       entry => entry.statusKinds.includes('deleted') && !entry.statusKinds.includes('untracked'),
     )),
   }
+}
+
+function buildPromotionCriticalScope(entries: DirtyWorktreeEntry[]): DirtyWorktreeAudit['promotionCriticalScope'] {
+  const scopedEntries = entries.filter(isPromotionCriticalEntry)
+  const sourceCodeDirtyTotal = scopedEntries.filter(entry => isPromotionCriticalSourceCodeEntry(entry)).length
+  const docsOrReadmeDirtyTotal = scopedEntries.filter(entry => isDocsOrReadmeEntry(entry)).length
+  const generatedArtifactDirtyTotal = scopedEntries.filter(isGeneratedArtifactOnlyEntry).length
+  return {
+    description: 'Narrow executable promotion scope used to separate core trading code dirtiness from unrelated docs/archive churn.',
+    paths: PROMOTION_CRITICAL_SCOPE_PATHS,
+    dirtyTotal: scopedEntries.length,
+    sourceCodeDirtyTotal,
+    docsOrReadmeDirtyTotal,
+    generatedArtifactDirtyTotal,
+    clean: scopedEntries.length === 0,
+    status: scopedEntries.length === 0 ? 'clean' : 'dirty',
+    entries: scopedEntries,
+  }
+}
+
+function isPromotionCriticalEntry(entry: DirtyWorktreeEntry): boolean {
+  const normalized = normalizePath(entry.path)
+  return PROMOTION_CRITICAL_SCOPE_PATHS.some(scope => normalized === scope || normalized.startsWith(`${scope}/`))
+}
+
+function isPromotionCriticalSourceCodeEntry(entry: DirtyWorktreeEntry): boolean {
+  if (!isPromotionCriticalEntry(entry)) return false
+  if (isGeneratedArtifactOnlyEntry(entry)) return false
+  if (isDocsOrReadmeEntry(entry)) return false
+  return true
+}
+
+function isDocsOrReadmeEntry(entry: DirtyWorktreeEntry): boolean {
+  const normalized = normalizePath(entry.path)
+  const basename = normalized.split('/').at(-1)?.toLowerCase() ?? normalized
+  return normalized.startsWith('docs/') ||
+    basename === 'readme.md' ||
+    basename === 'design.md' ||
+    basename.endsWith('.md')
 }
 
 function sampleEntries(entries: DirtyWorktreeEntry[], limit = DEFAULT_SAMPLE_LIMIT): DirtyWorktreeEntry[] {

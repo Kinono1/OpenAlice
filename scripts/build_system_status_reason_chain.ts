@@ -599,6 +599,11 @@ function buildPlanCompletion(input: {
   const dirtyCounts = asRecord(input.dirtyWorktreeAudit?.counts)
   const dirtyTotal = readNumber(dirtyCounts?.total)
   const dirtyClean = dirtyTotal === 0
+  const promotionCriticalScope = asRecord(input.dirtyWorktreeAudit?.promotionCriticalScope)
+  const promotionCriticalDirtyTotal = readNumber(promotionCriticalScope?.dirtyTotal)
+  const promotionCriticalSourceCodeDirtyTotal = readNumber(promotionCriticalScope?.sourceCodeDirtyTotal)
+  const promotionCriticalDocsOrReadmeDirtyTotal = readNumber(promotionCriticalScope?.docsOrReadmeDirtyTotal)
+  const promotionCriticalScopeClean = readBoolean(promotionCriticalScope?.clean) === true
   const runtimeManifestCoverageStatus = readString(input.runtimeManifestCoverage?.status)
   const runtimeManifestCoverageBlockers = readStringArray(input.runtimeManifestCoverage?.blockingReasons)
   const runtimeManifestCoverageOk = runtimeManifestCoverageStatus === 'complete'
@@ -673,6 +678,15 @@ function buildPlanCompletion(input: {
           ].filter(Boolean),
           blockers: [
             ...(dirtyClean ? [] : [`dirty_worktree_entries:${dirtyTotal ?? 'unknown'}`]),
+            ...(promotionCriticalScopeClean || promotionCriticalDirtyTotal == null
+              ? []
+              : [`promotion_critical_scope_dirty:${promotionCriticalDirtyTotal}`]),
+            ...(promotionCriticalSourceCodeDirtyTotal && promotionCriticalSourceCodeDirtyTotal > 0
+              ? [`promotion_critical_source_code_dirty:${promotionCriticalSourceCodeDirtyTotal}`]
+              : []),
+            ...(promotionCriticalDocsOrReadmeDirtyTotal && promotionCriticalDocsOrReadmeDirtyTotal > 0
+              ? [`promotion_critical_docs_or_readme_dirty:${promotionCriticalDocsOrReadmeDirtyTotal}`]
+              : []),
             ...(runtimeManifestCoverageOk ? [] : [
               `runtime_manifest_coverage_status:${runtimeManifestCoverageStatus ?? 'missing'}`,
               ...runtimeManifestCoverageBlockers.slice(0, 8).map(reason => `runtime_manifest:${reason}`),
@@ -685,6 +699,7 @@ function buildPlanCompletion(input: {
               ]
             : [
                 'Finish dirty quarantine batches; regenerate dirty audit until counts.total=0 and manifest evidenceTrust=pass.',
+                'Use promotionCriticalScope to separate executable trading-code dirtiness from docs/readme/archive churn.',
                 'Ensure all key runtime status artifacts have sidecar manifests with matching artifactHash.',
               ],
         },
