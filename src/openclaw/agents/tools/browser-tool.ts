@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   browserAct,
   browserArmDialog,
@@ -66,6 +68,10 @@ type BrowserProxyResult = {
 };
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+const ALLOW_PRIVATE_BROWSER_NAV_ENV = "OPENCLAW_BROWSER_ALLOW_PRIVATE_NAV";
+
+type DnsAddress = { address: string; family: number };
+type DnsLookupAll = (hostname: string) => Promise<DnsAddress[]>;
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -76,6 +82,118 @@ function isBrowserNode(node: NodeListNode) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
   return caps.includes("browser") || commands.includes("browser.proxy");
+}
+
+function normalizeHostnameForIpChecks(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const normalized = normalizeHostnameForIpChecks(hostname);
+  const parts = normalized.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+function isPrivateIpv6(hostname: string): boolean {
+  const normalized = normalizeHostnameForIpChecks(hostname).toLowerCase();
+  return (
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:")
+  );
+}
+
+export function assertSafeBrowserNavigationUrl(rawUrl: string): void {
+  const allowPrivate = process.env[ALLOW_PRIVATE_BROWSER_NAV_ENV] === "1";
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("Browser navigation URL must be absolute.");
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Browser navigation URL must use http or https.");
+  }
+
+  if (allowPrivate) {
+    return;
+  }
+
+  const hostname = normalizeHostnameForIpChecks(url.hostname.toLowerCase());
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+    throw new Error(
+      `Browser navigation to private host "${url.hostname}" is blocked. Set ${ALLOW_PRIVATE_BROWSER_NAV_ENV}=1 to allow local/private navigation.`,
+    );
+  }
+
+  const ipKind = isIP(hostname);
+  if (
+    (ipKind === 4 && isPrivateIpv4(hostname)) ||
+    (ipKind === 6 && isPrivateIpv6(hostname))
+  ) {
+    throw new Error(
+      `Browser navigation to private IP "${url.hostname}" is blocked. Set ${ALLOW_PRIVATE_BROWSER_NAV_ENV}=1 to allow local/private navigation.`,
+    );
+  }
+}
+
+async function defaultDnsLookupAll(hostname: string): Promise<DnsAddress[]> {
+  return (await dnsLookup(hostname, {
+    all: true,
+    verbatim: true,
+  })) as DnsAddress[];
+}
+
+export async function assertSafeBrowserNavigationUrlResolved(
+  rawUrl: string,
+  lookupAll: DnsLookupAll = defaultDnsLookupAll,
+): Promise<void> {
+  assertSafeBrowserNavigationUrl(rawUrl);
+  if (process.env[ALLOW_PRIVATE_BROWSER_NAV_ENV] === "1") {
+    return;
+  }
+
+  const hostname = normalizeHostnameForIpChecks(new URL(rawUrl).hostname.toLowerCase());
+  if (isIP(hostname)) {
+    return;
+  }
+
+  let addresses: DnsAddress[];
+  try {
+    addresses = await lookupAll(hostname);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Browser navigation host "${hostname}" could not be resolved safely: ${reason}`);
+  }
+
+  for (const record of addresses) {
+    const address = normalizeHostnameForIpChecks(record.address.toLowerCase());
+    const ipKind = isIP(address);
+    if (
+      (ipKind === 4 && isPrivateIpv4(address)) ||
+      (ipKind === 6 && isPrivateIpv6(address))
+    ) {
+      throw new Error(
+        `Browser navigation to "${hostname}" resolved to private IP "${record.address}" and is blocked. ` +
+          `Set ${ALLOW_PRIVATE_BROWSER_NAV_ENV}=1 to allow local/private navigation.`,
+      );
+    }
+  }
 }
 
 async function resolveBrowserNodeTarget(params: {
@@ -385,6 +503,7 @@ export function createBrowserTool(opts?: {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
           });
+          await assertSafeBrowserNavigationUrlResolved(targetUrl);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -615,6 +734,7 @@ export function createBrowserTool(opts?: {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
           });
+          await assertSafeBrowserNavigationUrlResolved(targetUrl);
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
             const result = await proxyRequest({

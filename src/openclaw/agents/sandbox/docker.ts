@@ -114,6 +114,7 @@ import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
+const MAX_SETUP_COMMAND_LENGTH = 4096;
 
 export type ExecDockerOptions = ExecDockerRawOptions;
 
@@ -124,6 +125,71 @@ export async function execDocker(args: string[], opts?: ExecDockerOptions) {
     stderr: result.stderr.toString("utf8"),
     code: result.code,
   };
+}
+
+export function parseSetupCommandArgv(command: string): string[] {
+  if (command.length > MAX_SETUP_COMMAND_LENGTH) {
+    throw new Error(`Sandbox setupCommand is too long (max ${MAX_SETUP_COMMAND_LENGTH} characters).`);
+  }
+  if (/[\0\r\n]/.test(command)) {
+    throw new Error("Sandbox setupCommand cannot contain control-line characters.");
+  }
+
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (const ch of command.trim()) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("Sandbox setupCommand contains an unterminated quote.");
+  }
+  if (current) {
+    args.push(current);
+  }
+  const executable = args[0]?.split("/").pop();
+  if (
+    executable &&
+    ["sh", "bash", "dash", "zsh", "ksh", "fish"].includes(executable) &&
+    args.slice(1).some((arg) => /^-[^-]*c/.test(arg))
+  ) {
+    throw new Error("Sandbox setupCommand cannot invoke a shell command string.");
+  }
+  return args;
 }
 
 export async function readDockerContainerLabel(
@@ -358,7 +424,10 @@ async function createSandboxContainer(params: {
   await execDocker(["start", name]);
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
+    const setupArgs = parseSetupCommandArgv(cfg.setupCommand);
+    if (setupArgs.length > 0) {
+      await execDocker(["exec", "-i", name, ...setupArgs]);
+    }
   }
 }
 

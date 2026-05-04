@@ -7,6 +7,8 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
+export const ALLOW_TAILSCALE_FUNNEL_ENV = "OPENCLAW_ALLOW_TAILSCALE_FUNNEL";
+
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
@@ -272,6 +274,22 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
+export function validateTailscaleFunnelPort(port: number): void {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid Tailscale Funnel port "${port}". Expected an integer from 1 to 65535.`);
+  }
+}
+
+export function assertTailscaleFunnelAllowed(port: number): void {
+  validateTailscaleFunnelPort(port);
+  if (process.env[ALLOW_TAILSCALE_FUNNEL_ENV] !== "1") {
+    throw new Error(
+      `Refusing to expose local port ${port} via Tailscale Funnel without explicit opt-in. ` +
+        `Set ${ALLOW_TAILSCALE_FUNNEL_ENV}=1 for this command after confirming the port is safe to publish.`,
+    );
+  }
+}
+
 // Helper to attempt a command, and retry with sudo if it fails.
 async function execWithSudoFallback(
   exec: typeof runExec,
@@ -307,6 +325,7 @@ export async function ensureFunnel(
 ) {
   // Ensure Funnel is enabled and publish the webhook port.
   try {
+    assertTailscaleFunnelAllowed(port);
     const tailscaleBin = await getTailscaleBinary();
     const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
     const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
@@ -406,6 +425,7 @@ export async function disableTailscaleServe(exec: typeof runExec = runExec) {
 }
 
 export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
+  assertTailscaleFunnelAllowed(port);
   const tailscaleBin = await getTailscaleBinary();
   await execWithSudoFallback(exec, tailscaleBin, ["funnel", "--bg", "--yes", `${port}`], {
     maxBuffer: 200_000,
