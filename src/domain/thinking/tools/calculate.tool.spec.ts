@@ -54,6 +54,12 @@ describe('calculate tool', () => {
       expect(() => calculate('1; 2')).toThrow(/Invalid expression/);
       expect(() => calculate('1 && 2')).toThrow(/Invalid expression/);
     });
+
+    it('should reject malformed arithmetic without evaluating code strings', () => {
+      expect(() => calculate('1 +')).toThrow(/Invalid expression/);
+      expect(() => calculate('(1 + 2')).toThrow(/Invalid expression/);
+      expect(() => calculate('1 / 0')).toThrow(/Invalid calculation result/);
+    });
   });
 
   describe('edge cases', () => {
@@ -63,6 +69,7 @@ describe('calculate tool', () => {
 
     it('should handle negative results', () => {
       expect(calculate('1 - 5')).toBe(-4);
+      expect(calculate('-(1 + 2)')).toBe(-3);
     });
 
     it('should handle zero', () => {

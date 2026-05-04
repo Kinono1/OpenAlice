@@ -1,5 +1,12 @@
 import { Hono } from 'hono'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const connInfoMock = vi.hoisted(() => vi.fn())
+
+vi.mock('@hono/node-server/conninfo', () => ({
+  getConnInfo: connInfoMock,
+}))
+
 import { createRateLimitMiddleware, createRequireAuth, createRequireTrade } from '../routes/security.js'
 
 describe('web security middleware', () => {
@@ -9,6 +16,10 @@ describe('web security middleware', () => {
   const originalAllowUnsafeDevBypass = process.env.ALLOW_UNSAFE_DEV_AUTH_BYPASS
   const originalNodeEnv = process.env.NODE_ENV
   const originalTrustedProxies = process.env.WEB_TRUSTED_PROXIES
+
+  beforeEach(() => {
+    connInfoMock.mockReturnValue({ remote: { address: '127.0.0.1' } })
+  })
 
   afterEach(() => {
     if (originalAuthToken === undefined) delete process.env.AUTH_TOKEN
@@ -125,6 +136,12 @@ describe('web security middleware', () => {
     app.use('*', createRateLimitMiddleware({ maxRequests: 1, windowMs: 1_000 }))
     app.get('/', (c) => c.json({ ok: true }))
 
+    connInfoMock
+      .mockReturnValueOnce({ remote: { address: '198.51.100.10' } })
+      .mockReturnValueOnce({ remote: { address: '198.51.100.10' } })
+      .mockReturnValueOnce({ remote: { address: '10.0.0.5' } })
+      .mockReturnValueOnce({ remote: { address: '10.0.0.5' } })
+
     expect((await app.request('/', {
       headers: {
         'x-forwarded-for': '1.2.3.4',
@@ -138,18 +155,16 @@ describe('web security middleware', () => {
 
     const trustedFirst = await app.request('/', {
       headers: {
-        'x-openclaw-remote-addr': '10.0.0.5',
         'x-forwarded-for': '2.2.2.2',
       },
     })
     const trustedSecond = await app.request('/', {
       headers: {
-        'x-openclaw-remote-addr': '10.0.0.5',
         'x-forwarded-for': '3.3.3.3',
       },
     })
 
-    expect(trustedFirst.status).toBe(429)
-    expect(trustedSecond.status).toBe(429)
+    expect(trustedFirst.status).toBe(200)
+    expect(trustedSecond.status).toBe(200)
   })
 })

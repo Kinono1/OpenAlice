@@ -58,6 +58,6 @@ describe("createHealthRoutes", () => {
     const body = await res.json();
     expect(body.status).toBe("ready");
     expect(body.checks.auth.ok).toBe(true);
-    expect(body.checks.exchange.ok).toBe(true);
+    expect(body.checks.connectors.ok).toBe(true);
   });
 });

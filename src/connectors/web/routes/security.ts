@@ -1,5 +1,6 @@
 import { createMiddleware } from 'hono/factory'
 import type { MiddlewareHandler } from 'hono'
+import { getConnInfo } from '@hono/node-server/conninfo'
 import { resolveGatewayClientIp } from '../../../openclaw/gateway/net.js'
 import {
   createRequireAuth as createCoreRequireAuth,
@@ -70,7 +71,7 @@ export function createRateLimitMiddleware(opts?: {
   return createMiddleware(async (c, next) => {
     if (c.req.method === 'OPTIONS') return next()
 
-    const remoteAddr = ((c.req.raw as unknown as { socket?: { remoteAddress?: string } })?.socket?.remoteAddress) ?? ''
+    const remoteAddr = getConnInfo(c)?.remote?.address ?? ''
     const ip = remoteAddr
       ? resolveGatewayClientIp({
           remoteAddr,
