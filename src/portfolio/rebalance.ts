@@ -1,5 +1,4 @@
-import type { CryptoPosition } from "../extension/crypto-trading/interfaces.js";
-import type { Operation } from "../extension/crypto-trading/wallet/types.js";
+import type { CryptoPosition, Operation } from "../domain/trading/operation-dispatcher.types.js";
 import type { PortfolioTarget } from "./target.js";
 
 export interface PortfolioRebalancePlannerConfig {
