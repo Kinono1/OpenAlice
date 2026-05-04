@@ -9,7 +9,10 @@ import type {
   OperationOutcome,
   PushResult,
 } from './operation-dispatcher.types.js'
-import { normalizeDispatcherOptions } from './operation-dispatcher.helpers.js'
+import {
+  DEFAULT_OPERATION_TIMEOUT_MS,
+  normalizeDispatcherOptions,
+} from './operation-dispatcher.helpers.js'
 import { createPlaceOrderExecutor } from './operation-dispatcher.place-order.js'
 import { cloneOperationWithPrefetchedRiskState } from './prefetched-state.js'
 import {
@@ -22,6 +25,7 @@ export function createCryptoOperationDispatcher(
   optionsOrRiskConfig?: CryptoOperationDispatcherOptions | RiskConfig,
 ): CryptoOperationDispatcher {
   const options = normalizeDispatcherOptions(optionsOrRiskConfig)
+  const operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
   let placeOrderQueue: Promise<void> = Promise.resolve()
 
   async function withPlaceOrderLock<T>(task: () => Promise<T>): Promise<T> {
@@ -52,7 +56,7 @@ export function createCryptoOperationDispatcher(
       return op
     }
 
-    const resolved = await resolveClosePositionOrder(engine, op)
+    const resolved = await resolveClosePositionOrder(engine, op, operationTimeoutMs)
     if ('error' in resolved) {
       return { error: resolved.error }
     }
@@ -73,7 +77,19 @@ export function createCryptoOperationDispatcher(
       const { walletResult } = await executePlaceOrder(executableOp, 0, commitId)
       return walletResult
     }
-    return executeSimpleAction(engine, op)
+    try {
+      return await executeSimpleAction(engine, op, operationTimeoutMs, {
+        productionRiskPreflightPolicy: options.productionRiskPreflightPolicy,
+      })
+    } catch (err) {
+      if (op.action === 'cancelOrder' || op.action === 'adjustLeverage') {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        }
+      }
+      throw err
+    }
   }
 
   async function push(
@@ -156,7 +172,9 @@ export function createCryptoOperationDispatcher(
       }
 
       try {
-        const simpleResult = await executeSimpleAction(engine, op)
+        const simpleResult = await executeSimpleAction(engine, op, operationTimeoutMs, {
+          productionRiskPreflightPolicy: options.productionRiskPreflightPolicy,
+        })
         if (simpleResult && !simpleResult.success) {
           const error = simpleResult.error ?? 'operation failed'
           results.push({
@@ -229,12 +247,14 @@ export async function executeCommit(
     killSwitch: deps.killSwitch,
     exchangeId: deps.exchangeId,
     slippageConfig: deps.slippageConfig,
+    operationTimeoutMs: deps.operationTimeoutMs,
     eventLog: deps.onEvent
       ? {
           append: (type, payload) =>
             deps.onEvent!(type, payload).then(() => undefined),
         }
       : undefined,
+    productionRiskPreflightPolicy: deps.productionRiskPreflightPolicy,
   }
 
   const dispatcher = createCryptoOperationDispatcher(deps.engine, options)

@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 import {
   computeDailyExecutionSummary,
   evaluateSlippageDriftGate,
+  simulateMakerQueueFill,
+  sessionAwareSlippageEstimate,
   writeDailyExecutionReport,
   type ExecutionDailySummary,
   type OrderExecutionRecord,
@@ -105,6 +107,72 @@ describe('execution_quality', () => {
     expect(summary.totalFilledQty).toBe(85)
     expect(summary.fillRate).toBe(0.5)
     expect(summary.filledOrderCount).toBe(2)
+  })
+
+  it('simulates maker queue position before passive fills are credited', () => {
+    const result = simulateMakerQueueFill({
+      side: 'buy',
+      orderPrice: 100,
+      orderQty: 5,
+      initialQueueQtyAhead: 8,
+      tradePrints: [
+        { price: 100.5, qty: 100, atMs: 1 }, // not eligible for passive bid fill
+        { price: 100, qty: 3, atMs: 2 },     // consumes queue ahead only
+        { price: 99.9, qty: 7, atMs: 3 },    // clears queue and fills 2
+        { price: 99.8, qty: 3, atMs: 4 },    // completes the order
+      ],
+    })
+
+    expect(result).toEqual({
+      filledQty: 5,
+      remainingQty: 0,
+      fillRate: 1,
+      fullyFilled: true,
+      firstFillAtMs: 3,
+      completedAtMs: 4,
+      remainingQueueQtyAhead: 0,
+    })
+  })
+
+  it('reports partial maker fill probability when queue volume is insufficient', () => {
+    const result = simulateMakerQueueFill({
+      side: 'sell',
+      orderPrice: 101,
+      orderQty: 10,
+      initialQueueQtyAhead: 4,
+      tradePrints: [
+        { price: 101, qty: 7, atMs: 10 },
+        { price: 100.9, qty: 100, atMs: 11 },
+      ],
+    })
+
+    expect(result.filledQty).toBe(3)
+    expect(result.remainingQty).toBe(7)
+    expect(result.fillRate).toBe(0.3)
+    expect(result.fullyFilled).toBe(false)
+  })
+
+  it('estimates slippage with UTC session and handoff awareness', () => {
+    const asia = sessionAwareSlippageEstimate(
+      Date.parse('2026-04-27T02:00:00.000Z'),
+      10,
+    )
+    const europeHandoff = sessionAwareSlippageEstimate(
+      Date.parse('2026-04-27T08:10:00.000Z'),
+      10,
+      { handoffPenaltyBps: 0.75 },
+    )
+    const offHours = sessionAwareSlippageEstimate(
+      Date.parse('2026-04-27T22:00:00.000Z'),
+      10,
+    )
+
+    expect(asia.session).toBe('asia')
+    expect(asia.estimatedSlippageBps).toBeCloseTo(10.5)
+    expect(europeHandoff.session).toBe('europe')
+    expect(europeHandoff.estimatedSlippageBps).toBeCloseTo(10.25)
+    expect(offHours.session).toBe('off_hours')
+    expect(offHours.estimatedSlippageBps).toBeCloseTo(12.5)
   })
 
   it('summarizes latency stats and ignores null/invalid timestamps', () => {

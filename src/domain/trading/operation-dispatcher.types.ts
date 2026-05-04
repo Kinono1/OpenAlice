@@ -1,6 +1,7 @@
 import type { Contract, Order, OrderCancel, Execution, OrderState } from '@traderalice/ibkr'
 import type Decimal from 'decimal.js'
 import type { StrategyExecutionSummary } from '../strategy/execution-decision.js'
+import type { ProductionRiskPreflightPolicyLike } from './production-risk-preflight.js'
 
 export type OperationAction =
   | 'placeOrder'
@@ -20,6 +21,7 @@ export interface CryptoPlaceOrderRequest {
   symbol: string
   side: 'buy' | 'sell'
   type: 'market' | 'limit'
+  lane?: string
   size?: number
   usd_size?: number
   price?: number
@@ -98,6 +100,12 @@ export interface CryptoAccountInfo {
   equity: number
   realizedPnL: number
   totalPnL: number
+  dailyPnL?: number
+  dailyPnl?: number
+  dailyRealizedPnl?: number
+  dailyRealizedPnL?: number
+  todayRealizedPnl?: number
+  todayRealizedPnL?: number
   realizedPnlSource?: 'balance_payload' | 'closed_trades_ledger' | 'derived_fallback'
   realizedPnlConfidence?: number
 }
@@ -178,6 +186,12 @@ export interface RiskConfig {
 }
 
 export interface RiskCheckContext {
+  dailyPnL?: number
+  dailyPnl?: number
+  dailyRealizedPnl?: number
+  dailyRealizedPnL?: number
+  todayRealizedPnl?: number
+  todayRealizedPnL?: number
   dailyLossPct?: number
   cvarDailyLossPct?: number
   consecutiveLossDays?: number
@@ -232,6 +246,8 @@ export interface ExecutionTelemetry {
   riskDecision: 'approved' | 'rejected'
   riskReason?: string | null
   forcedRetryIdempotency?: boolean
+  timeoutMs?: number
+  timeoutPhase?: 'risk_check' | 'broker_submit' | 'simple_action' | 'close_position_resolution'
 }
 
 export interface OperationOutcome {
@@ -270,6 +286,7 @@ export interface SlippageConfig {
 
 export interface CryptoOperationDispatcherOptions {
   riskConfig?: RiskConfig
+  operationTimeoutMs?: number
   getRiskContext?: () => Promise<RiskCheckContext | undefined>
   estimateExpectedPrice?: (
     input: Omit<PlaceOrderHookInput, 'riskContext'>
@@ -294,6 +311,7 @@ export interface CryptoOperationDispatcherOptions {
   exchangeId?: string
   slippageConfig?: SlippageConfig
   eventLog?: { append: (type: string, payload: unknown) => Promise<unknown> }
+  productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null
 }
 
 export interface CommitOperation {
@@ -311,6 +329,7 @@ export interface CommitExecutorDeps {
   exchangeId?: string
   slippageConfig?: SlippageConfig
   riskConfig?: RiskConfig
+  operationTimeoutMs?: number
   getRiskContext?: () => Promise<RiskCheckContext | undefined>
   estimateExpectedPrice?: (
     req: CryptoPlaceOrderRequest
@@ -319,4 +338,5 @@ export interface CommitExecutorDeps {
     input: Omit<PlaceOrderHookInput, 'riskContext'>
   ) => Promise<PlaceOrderPreparationResult | undefined>
   onEvent?: (type: string, payload: unknown) => Promise<void>
+  productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null
 }

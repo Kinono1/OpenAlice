@@ -64,8 +64,47 @@ vi.mock('ccxt', () => {
 
 import { Contract, OrderState, Order } from '@traderalice/ibkr'
 import Decimal from 'decimal.js'
+import { KillSwitch } from '../../kill-switch.js'
+import {
+  READY_DENY_ONLY_PRODUCTION_RISK_POLICY,
+} from '../../production-risk-preflight.js'
+import type { CryptoPlaceOrderRequest } from '../../operation-dispatcher.types.js'
+import type {
+  ProductionRiskPreflightPolicyLike,
+} from '../../production-risk-preflight.js'
 import { CcxtBroker } from './CcxtBroker.js'
-import { CcxtTradingEngineAdapter, createCcxtExecutionBridge } from './CcxtTradingEngineAdapter.js'
+import {
+  CcxtTradingEngineAdapter,
+  createCcxtExecutionBridge,
+  createCcxtSlippageProtectionTracker,
+} from './CcxtTradingEngineAdapter.js'
+
+const READY_PRODUCTION_RISK_POLICY: ProductionRiskPreflightPolicyLike = {
+  ...READY_DENY_ONLY_PRODUCTION_RISK_POLICY,
+}
+
+const CCXT_TEST_LANE = 'ccxt_direct_test'
+const CCXT_TEST_LEVERAGE = 1
+
+function withCcxtPreflightDefaults(
+  request: CryptoPlaceOrderRequest,
+): CryptoPlaceOrderRequest {
+  return {
+    lane: CCXT_TEST_LANE,
+    leverage: CCXT_TEST_LEVERAGE,
+    ...request,
+  }
+}
+
+function withReadyProductionRiskPolicy<T extends Record<string, unknown>>(input: T): T {
+  return {
+    ...input,
+    cryptoExecution: {
+      ...((input.cryptoExecution as Record<string, unknown> | undefined) ?? {}),
+      productionRiskPreflightPolicy: READY_PRODUCTION_RISK_POLICY,
+    },
+  }
+}
 
 function makeSwapMarket(base: string, quote: string, symbol?: string): any {
   return {
@@ -110,15 +149,15 @@ describe('CcxtTradingEngineAdapter', () => {
       'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
     })
 
-    const adapter = new CcxtTradingEngineAdapter(broker)
-    const result = await adapter.placeOrder({
+    const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
+    const result = await adapter.placeOrder(withCcxtPreflightDefaults({
       symbol: 'BTC/USDT:USDT',
       side: 'sell',
       type: 'market',
       size: 0.01,
       reduceOnly: true,
       idempotencyKey: 'ticket:1',
-    })
+    }))
 
     expect(result.success).toBe(true)
     expect((broker as any).exchange.createOrder).toHaveBeenCalledWith(
@@ -129,6 +168,61 @@ describe('CcxtTradingEngineAdapter', () => {
       undefined,
       { reduceOnly: true, orderLinkId: 'ticket:1' },
     )
+  })
+
+  it('uses controlled broker write scope for adapter placeOrder outside test runtime', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: false,
+    })
+    setInitialized(broker, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+
+    try {
+      const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
+      const result = await adapter.placeOrder(withCcxtPreflightDefaults({
+        symbol: 'BTC/USDT:USDT',
+        side: 'buy',
+        type: 'market',
+        size: 0.01,
+      }))
+
+      expect(result.success).toBe(true)
+      expect((broker as any).exchange.createOrder).toHaveBeenCalledOnce()
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv
+    }
+  })
+
+  it('hard-blocks 100x direct adapter orders before broker submission', async () => {
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: false,
+    })
+    setInitialized(broker, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+
+    const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
+    const result = await adapter.placeOrder(withCcxtPreflightDefaults({
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      type: 'market',
+      size: 0.01,
+      leverage: 100,
+    }))
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('p0d_100x_production_hard_block')
+    expect(result.orderStatus).toBe('rejected')
+    expect((broker as any).exchange.createOrder).not.toHaveBeenCalled()
   })
 
   it('maps broker positions into crypto position shape', async () => {
@@ -158,7 +252,7 @@ describe('CcxtTradingEngineAdapter', () => {
       },
     ])
 
-    const adapter = new CcxtTradingEngineAdapter(broker)
+    const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
     const positions = await adapter.getPositions()
 
     expect(positions).toEqual([
@@ -173,6 +267,173 @@ describe('CcxtTradingEngineAdapter', () => {
     ])
   })
 
+  it('derives realized PnL provenance from balance payloads when available', async () => {
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: false,
+    })
+    setInitialized(broker, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+
+    ;(broker as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      total: { USDT: 10000 },
+      free: { USDT: 8000 },
+      used: { USDT: 2000 },
+      info: { totalRealizedPnl: '123.45' },
+    })
+    ;(broker as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      {
+        contracts: 1,
+        contractSize: 1,
+        markPrice: 1500,
+        unrealizedPnl: 500,
+        side: 'long',
+      },
+    ])
+
+    const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
+    const info = await adapter.getAccount()
+
+    expect(info.realizedPnL).toBeCloseTo(123.45)
+    expect(info.realizedPnlSource).toBe('balance_payload')
+    expect(info.realizedPnlConfidence).toBeGreaterThan(0.9)
+  })
+
+  it('falls back to closed-trades provenance when balance payload has no realized PnL', async () => {
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: false,
+    })
+    setInitialized(broker, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+
+    ;(broker as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      total: { USDT: 10000 },
+      free: { USDT: 8000 },
+      used: { USDT: 2000 },
+      info: {},
+    })
+    ;(broker as any).exchange.has = { fetchMyTrades: true }
+    ;(broker as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      {
+        contracts: 1,
+        contractSize: 1,
+        markPrice: 1500,
+        unrealizedPnl: 500,
+        side: 'long',
+      },
+    ])
+    ;(broker as any).exchange.fetchMyTrades = vi.fn().mockResolvedValue([
+      { id: 't1', info: { realizedPnl: '-5.5' } },
+      { id: 't2', pnl: '2.25' },
+    ])
+
+    const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
+    const info = await adapter.getAccount()
+
+    expect(info.realizedPnL).toBeCloseTo(-3.25)
+    expect(info.realizedPnlSource).toBe('closed_trades_ledger')
+    expect(info.realizedPnlConfidence).toBeGreaterThan(0.7)
+  })
+
+  it('activates a symbol kill switch after repeated excessive slippage', () => {
+    const killSwitch = new KillSwitch({ defaultPolicy: 'block_new_only' })
+    const tracker = createCcxtSlippageProtectionTracker(killSwitch, 2)
+
+    const first = tracker.observe({
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      expectedPrice: 100,
+      filledPrice: 101,
+    })
+    expect(first.breached).toBe(true)
+    expect(first.activated).toBe(false)
+    expect(killSwitch.get('BTC/USDT:USDT')).toBeUndefined()
+
+    const second = tracker.observe({
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      expectedPrice: 100,
+      filledPrice: 101,
+    })
+    expect(second.breached).toBe(true)
+    expect(second.activated).toBe(true)
+    expect(killSwitch.get('BTC/USDT:USDT')?.policy).toBe('block_new_only')
+    expect(killSwitch.check('BTC/USDT:USDT', false).blocked).toBe(true)
+    expect(killSwitch.check('BTC/USDT:USDT', true).blocked).toBe(false)
+  })
+
+  it('treats missing filled price as a protective slippage breach', () => {
+    const killSwitch = new KillSwitch({ defaultPolicy: 'block_new_only' })
+    const tracker = createCcxtSlippageProtectionTracker(killSwitch, 1)
+
+    const observation = tracker.observe({
+      symbol: 'ETH/USDT:USDT',
+      side: 'buy',
+      expectedPrice: 100,
+      filledPrice: undefined,
+    })
+
+    expect(observation.breached).toBe(true)
+    expect(observation.activated).toBe(true)
+    expect(observation.reason).toContain('MISSING_FILL_PRICE')
+    expect(killSwitch.check('ETH/USDT:USDT', false).blocked).toBe(true)
+  })
+
+  it('treats non-finite filled price as a protective slippage breach', () => {
+    const killSwitch = new KillSwitch({ defaultPolicy: 'block_new_only' })
+    const tracker = createCcxtSlippageProtectionTracker(killSwitch, 1)
+
+    const observation = tracker.observe({
+      symbol: 'ETH/USDT:USDT',
+      side: 'sell',
+      expectedPrice: 100,
+      filledPrice: Number.NaN,
+    })
+
+    expect(observation.breached).toBe(true)
+    expect(observation.activated).toBe(true)
+    expect(observation.reason).toContain('MISSING_FILL_PRICE')
+    expect(killSwitch.check('ETH/USDT:USDT', false).blocked).toBe(true)
+  })
+
+  it('fails closed when a filled broker result has no auditable fill price', async () => {
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: false,
+    })
+    setInitialized(broker, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+    const orderState = new OrderState()
+    orderState.status = 'Filled'
+    ;(broker as any).placeOrder = vi.fn().mockResolvedValue({
+      success: true,
+      orderId: 'ord-missing-fill',
+      orderState,
+    })
+
+    const adapter = new CcxtTradingEngineAdapter(broker, READY_PRODUCTION_RISK_POLICY)
+    const result = await adapter.placeOrder(withCcxtPreflightDefaults({
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      type: 'market',
+      size: 0.01,
+    }))
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('MISSING_FILL_PRICE')
+    expect(result.orderStatus).toBe('filled')
+  })
+
   it('blocks new opens when strategy runtime integration is enabled and a freeze window is active', async () => {
     const broker = new CcxtBroker({
       exchange: 'bybit',
@@ -184,7 +445,7 @@ describe('CcxtTradingEngineAdapter', () => {
       'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
     })
 
-    const bridge = await createCcxtExecutionBridge({
+    const bridge = await createCcxtExecutionBridge(withReadyProductionRiskPolicy({
       accountId: 'bybit-main',
       broker,
       strategyConfig: {
@@ -242,7 +503,7 @@ describe('CcxtTradingEngineAdapter', () => {
           ],
         },
       },
-    })
+    }))
 
     const contract = new Contract()
     contract.localSymbol = 'BTC/USDT:USDT'
@@ -281,7 +542,7 @@ describe('CcxtTradingEngineAdapter', () => {
       'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
     })
 
-    const bridge = await createCcxtExecutionBridge({
+    const bridge = await createCcxtExecutionBridge(withReadyProductionRiskPolicy({
       accountId: 'bybit-main',
       broker,
       strategyConfig: {
@@ -324,7 +585,7 @@ describe('CcxtTradingEngineAdapter', () => {
           ],
         },
       },
-    })
+    }))
 
     const contract = new Contract()
     contract.localSymbol = 'BTC/USDT:USDT'
@@ -350,6 +611,104 @@ describe('CcxtTradingEngineAdapter', () => {
     })
 
     await bridge.close()
+  })
+
+  it('forbids write operations outside test when crypto dispatcher is disabled', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: true,
+    })
+    const bridge = await createCcxtExecutionBridge({
+      accountId: 'bybit-disabled-dispatcher',
+      broker,
+      cryptoExecution: { enableCryptoDispatcher: false },
+    })
+    const fallback = vi.fn().mockResolvedValue({ success: true })
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+    contract.symbol = 'BTC/USDT:USDT'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal('0.01')
+
+    try {
+      const result = await bridge.wrapExecuteOperation(fallback)({
+        action: 'placeOrder',
+        contract,
+        order,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('crypto dispatcher is disabled'),
+      })
+      expect(fallback).not.toHaveBeenCalled()
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv
+      await bridge.close()
+    }
+  })
+
+  it('allows read-only sync fallback outside test when crypto dispatcher is disabled', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: true,
+    })
+    const bridge = await createCcxtExecutionBridge({
+      accountId: 'bybit-disabled-dispatcher-sync',
+      broker,
+      cryptoExecution: { enableCryptoDispatcher: false },
+    })
+    const fallback = vi.fn().mockResolvedValue({ success: true, status: 'submitted' })
+
+    try {
+      const result = await bridge.wrapExecuteOperation(fallback)({ action: 'syncOrders' })
+
+      expect(result).toEqual({ success: true, status: 'submitted' })
+      expect(fallback).toHaveBeenCalledWith({ action: 'syncOrders' })
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv
+      await bridge.close()
+    }
+  })
+
+  it('blocks unmapped CCXT write fallback when crypto dispatcher is enabled', async () => {
+    const broker = new CcxtBroker({
+      exchange: 'bybit',
+      apiKey: 'k',
+      apiSecret: 's',
+      sandbox: true,
+    })
+    const bridge = await createCcxtExecutionBridge(withReadyProductionRiskPolicy({
+      accountId: 'bybit-enabled-unmapped-write',
+      broker,
+    }))
+    const fallback = vi.fn().mockResolvedValue({ success: true })
+
+    try {
+      const result = await bridge.wrapExecuteOperation(fallback)({
+        action: 'modifyOrder',
+        orderId: 'ord-001',
+        changes: new Order(),
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('unsupported CCXT write operation modifyOrder'),
+      })
+      expect(fallback).not.toHaveBeenCalled()
+    } finally {
+      await bridge.close()
+    }
   })
 
   it('reconciles unresolved intents and stale idempotency records on bridge init', async () => {
@@ -408,7 +767,7 @@ describe('CcxtTradingEngineAdapter', () => {
     })
     ;(broker as any).findOrderIdByClientOrderId = vi.fn().mockResolvedValue('ord-ccxt-1')
 
-    const bridge = await createCcxtExecutionBridge({
+    const bridge = await createCcxtExecutionBridge(withReadyProductionRiskPolicy({
       accountId,
       broker,
       strategyConfig: {
@@ -451,7 +810,7 @@ describe('CcxtTradingEngineAdapter', () => {
           ],
         },
       },
-    })
+    }))
 
     const ledgerRaw = await readFile(ledgerPath, 'utf-8')
     expect(ledgerRaw).toContain('"status":"success"')
@@ -476,7 +835,7 @@ describe('CcxtTradingEngineAdapter', () => {
       'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
     })
 
-    const bridge = await createCcxtExecutionBridge({
+    const bridge = await createCcxtExecutionBridge(withReadyProductionRiskPolicy({
       accountId: 'bybit-main',
       broker,
       strategyConfig: {
@@ -532,7 +891,7 @@ describe('CcxtTradingEngineAdapter', () => {
       accountManager: {
         resolve: vi.fn().mockReturnValue([]),
       } as any,
-    })
+    }))
 
     const contract = new Contract()
     contract.localSymbol = 'BTC/USDT:USDT'

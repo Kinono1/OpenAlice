@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isOperationTimeoutError, withTimeout } from '../../core/timeout.js'
 import type {
   CryptoOrderResult,
   CryptoPlaceOrderRequest,
@@ -15,6 +16,7 @@ import type {
   SlippageConfig,
 } from './operation-dispatcher.types.js'
 import {
+  DEFAULT_OPERATION_TIMEOUT_MS,
   DEFAULT_SLIPPAGE,
   asTrimmedString,
   checkSlippage,
@@ -26,6 +28,10 @@ import {
 } from './operation-dispatcher.helpers.js'
 import { getPrefetchedRiskState } from './prefetched-state.js'
 import { getExchangeCapability, getIdempotencyPolicy } from './exchange-capabilities.js'
+import {
+  evaluateProductionRiskPreflight,
+  productionRiskPreflightError,
+} from './production-risk-preflight.js'
 
 interface PlaceOrderExecutorDeps {
   engine: ICryptoTradingEngine
@@ -55,6 +61,8 @@ export function createPlaceOrderExecutor({
   options,
   withPlaceOrderLock,
 }: PlaceOrderExecutorDeps) {
+  const operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
+
   return async function executePlaceOrder(
     op: Operation,
     opIndex: number,
@@ -75,6 +83,7 @@ export function createPlaceOrderExecutor({
       symbol: op.params.symbol as string,
       side: op.params.side as 'buy' | 'sell',
       type: op.params.type as 'market' | 'limit',
+      lane: op.params.lane as string | undefined,
       size: op.params.size as number | undefined,
       usd_size: op.params.usd_size as number | undefined,
       price: op.params.price as number | undefined,
@@ -194,6 +203,103 @@ export function createPlaceOrderExecutor({
     ): Promise<void> {
       await recordIntentIfNeeded(currentRequest, strategy)
       await recordIntentFailure(options, intentId, error, strategy, executionTelemetry)
+    }
+
+    const preflight = evaluateProductionRiskPreflight(
+      {
+        lane: typeof req.lane === 'string' ? req.lane : null,
+        symbol: typeof req.symbol === 'string' ? req.symbol : null,
+        side: typeof req.side === 'string' ? req.side : null,
+        leverage: typeof req.leverage === 'number' && Number.isFinite(req.leverage)
+          ? req.leverage
+          : null,
+        requestedAction: req.reduceOnly ? 'position_mutation' : 'paper_order',
+        decisionTime: new Date(dispatcherStartedAtMs).toISOString(),
+        sourcePath: 'operation-dispatcher.place-order',
+        riskReducing: req.reduceOnly === true,
+      },
+      options.productionRiskPreflightPolicy,
+    )
+    if (!preflight.allowed) {
+      const error = productionRiskPreflightError(preflight)
+      await options.eventLog
+        ?.append('risk.rejected', {
+          commitId,
+          opIndex,
+          intentId,
+          symbol: req.symbol,
+          reason: 'production_risk_preflight',
+          decision: preflight.decision,
+          reasonCodes: preflight.reasonCodes,
+          matchedRules: preflight.matchedRules,
+          auditId: preflight.auditId,
+          requestedLeverage: req.leverage,
+          lane: req.lane,
+        })
+        .catch(err => {
+          warnOnAncillaryFailure('eventLog.append.risk.rejected.production_risk_preflight', err, {
+            commitId,
+            opIndex,
+            intentId,
+          })
+        })
+      await recordIntentFailureEnsuringIntent(error, strategySummary)
+      return failWithStrategy(error, strategySummary)
+    }
+
+    if (req.reduceOnly) {
+      const positions = prefetchedPositions ?? await engine.getPositions()
+      const position = positions.find(item => item.symbol === req.symbol)
+      const requestedSize = typeof req.size === 'number' && Number.isFinite(req.size)
+        ? req.size
+        : undefined
+      const expectedSide = position?.side === 'long'
+        ? 'sell'
+        : position?.side === 'short'
+          ? 'buy'
+          : null
+      const invalidReason = (() => {
+        if (!position || position.size <= 0) {
+          return 'missing_position'
+        }
+        if (expectedSide !== req.side) {
+          return `wrong_side:${req.side}_does_not_reduce_${position.side}`
+        }
+        if (requestedSize !== undefined && requestedSize > position.size) {
+          return `size_exceeds_position:${requestedSize}>${position.size}`
+        }
+        if (requestedSize === undefined && (typeof req.usd_size === 'number' && req.usd_size > 0)) {
+          return 'usd_size_not_allowed_for_verified_reduce_only'
+        }
+        return null
+      })()
+      if (invalidReason) {
+        const reasonCode = 'p0_reduce_only_unverified'
+        const error = `SECURITY: ${reasonCode}: reduceOnly order is not verified as risk-reducing (${invalidReason})`
+        await options.eventLog
+          ?.append('risk.rejected', {
+            commitId,
+            opIndex,
+            intentId,
+            symbol: req.symbol,
+            reason: 'unverified_reduce_only',
+            reasonCode,
+            reduceOnlyReason: invalidReason,
+            requestedSide: req.side,
+            requestedSize,
+            positionSide: position?.side,
+            positionSize: position?.size,
+          })
+          .catch(err => {
+            warnOnAncillaryFailure('eventLog.append.risk.rejected.reduce_only_unverified', err, {
+              commitId,
+              opIndex,
+              intentId,
+            })
+          })
+        await recordIntentFailureEnsuringIntent(error, strategySummary)
+        return failWithStrategy(error, strategySummary)
+      }
     }
 
     if (options.killSwitch) {
@@ -522,6 +628,10 @@ export function createPlaceOrderExecutor({
         }
 
     let lockedExecution: LockedExecution
+    let lastRiskCheckedAtMs: number | undefined
+    let lastBrokerSubmittedAtMs: number | undefined
+    let lastRiskDecision: ExecutionTelemetry['riskDecision'] = 'rejected'
+    let lastRiskReason: string | null = null
     try {
       lockedExecution = await withPlaceOrderLock<LockedExecution>(
         async (): Promise<LockedExecution> => {
@@ -538,20 +648,34 @@ export function createPlaceOrderExecutor({
                   account: prefetchedAccount,
                 }
               : undefined
-          const riskResult = await preTradeRiskCheck(
-            engine,
-            effectiveRequest,
-            options.riskConfig,
-            riskContext,
+          const riskResult = await withTimeout(
+            `risk check ${effectiveRequest.symbol}`,
+            operationTimeoutMs,
+            () => preTradeRiskCheck(
+              engine,
+              effectiveRequest,
+              options.riskConfig,
+              riskContext,
+            ),
           )
           const riskCheckedAtMs = Date.now()
+          lastRiskCheckedAtMs = riskCheckedAtMs
 
           if (!riskResult.approved) {
+            lastRiskDecision = 'rejected'
+            lastRiskReason = riskResult.reason ?? null
             return { kind: 'risk_rejected', riskContext, riskResult, riskCheckedAtMs }
           }
 
+          lastRiskDecision = 'approved'
+          lastRiskReason = null
           const brokerSubmittedAtMs = Date.now()
-          const orderResult = await engine.placeOrder(effectiveRequest)
+          lastBrokerSubmittedAtMs = brokerSubmittedAtMs
+          const orderResult = await withTimeout(
+            `broker place order ${effectiveRequest.symbol}`,
+            operationTimeoutMs,
+            () => engine.placeOrder(effectiveRequest),
+          )
           return {
             kind: 'executed',
             riskContext,
@@ -564,8 +688,44 @@ export function createPlaceOrderExecutor({
       )
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
+      const executionTelemetry: ExecutionTelemetry | undefined = isOperationTimeoutError(err)
+        ? {
+            signalTimestampMs,
+            dispatcherStartedAtMs,
+            riskCheckedAtMs: lastRiskCheckedAtMs,
+            brokerSubmittedAtMs: lastBrokerSubmittedAtMs,
+            expectedPrice,
+            signalToDispatchMs:
+              signalTimestampMs != null
+                ? (lastBrokerSubmittedAtMs ?? lastRiskCheckedAtMs ?? Date.now()) - signalTimestampMs
+                : null,
+            riskDecision: lastRiskDecision,
+            riskReason: lastRiskReason,
+            forcedRetryIdempotency: forceRetryIdempotency,
+            timeoutMs: err.timeoutMs,
+            timeoutPhase: resolveTimeoutPhase(err.operationName),
+          }
+        : undefined
+      if (executionTelemetry) {
+        await options.eventLog
+          ?.append('execution.timeout', {
+            commitId,
+            opIndex,
+            intentId,
+            symbol: req.symbol,
+            error,
+            executionTelemetry,
+          })
+          .catch(logErr => {
+            warnOnAncillaryFailure('eventLog.append.execution.timeout', logErr, {
+              commitId,
+              opIndex,
+              intentId,
+            })
+          })
+      }
       await finalizeIdempotency('failed', undefined, error)
-      await recordIntentFailureEnsuringIntent(error, strategySummary, effectiveRequest)
+      await recordIntentFailureEnsuringIntent(error, strategySummary, effectiveRequest, executionTelemetry)
       return failWithStrategy(error, strategySummary)
     }
 
@@ -804,6 +964,19 @@ export function createPlaceOrderExecutor({
       },
     }
   }
+}
+
+function resolveTimeoutPhase(operationName: string): ExecutionTelemetry['timeoutPhase'] {
+  if (operationName.startsWith('risk check')) {
+    return 'risk_check'
+  }
+  if (operationName.startsWith('broker place order')) {
+    return 'broker_submit'
+  }
+  if (operationName.startsWith('resolve close position')) {
+    return 'close_position_resolution'
+  }
+  return 'simple_action'
 }
 
 async function recordIntentFailure(

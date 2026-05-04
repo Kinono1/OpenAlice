@@ -5,7 +5,7 @@
  * Tests focus on pure logic: searchContracts sorting/filtering, cancelOrder cache,
  * placeOrder notional conversion, and the constructor error path.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 import Decimal from 'decimal.js'
 import { Contract, Order, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 
@@ -159,19 +159,24 @@ describe('CcxtBroker — searchContracts', () => {
 // ==================== cancelOrder — cache miss ====================
 
 describe('CcxtBroker — cancelOrder cache', () => {
-  it('calls exchange.cancelOrder with undefined symbol when orderId is not in cache', async () => {
+  it('fails closed without exchange write when orderId is not in cache', async () => {
     const acc = makeAccount()
     setInitialized(acc, {})
     ;(acc as any).exchange.cancelOrder = vi.fn().mockResolvedValue({})
-    await acc.cancelOrder('order-not-cached')
-    expect((acc as any).exchange.cancelOrder).toHaveBeenCalledWith('order-not-cached', undefined)
+    const result = await acc.cancelOrder('order-not-cached')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe(
+      'SECURITY: p0_cancel_order_unknown_provenance: cannot cancel unknown CCXT order order-not-cached without cached symbol provenance',
+    )
+    expect((acc as any).exchange.cancelOrder).not.toHaveBeenCalled()
   })
 
-  it('returns PlaceOrderResult with error when exchange.cancelOrder throws', async () => {
+  it('returns PlaceOrderResult with error when exchange.cancelOrder throws for cached order', async () => {
     const acc = makeAccount()
     setInitialized(acc, {})
+    ;(acc as any).orderSymbolCache.set('order-123', 'BTC/USDT:USDT')
     ;(acc as any).exchange.cancelOrder = vi.fn().mockRejectedValue(new Error('symbol required'))
-    const result = await acc.cancelOrder('order-not-cached')
+    const result = await acc.cancelOrder('order-123')
     expect(result.success).toBe(false)
     expect(result.error).toBe('symbol required')
   })
@@ -246,10 +251,66 @@ describe('CcxtBroker — placeOrder notional', () => {
   })
 })
 
+describe('CcxtBroker — direct write guard', () => {
+  const previousNodeEnv = process.env.NODE_ENV
+
+  afterEach(() => {
+    process.env.NODE_ENV = previousNodeEnv
+  })
+
+  it('blocks direct non-test placeOrder before exchange submission', async () => {
+    process.env.NODE_ENV = 'production'
+    const acc = makeAccount()
+    setInitialized(acc, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+    ;(acc as any).exchange.createOrder = vi.fn()
+
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal('0.01')
+
+    const result = await acc.placeOrder(contract, order)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('ccxt broker direct write is forbidden')
+    expect((acc as any).exchange.createOrder).not.toHaveBeenCalled()
+  })
+
+  it('allows controlled bridge-scoped writes in non-test runtime', async () => {
+    process.env.NODE_ENV = 'production'
+    const acc = makeAccount()
+    setInitialized(acc, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+    })
+    ;(acc as any).exchange.createOrder = vi.fn().mockResolvedValue({
+      id: 'scoped-1',
+      status: 'open',
+    })
+
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal('0.01')
+    const scope = acc.createControlledWriteScope('test_bridge')
+
+    const result = await acc.withControlledWriteScope(scope, () => acc.placeOrder(contract, order))
+
+    expect(result.success).toBe(true)
+    expect(result.orderId).toBe('scoped-1')
+    expect((acc as any).exchange.createOrder).toHaveBeenCalledOnce()
+  })
+})
+
 // ==================== placeOrder — async behavior ====================
 
 describe('CcxtBroker — placeOrder async', () => {
-  it('never returns execution (fill status comes from sync)', async () => {
+  it('returns auditable execution data when createOrder includes fill data', async () => {
     const acc = makeAccount()
     setInitialized(acc, {
       'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT'),
@@ -268,8 +329,59 @@ describe('CcxtBroker — placeOrder async', () => {
     const result = await acc.placeOrder(contract, order)
     expect(result.success).toBe(true)
     expect(result.orderId).toBe('ord-42')
-    // No execution — exchanges are async, fill confirmed via sync
+    expect(result.execution?.price).toBe(1920.5)
+    expect(result.execution?.shares.toNumber()).toBe(0.5)
+  })
+
+  it('uses fetchOrder fallback when a filled order lacks fill price in createOrder response', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT'),
+    })
+    ;(acc as any).exchange.createOrder = vi.fn().mockResolvedValue({
+      id: 'ord-43', symbol: 'ETH/USDT:USDT', status: 'closed', filled: 0.5,
+    })
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockResolvedValue({
+      id: 'ord-43', symbol: 'ETH/USDT:USDT', status: 'closed', filled: 0.5, average: 1933,
+    })
+
+    const contract = new Contract()
+    contract.localSymbol = 'ETH/USDT:USDT'
+    const order = new Order()
+    order.action = 'SELL'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal(0.5)
+
+    const result = await acc.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+    expect(result.execution?.price).toBe(1933)
+    expect((acc as any).exchange.fetchOrder).toHaveBeenCalledWith('ord-43', 'ETH/USDT:USDT')
+  })
+
+  it('keeps filled orders without fallback fill price unaudited for adapter fail-closed handling', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT'),
+    })
+    ;(acc as any).exchange.createOrder = vi.fn().mockResolvedValue({
+      id: 'ord-44', symbol: 'ETH/USDT:USDT', status: 'closed', filled: 0.5,
+    })
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockResolvedValue({
+      id: 'ord-44', symbol: 'ETH/USDT:USDT', status: 'closed', filled: 0.5,
+    })
+
+    const contract = new Contract()
+    contract.localSymbol = 'ETH/USDT:USDT'
+    const order = new Order()
+    order.action = 'SELL'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal(0.5)
+
+    const result = await acc.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+    expect(result.orderState?.status).toBe('Filled')
     expect(result.execution).toBeUndefined()
+    expect((acc as any).exchange.fetchOrder).toHaveBeenCalledWith('ord-44', 'ETH/USDT:USDT')
   })
 })
 
@@ -883,6 +995,57 @@ describe('CcxtBroker — getPositions', () => {
     const positions = await acc.getPositions()
     expect(positions).toHaveLength(0)
   })
+
+  it('does not infer side from unsigned contracts when position side is unknown', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
+    setInitialized(acc, { 'BTC/USDT:USDT': market })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      {
+        symbol: 'BTC/USDT:USDT',
+        contracts: 2,
+        contractSize: 1,
+        markPrice: 60000,
+        entryPrice: 58000,
+        unrealizedPnl: 4000,
+        side: 'unknown',
+        leverage: 5,
+        initialMargin: 23200,
+        liquidationPrice: 48000,
+      },
+    ])
+
+    const positions = await acc.getPositions()
+    expect(positions).toHaveLength(0)
+  })
+
+  it('uses signed position amount when exchange omits an explicit side', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
+    setInitialized(acc, { 'BTC/USDT:USDT': market })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      {
+        symbol: 'BTC/USDT:USDT',
+        contracts: 2,
+        contractSize: 1,
+        markPrice: 60000,
+        entryPrice: 58000,
+        unrealizedPnl: 4000,
+        info: {
+          positionAmt: '-2',
+        },
+        leverage: 5,
+        initialMargin: 23200,
+        liquidationPrice: 48000,
+      },
+    ])
+
+    const positions = await acc.getPositions()
+    expect(positions).toHaveLength(1)
+    expect(positions[0].side).toBe('short')
+  })
 })
 
 // ==================== getOrders ====================
@@ -1020,6 +1183,63 @@ describe('CcxtBroker — derivatives data', () => {
     expect(result.totalContracts).toBe(3)
     expect(result.totalNotional).toBe(181000)
     expect(result.timestamp).toEqual(new Date(1710000100000))
+  })
+
+  it('returns funding-rate history when the exchange supports it', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
+    setInitialized(acc, { 'BTC/USDT:USDT': market })
+
+    ;(acc as any).exchange.fetchFundingRateHistory = vi.fn().mockResolvedValue([
+      {
+        fundingRate: '0.0001',
+        previousFundingRate: '0.00008',
+        timestamp: 1710000000000,
+      },
+      {
+        fundingRate: '0.0002',
+        previousFundingRate: '0.0001',
+        timestamp: 1710003600000,
+      },
+    ])
+
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+
+    const result = await acc.getFundingRateHistory(contract, 1710000000000, 2)
+    expect(result).toHaveLength(2)
+    expect(result[0]?.fundingRate).toBe(0.0001)
+    expect(result[1]?.previousFundingRate).toBe(0.0001)
+    expect(result[0]?.timestamp).toEqual(new Date(1710000000000))
+  })
+
+  it('returns open-interest history when the exchange supports it', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
+    setInitialized(acc, { 'BTC/USDT:USDT': market })
+
+    ;(acc as any).exchange.fetchOpenInterestHistory = vi.fn().mockResolvedValue([
+      {
+        openInterestAmount: '12.5',
+        notionalValue: '750000',
+        timestamp: 1710000000000,
+      },
+      {
+        openInterest: 14,
+        openInterestValue: 820000,
+        timestamp: 1710003600000,
+      },
+    ])
+
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT:USDT'
+
+    const result = await acc.getOpenInterestHistory(contract, '1h', 1710000000000, 2)
+    expect(result).toHaveLength(2)
+    expect(result[0]?.openInterest).toBe(12.5)
+    expect(result[0]?.openInterestValue).toBe(750000)
+    expect(result[1]?.timeframe).toBe('1h')
+    expect(result[1]?.timestamp).toEqual(new Date(1710003600000))
   })
 })
 

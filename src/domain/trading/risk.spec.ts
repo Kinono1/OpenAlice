@@ -140,11 +140,12 @@ describe('preTradeRiskCheck', () => {
     expect(res.reason).toContain('dailyLossPctSoftCap')
   })
 
-  it('blocks new opens when realized PnL breaches maxDailyLossUsd', async () => {
+  it('blocks new opens when explicit account daily realized PnL breaches maxDailyLossUsd', async () => {
     const engine = new MockEngine(
       {
         ...healthyAccount,
         realizedPnL: -1_250,
+        dailyRealizedPnl: -1_250,
         totalPnL: 250,
         realizedPnlSource: 'balance_payload',
         realizedPnlConfidence: 0.95,
@@ -164,7 +165,89 @@ describe('preTradeRiskCheck', () => {
     )
 
     expect(res.approved).toBe(false)
-    expect(res.reason).toContain('realized PnL')
+    expect(res.reason).toContain('daily PnL')
+  })
+
+  it('prefers an explicit daily PnL context field over account realized PnL', async () => {
+    const engine = new MockEngine(
+      {
+        ...healthyAccount,
+        realizedPnL: 250,
+        totalPnL: 300,
+      },
+      [],
+    )
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 500,
+      },
+      baseRisk,
+      {
+        dailyPnL: -1_200,
+        account: healthyAccount,
+      } as any,
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.reason).toContain('context.dailyPnL')
+  })
+
+  it('does not treat untrusted derived realized PnL as a daily-loss fallback', async () => {
+    const engine = new MockEngine(
+      {
+        ...healthyAccount,
+        realizedPnL: -5_000,
+        totalPnL: -4_900,
+        realizedPnlSource: 'derived_fallback',
+        realizedPnlConfidence: 0.25,
+      },
+      [],
+    )
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 500,
+      },
+      { ...baseRisk, enforceRealizedPnlConfidence: false },
+    )
+
+    expect(res.approved).toBe(true)
+  })
+
+  it('uses trusted balance-payload realized PnL for daily-loss blocking', async () => {
+    const engine = new MockEngine(
+      {
+        ...healthyAccount,
+        realizedPnL: -1_500,
+        totalPnL: -1_500,
+        realizedPnlSource: 'balance_payload',
+        realizedPnlConfidence: 0.95,
+      },
+      [],
+    )
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 500,
+      },
+      baseRisk,
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.details?.dailyPnlSource).toBe('account.realizedPnL(balance_payload)')
   })
 
   it('blocks new opens when realized PnL confidence is below threshold', async () => {

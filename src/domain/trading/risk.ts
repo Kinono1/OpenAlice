@@ -18,6 +18,98 @@ interface EffectiveRiskLimits {
   highVolatilityClampActive: boolean
 }
 
+const DAILY_PNL_FIELD_CANDIDATES = [
+  'dailyPnL',
+  'dailyPnl',
+  'dailyRealizedPnl',
+  'dailyRealizedPnL',
+  'todayRealizedPnl',
+  'todayRealizedPnL',
+] as const
+
+type DailyPnlField = (typeof DAILY_PNL_FIELD_CANDIDATES)[number]
+type DailyPnlCarrier = Partial<Record<DailyPnlField, unknown>>
+
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim().replace(/,/g, ''))
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return undefined
+}
+
+function readDailyPnlFromCarrier(
+  carrier: DailyPnlCarrier | undefined,
+  sourcePrefix: 'context' | 'account',
+): { value: number; source: string } | null {
+  if (!carrier) return null
+
+  for (const key of DAILY_PNL_FIELD_CANDIDATES) {
+    const value = parseFiniteNumber(carrier[key])
+    if (typeof value === 'number') {
+      return { value, source: `${sourcePrefix}.${key}` }
+    }
+  }
+
+  return null
+}
+
+function resolveDailyPnlUsd(
+  account: CryptoAccountInfo,
+  context?: RiskCheckContext,
+): { value: number | null; source: string } {
+  const explicitContextPnl = readDailyPnlFromCarrier(context, 'context')
+  if (explicitContextPnl) return explicitContextPnl
+
+  const explicitAccountPnl = readDailyPnlFromCarrier(account, 'account')
+  if (explicitAccountPnl) return explicitAccountPnl
+
+  const source = account.realizedPnlSource
+  const realizedPnl = parseFiniteNumber(account.realizedPnL)
+  if (
+    typeof realizedPnl === 'number' &&
+    (source === 'balance_payload' || source === 'closed_trades_ledger')
+  ) {
+    return {
+      value: realizedPnl,
+      source:
+        source === 'balance_payload'
+          ? 'account.realizedPnL(balance_payload)'
+          : 'account.realizedPnL(closed_trades_ledger)',
+    }
+  }
+
+  return { value: null, source: 'unavailable' }
+}
+
+function isRiskReducingOrder(
+  order: CryptoPlaceOrderRequest,
+  existing: CryptoPosition | undefined,
+): boolean {
+  if (!existing) return false
+  if (order.reduceOnly) return true
+  return (
+    (existing.side === 'long' && order.side === 'sell') ||
+    (existing.side === 'short' && order.side === 'buy')
+  )
+}
+
+function projectPositionNotionalUsd(input: {
+  existingNotional: number
+  orderNotional: number
+  riskReducing: boolean
+}): number {
+  if (!input.riskReducing) {
+    return input.existingNotional + input.orderNotional
+  }
+  return Math.max(0, input.existingNotional - input.orderNotional)
+}
+
 function resolveCapitalScaleRule(
   riskConfig: RiskConfig,
   context?: RiskCheckContext,
@@ -178,13 +270,17 @@ export async function preTradeRiskCheck(
     }
   }
 
-  if (account.realizedPnL <= -riskConfig.maxDailyLossUsd) {
+  const dailyPnl = resolveDailyPnlUsd(account, context)
+  if (
+    dailyPnl.value !== null &&
+    dailyPnl.value <= -riskConfig.maxDailyLossUsd
+  ) {
     return {
       approved: false,
-      reason: `Current realized PnL ${account.realizedPnL.toFixed(2)} breached maxDailyLossUsd -${riskConfig.maxDailyLossUsd}.`,
+      reason: `Current daily PnL ${dailyPnl.value.toFixed(2)} (${dailyPnl.source}) breached maxDailyLossUsd -${riskConfig.maxDailyLossUsd}.`,
       details: {
-        realizedPnL: account.realizedPnL,
-        totalPnL: account.totalPnL,
+        dailyPnl: dailyPnl.value,
+        dailyPnlSource: dailyPnl.source,
         maxDailyLossUsd: riskConfig.maxDailyLossUsd,
       },
     }
@@ -258,9 +354,11 @@ export async function preTradeRiskCheck(
 
   if (orderNotional !== null && account.equity > 0) {
     const existingNotional = existing?.positionValue ?? 0
-    const projectedNotional = order.reduceOnly
-      ? Math.max(0, existingNotional - orderNotional)
-      : existingNotional + orderNotional
+    const projectedNotional = projectPositionNotionalUsd({
+      existingNotional,
+      orderNotional,
+      riskReducing: isRiskReducingOrder(order, existing),
+    })
     const projectedPct = (projectedNotional / account.equity) * 100
     if (projectedPct > effectiveLimits.maxPositionPctOfEquity) {
       return {
@@ -279,4 +377,3 @@ export async function preTradeRiskCheck(
 
   return { approved: true }
 }
-

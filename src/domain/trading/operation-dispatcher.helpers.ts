@@ -9,6 +9,8 @@ import type {
 } from './operation-dispatcher.types.js'
 import type { TradeIdempotencyRecord } from './idempotency-store.js'
 
+export const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
+
 export const DEFAULT_SLIPPAGE: SlippageConfig = {
   maxSlippagePct: 0.005,
   reduceOnlyMultiplier: 2,

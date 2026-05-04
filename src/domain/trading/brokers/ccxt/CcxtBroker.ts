@@ -10,7 +10,7 @@ import { z } from 'zod'
 import ccxt from 'ccxt'
 import Decimal from 'decimal.js'
 import type { Exchange, Order as CcxtOrder } from 'ccxt'
-import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import { Contract, ContractDescription, ContractDetails, Execution, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import {
   BrokerError,
   type IBroker,
@@ -29,7 +29,9 @@ import type {
   CcxtBrokerConfig,
   CcxtMarket,
   FundingRate,
+  FundingRateHistoryPoint,
   LiquidationSummary,
+  OpenInterestHistoryPoint,
   OpenInterestSnapshot,
   OrderBook,
   OrderBookLevel,
@@ -52,6 +54,15 @@ import {
   defaultFetchOrderById,
   defaultCancelOrderById,
 } from './overrides.js'
+
+const CCXT_CONTROLLED_WRITE_SCOPE = Symbol('openalice.ccxt.controlled_write_scope')
+const CCXT_WRITE_GUARD_ERROR =
+  'SECURITY: ccxt broker direct write is forbidden outside controlled execution bridge in non-test runtime'
+
+export interface CcxtControlledWriteScope {
+  readonly [CCXT_CONTROLLED_WRITE_SCOPE]: true
+  readonly reason: string
+}
 
 /** Map IBKR orderType codes to CCXT order type strings. */
 function ibkrOrderTypeToCcxt(orderType: string): string {
@@ -79,6 +90,113 @@ function readFirstFiniteNumber(
     }
   }
   return undefined
+}
+
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim().replace(/,/g, ''))
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return undefined
+}
+
+function readFirstFiniteNumberDeep(
+  payload: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  const info = asRecord(payload.info)
+  return (
+    readFirstFiniteNumber(payload, keys) ??
+    readFirstFiniteNumber(info, keys)
+  )
+}
+
+function isFilledCcxtOrder(order: CcxtOrder): boolean {
+  const status = typeof order.status === 'string' ? order.status.toLowerCase() : ''
+  const filled = parseFiniteNumber(order.filled)
+  return status === 'closed' || status === 'filled' || (typeof filled === 'number' && filled > 0)
+}
+
+function extractCcxtExecution(order: CcxtOrder): Execution | undefined {
+  const record = order as unknown as Record<string, unknown>
+  const price =
+    parseFiniteNumber(order.average) ??
+    parseFiniteNumber(order.price) ??
+    readFirstFiniteNumberDeep(record, [
+      'avgPrice',
+      'averagePrice',
+      'average',
+      'fillPrice',
+      'filledPrice',
+      'execPrice',
+      'price',
+    ])
+  const shares =
+    parseFiniteNumber(order.filled) ??
+    readFirstFiniteNumberDeep(record, ['filled', 'executedQty', 'cumExecQty', 'cumQty'])
+
+  if (
+    typeof price !== 'number' ||
+    price <= 0 ||
+    typeof shares !== 'number' ||
+    shares <= 0
+  ) {
+    return undefined
+  }
+
+  const execution = new Execution()
+  execution.execId = typeof order.id === 'string' ? order.id : ''
+  execution.exchange = typeof order.symbol === 'string' ? order.symbol : ''
+  execution.side = typeof order.side === 'string' ? order.side.toUpperCase() : ''
+  execution.shares = new Decimal(String(shares))
+  execution.cumQty = new Decimal(String(shares))
+  execution.price = price
+  execution.avgPrice = price
+  return execution
+}
+
+function shouldFetchOrderForExecution(order: CcxtOrder): boolean {
+  return !!order.id && isFilledCcxtOrder(order) && !extractCcxtExecution(order)
+}
+
+function normalizePositionSide(payload: unknown): 'long' | 'short' | null {
+  const record = asRecord(payload)
+  const info = asRecord(record.info)
+
+  const explicitCandidates = [
+    record.side,
+    record.positionSide,
+    record.posSide,
+    info.side,
+    info.positionSide,
+    info.posSide,
+  ]
+  for (const candidate of explicitCandidates) {
+    if (typeof candidate !== 'string') continue
+    const normalized = candidate.trim().toLowerCase()
+    if (normalized === 'long') return 'long'
+    if (normalized === 'short') return 'short'
+  }
+
+  const signedQuantity =
+    parseFiniteNumber(record.positionAmt) ??
+    parseFiniteNumber(record.size) ??
+    parseFiniteNumber(record.notional) ??
+    parseFiniteNumber(info.positionAmt) ??
+    parseFiniteNumber(info.size) ??
+    parseFiniteNumber(info.notional)
+
+  if (typeof signedQuantity === 'number') {
+    if (signedQuantity > 0) return 'long'
+    if (signedQuantity < 0) return 'short'
+  }
+
+  return null
 }
 
 function normalizeOpenInterestPayload(payload: unknown): {
@@ -206,6 +324,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private exchangeName: string
   private initialized = false
   private overrides: CcxtExchangeOverrides
+  private controlledWriteDepth = 0
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
@@ -260,6 +379,28 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   isPaperEnvironment(): boolean {
     return this.sandbox || this.demoTrading
+  }
+
+  createControlledWriteScope(reason: string): CcxtControlledWriteScope {
+    return {
+      [CCXT_CONTROLLED_WRITE_SCOPE]: true,
+      reason,
+    }
+  }
+
+  async withControlledWriteScope<T>(
+    scope: CcxtControlledWriteScope,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (!scope?.[CCXT_CONTROLLED_WRITE_SCOPE]) {
+      throw new BrokerError('CONFIG', 'Invalid CCXT controlled write scope')
+    }
+    this.controlledWriteDepth += 1
+    try {
+      return await fn()
+    } finally {
+      this.controlledWriteDepth -= 1
+    }
   }
 
   // ---- Lifecycle ----
@@ -394,6 +535,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   async placeOrder(contract: Contract, order: Order, tpsl?: TpSlParams, extraParams?: Record<string, unknown>): Promise<PlaceOrderResult> {
     this.ensureInit()
+    const writeGuard = this.checkDirectWriteAllowed('placeOrder')
+    if (writeGuard) return writeGuard
 
 
     const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
@@ -436,7 +579,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
       const side = order.action.toLowerCase() as 'buy' | 'sell'
 
-      const ccxtOrder = await this.exchange.createOrder(
+      let ccxtOrder = await this.exchange.createOrder(
         ccxtSymbol,
         ccxtOrderType,
         side,
@@ -450,9 +593,21 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         this.orderSymbolCache.set(ccxtOrder.id, ccxtSymbol)
       }
 
+      if (shouldFetchOrderForExecution(ccxtOrder)) {
+        const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
+        try {
+          const fetched = await fetch(this.exchange, ccxtOrder.id, ccxtSymbol)
+          if (fetched) ccxtOrder = fetched
+        } catch {
+          // Keep the createOrder payload; the adapter will fail closed if a filled
+          // order still lacks auditable fill price.
+        }
+      }
+
       return {
         success: true,
         orderId: ccxtOrder.id,
+        execution: extractCcxtExecution(ccxtOrder),
         orderState: makeOrderState(ccxtOrder.status),
       }
     } catch (err) {
@@ -462,9 +617,17 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   async cancelOrder(orderId: string): Promise<PlaceOrderResult> {
     this.ensureInit()
+    const writeGuard = this.checkDirectWriteAllowed('cancelOrder')
+    if (writeGuard) return writeGuard
 
     try {
       const ccxtSymbol = this.orderSymbolCache.get(orderId)
+      if (!ccxtSymbol) {
+        return {
+          success: false,
+          error: `SECURITY: p0_cancel_order_unknown_provenance: cannot cancel unknown CCXT order ${orderId} without cached symbol provenance`,
+        }
+      }
       const cancel = this.overrides.cancelOrderById ?? defaultCancelOrderById
       await cancel(this.exchange, orderId, ccxtSymbol)
       const orderState = new OrderState()
@@ -477,6 +640,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
     this.ensureInit()
+    const writeGuard = this.checkDirectWriteAllowed('modifyOrder')
+    if (writeGuard) return writeGuard
 
     try {
       const ccxtSymbol = this.orderSymbolCache.get(orderId)
@@ -511,6 +676,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
     this.ensureInit()
+    const writeGuard = this.checkDirectWriteAllowed('closePosition')
+    if (writeGuard) return writeGuard
 
 
     const positions = await this.getPositions()
@@ -524,6 +691,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
     if (!pos) {
       return { success: false, error: `No open position for ${ccxtSymbol ?? symbol ?? 'unknown'}` }
+    }
+
+    if (pos.side !== 'long' && pos.side !== 'short') {
+      return { success: false, error: `UNKNOWN_POSITION_SIDE: cannot close ${ccxtSymbol ?? symbol ?? 'unknown'} without a definite position side` }
     }
 
     const order = new Order()
@@ -618,9 +789,14 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         const marketValue = quantity.toNumber() * markPrice
         const unrealizedPnL = parseFloat(String(p.unrealizedPnl ?? 0))
 
+        const side = normalizePositionSide(p)
+        if (!side) {
+          continue
+        }
+
         result.push({
           contract: marketToContract(market, this.exchangeName),
-          side: p.side === 'long' ? 'long' : 'short',
+          side,
           quantity,
           avgCost: entryPrice,
           marketPrice: markPrice,
@@ -803,6 +979,60 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     }
   }
 
+  async getFundingRateHistory(
+    contract: Contract,
+    sinceMs?: number,
+    limit = 200,
+  ): Promise<FundingRateHistoryPoint[]> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
+    if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
+
+    const exchangeAny = this.exchange as Exchange & {
+      fetchFundingRateHistory?: (
+        symbol: string,
+        since?: number,
+        limit?: number,
+        params?: Record<string, unknown>,
+      ) => Promise<Array<Record<string, unknown>>>
+    }
+    if (typeof exchangeAny.fetchFundingRateHistory !== 'function') {
+      throw new BrokerError('EXCHANGE', `${this.exchangeName} does not support fetchFundingRateHistory`)
+    }
+
+    try {
+      const rows = await exchangeAny.fetchFundingRateHistory(ccxtSymbol, sinceMs, limit, {})
+      const market = this.markets[ccxtSymbol]
+      const resolvedContract = market
+        ? marketToContract(market, this.exchangeName)
+        : contract
+      return (rows ?? [])
+        .map((row) => {
+          const record = asRecord(row)
+          const info = asRecord(record.info)
+          const timestamp =
+            readFirstFiniteNumber(record, ['timestamp'])
+            ?? readFirstFiniteNumber(info, ['timestamp'])
+          const fundingRate =
+            readFirstFiniteNumber(record, ['fundingRate'])
+            ?? readFirstFiniteNumber(info, ['fundingRate'])
+            ?? 0
+          return {
+            contract: resolvedContract,
+            fundingRate,
+            previousFundingRate:
+              readFirstFiniteNumber(record, ['previousFundingRate'])
+              ?? readFirstFiniteNumber(info, ['previousFundingRate']),
+            timestamp: new Date(typeof timestamp === 'number' ? timestamp : Date.now()),
+          }
+        })
+        .sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime())
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
+  }
+
   async getOpenInterest(contract: Contract): Promise<OpenInterestSnapshot> {
     this.ensureInit()
 
@@ -832,6 +1062,65 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
           : undefined,
         timestamp: new Date(typeof payload.timestamp === 'number' ? payload.timestamp : Date.now()),
       }
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
+  }
+
+  async getOpenInterestHistory(
+    contract: Contract,
+    timeframe = '1h',
+    sinceMs?: number,
+    limit = 200,
+  ): Promise<OpenInterestHistoryPoint[]> {
+    this.ensureInit()
+
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
+    if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
+
+    const exchangeAny = this.exchange as Exchange & {
+      fetchOpenInterestHistory?: (
+        symbol: string,
+        timeframe?: string,
+        since?: number,
+        limit?: number,
+        params?: Record<string, unknown>,
+      ) => Promise<Array<Record<string, unknown>>>
+    }
+    if (typeof exchangeAny.fetchOpenInterestHistory !== 'function') {
+      throw new BrokerError('EXCHANGE', `${this.exchangeName} does not support fetchOpenInterestHistory`)
+    }
+
+    try {
+      const rows = await exchangeAny.fetchOpenInterestHistory(
+        ccxtSymbol,
+        timeframe,
+        sinceMs,
+        limit,
+        {},
+      )
+      const market = this.markets[ccxtSymbol]
+      const resolvedContract = market
+        ? marketToContract(market, this.exchangeName)
+        : contract
+      return (rows ?? [])
+        .map((row) => {
+          const payload = normalizeOpenInterestPayload(row)
+          return {
+            contract: resolvedContract,
+            openInterest: payload.openInterest,
+            openInterestValue:
+              payload.openInterestValue != null &&
+              Number.isFinite(payload.openInterestValue) &&
+              payload.openInterestValue > 0
+                ? payload.openInterestValue
+                : undefined,
+            timestamp: new Date(typeof payload.timestamp === 'number' ? payload.timestamp : Date.now()),
+            timeframe,
+          }
+        })
+        .filter((point) => Number.isFinite(point.openInterest) && point.openInterest >= 0)
+        .sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime())
     } catch (err) {
       throw BrokerError.from(err)
     }
@@ -988,5 +1277,16 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       }
     }
     return undefined
+  }
+
+  private checkDirectWriteAllowed(operation: string): PlaceOrderResult | null {
+    if (process.env.NODE_ENV === 'test' || this.controlledWriteDepth > 0) {
+      return null
+    }
+
+    return {
+      success: false,
+      error: `${CCXT_WRITE_GUARD_ERROR}: ${operation}`,
+    }
   }
 }

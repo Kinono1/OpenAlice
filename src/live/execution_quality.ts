@@ -67,6 +67,50 @@ export interface DailyExecutionReportWriteResult {
   written: boolean;
 }
 
+export interface MakerQueueTradePrint {
+  price: number;
+  qty: number;
+  atMs?: number;
+}
+
+export interface MakerQueueSimulationInput {
+  side: ExecutionSide;
+  orderPrice: number;
+  orderQty: number;
+  initialQueueQtyAhead: number;
+  tradePrints: MakerQueueTradePrint[];
+}
+
+export interface MakerQueueSimulationResult {
+  filledQty: number;
+  remainingQty: number;
+  fillRate: number;
+  fullyFilled: boolean;
+  firstFillAtMs: number | null;
+  completedAtMs: number | null;
+  remainingQueueQtyAhead: number;
+}
+
+export type IntradayLiquiditySession = "asia" | "europe" | "us" | "off_hours";
+
+export interface SessionAwareSlippageConfig {
+  asiaMultiplier?: number;
+  europeMultiplier?: number;
+  usMultiplier?: number;
+  offHoursMultiplier?: number;
+  handoffPenaltyBps?: number;
+  handoffWindowMinutes?: number;
+}
+
+export interface SessionAwareSlippageEstimate {
+  session: IntradayLiquiditySession;
+  utcHour: number;
+  baselineSlippageBps: number;
+  multiplier: number;
+  handoffPenaltyBps: number;
+  estimatedSlippageBps: number;
+}
+
 export interface ExecutionReportIO {
   mkdir(path: string, opts: { recursive: boolean }): Promise<void>;
   writeFile(
@@ -172,6 +216,98 @@ export function computeDailyExecutionSummary(
       toFirstFill: summarizeLatency(firstFillLatencies),
       toComplete: summarizeLatency(completionLatencies),
     },
+  };
+}
+
+/**
+ * Deterministic queue-position simulator for maker fills.
+ *
+ * A passive buy is fill-eligible only when trade prints occur at or below the
+ * bid price; a passive sell is fill-eligible only when prints occur at or
+ * above the ask price. Volume first consumes the queue ahead of our order, and
+ * only remaining eligible volume fills us. This prevents backtests from
+ * assuming maker fills merely because the candle touched our limit price.
+ */
+export function simulateMakerQueueFill(
+  input: MakerQueueSimulationInput
+): MakerQueueSimulationResult {
+  const orderPrice = positiveOrNull(input.orderPrice);
+  const orderQty = positiveOrNull(input.orderQty);
+  if (orderPrice === null) {
+    throw new Error("orderPrice must be a finite number > 0");
+  }
+  if (orderQty === null) {
+    throw new Error("orderQty must be a finite number > 0");
+  }
+
+  let queueAhead = nonNegative(input.initialQueueQtyAhead);
+  let remainingQty = orderQty;
+  let firstFillAtMs: number | null = null;
+  let completedAtMs: number | null = null;
+
+  for (const trade of input.tradePrints) {
+    if (remainingQty <= 0) break;
+    const tradeQty = nonNegative(trade.qty);
+    if (tradeQty <= 0 || !isMakerFillEligible(input.side, orderPrice, trade.price)) {
+      continue;
+    }
+
+    const queueConsumed = Math.min(queueAhead, tradeQty);
+    queueAhead -= queueConsumed;
+    const volumeAfterQueue = tradeQty - queueConsumed;
+    if (volumeAfterQueue <= 0) {
+      continue;
+    }
+
+    const fillQty = Math.min(remainingQty, volumeAfterQueue);
+    remainingQty -= fillQty;
+    if (fillQty > 0 && firstFillAtMs === null && Number.isFinite(trade.atMs)) {
+      firstFillAtMs = trade.atMs ?? null;
+    }
+    if (remainingQty <= 0 && Number.isFinite(trade.atMs)) {
+      completedAtMs = trade.atMs ?? null;
+    }
+  }
+
+  const filledQty = orderQty - remainingQty;
+  return {
+    filledQty,
+    remainingQty,
+    fillRate: filledQty / orderQty,
+    fullyFilled: remainingQty <= 0,
+    firstFillAtMs,
+    completedAtMs,
+    remainingQueueQtyAhead: queueAhead,
+  };
+}
+
+export function sessionAwareSlippageEstimate(
+  submittedAtMs: number,
+  baselineSlippageBps: number,
+  config: SessionAwareSlippageConfig = {}
+): SessionAwareSlippageEstimate {
+  if (!Number.isFinite(submittedAtMs)) {
+    throw new Error("submittedAtMs must be finite");
+  }
+  if (!Number.isFinite(baselineSlippageBps) || baselineSlippageBps < 0) {
+    throw new Error("baselineSlippageBps must be a finite number >= 0");
+  }
+
+  const date = new Date(submittedAtMs);
+  const utcHour = date.getUTCHours() + date.getUTCMinutes() / 60;
+  const session = classifyIntradayLiquiditySession(utcHour);
+  const multiplier = sessionMultiplier(session, config);
+  const handoffPenaltyBps = isSessionHandoffWindow(date, config.handoffWindowMinutes ?? 30)
+    ? config.handoffPenaltyBps ?? 0.5
+    : 0;
+
+  return {
+    session,
+    utcHour,
+    baselineSlippageBps,
+    multiplier,
+    handoffPenaltyBps,
+    estimatedSlippageBps: baselineSlippageBps * multiplier + handoffPenaltyBps,
   };
 }
 
@@ -337,6 +473,50 @@ function positiveOrNull(value: number): number | null {
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function isMakerFillEligible(
+  side: ExecutionSide,
+  orderPrice: number,
+  tradePrice: number
+): boolean {
+  if (!Number.isFinite(tradePrice) || tradePrice <= 0) return false;
+  return side === "buy" ? tradePrice <= orderPrice : tradePrice >= orderPrice;
+}
+
+function classifyIntradayLiquiditySession(utcHour: number): IntradayLiquiditySession {
+  if (utcHour >= 0 && utcHour < 8) return "asia";
+  if (utcHour >= 8 && utcHour < 13) return "europe";
+  if (utcHour >= 13 && utcHour < 21) return "us";
+  return "off_hours";
+}
+
+function sessionMultiplier(
+  session: IntradayLiquiditySession,
+  config: SessionAwareSlippageConfig
+): number {
+  switch (session) {
+    case "asia":
+      return positiveOrFallback(config.asiaMultiplier, 1.05);
+    case "europe":
+      return positiveOrFallback(config.europeMultiplier, 0.95);
+    case "us":
+      return positiveOrFallback(config.usMultiplier, 1);
+    case "off_hours":
+    default:
+      return positiveOrFallback(config.offHoursMultiplier, 1.25);
+  }
+}
+
+function isSessionHandoffWindow(date: Date, windowMinutes: number): boolean {
+  const safeWindow = Math.max(0, windowMinutes);
+  const minuteOfDay = date.getUTCHours() * 60 + date.getUTCMinutes();
+  const handoffs = [8 * 60, 13 * 60, 21 * 60];
+  return handoffs.some((handoff) => Math.abs(minuteOfDay - handoff) <= safeWindow);
+}
+
+function positiveOrFallback(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && value !== undefined && value > 0 ? value : fallback;
 }
 
 function isEEXIST(err: unknown): boolean {
