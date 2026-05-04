@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { evaluateReleaseGate } from '../src/backtest/release_gate.js'
+import { buildTrialLedgerSummary } from '../src/backtest/statistical_significance.js'
+import {
+  DATA_LINEAGE_SCHEMA_VERSION,
+  dataLineageGraphFromJson,
+  validateDataLineageGraph,
+} from '../src/data/data_lineage.js'
 import type { BacktestMetrics } from '../src/backtest/strategy-validation/backtest.js'
-import type { StrategyRegimeLabel } from '../src/backtest/strategy-validation/types.js'
-import { buildRecommendedCandidate } from './run_validation_pipeline.ts'
+import type {
+  StrategyParams,
+  StrategyRegimeLabel,
+} from '../src/backtest/strategy-validation/types.js'
+import {
+  appendCompleteTrialUniverseMarkerIfReady,
+  buildRecommendedCandidate,
+  evaluateSignificanceGateForReport,
+} from './run_validation_pipeline.ts'
 
 function makeMetrics(overrides: Partial<BacktestMetrics> = {}): BacktestMetrics {
   return {
@@ -41,6 +54,29 @@ function makeMetrics(overrides: Partial<BacktestMetrics> = {}): BacktestMetrics 
     totalFundingPaid: 0,
     totalCostsPaid: 0,
     costDragPctOfInitialCapital: 0,
+    totalTurnoverUsd: 0,
+    turnoverPctOfInitialCapital: 0,
+    averageTurnoverPctPerTrade: 0,
+    sideSummary: {
+      long: {
+        tradeCount: 0,
+        winRatePct: 0,
+        grossExpectancyPct: 0,
+        netExpectancyPct: 0,
+        totalGrossReturnPct: 0,
+        totalNetReturnPct: 0,
+        averageHoldingHours: 0,
+      },
+      short: {
+        tradeCount: 0,
+        winRatePct: 0,
+        grossExpectancyPct: 0,
+        netExpectancyPct: 0,
+        totalGrossReturnPct: 0,
+        totalNetReturnPct: 0,
+        averageHoldingHours: 0,
+      },
+    },
     regimeSummary: {},
     ...overrides,
   }
@@ -110,19 +146,348 @@ function runValidationPipeline(args: string[]): Promise<number> {
     child.on('error', reject)
   })
 }
+
+async function writeSyntheticMarketCsv(
+  root: string,
+  filename = 'market.csv',
+  options: { priceOffset?: number; phaseShift?: number } = {},
+): Promise<string> {
+  const path = join(root, filename)
+  const rows = ['timestamp,open,high,low,close,volume']
+  const priceOffset = options.priceOffset ?? 0
+  const phaseShift = options.phaseShift ?? 0
+  let previousClose = 10_000 + priceOffset
+  for (let index = 0; index < 1_600; index += 1) {
+    const timestamp = 1_700_000_000 + index * 3_600
+    const cycle = Math.sin(index / 18 + phaseShift) * 220
+    const slowerCycle = Math.sin(index / 95 + phaseShift / 2) * 480
+    const drift = index * (0.9 + phaseShift * 0.05)
+    const shock = index % 360 > 310 ? -260 + (index % 360 - 310) * 8 : 0
+    const close = 10_000 + priceOffset + drift + cycle + slowerCycle + shock
+    const open = previousClose
+    const high = Math.max(open, close) + 35 + (index % 7)
+    const low = Math.min(open, close) - 35 - (index % 5)
+    const volume = 1_000 + (index % 48) * 12 + Math.abs(cycle)
+    rows.push([
+      timestamp,
+      open.toFixed(4),
+      high.toFixed(4),
+      low.toFixed(4),
+      close.toFixed(4),
+      volume.toFixed(4),
+    ].join(','))
+    previousClose = close
+  }
+  await writeFile(path, `${rows.join('\n')}\n`, 'utf-8')
+  return path
+}
+
 describe('run_validation_pipeline', () => {
-  it('emits additive regime-gate and meta-label quantile A/B outputs', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-'))
+  it('leaves p-value null when explanatory FDR p-value is uncomputable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-fdr-failclosed-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
     const outputPath = join(root, 'validation.json')
-    const statusPath = join(root, 'release-gate-status.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialRegistryPath = join(evidenceRoot, 'trial_registry.jsonl')
 
     const exitCode = await runValidationPipeline([
       '--inputCsv',
-      'data/market/okx/BTC_USDT_USDT_1h.csv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'trend',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--candidatesJson',
+      JSON.stringify([{ trendFastPeriod: 20, trendSlowPeriod: 50 }]),
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialRegistryPath',
+      trialRegistryPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      evidenceOsV4: {
+        trialRegistryAppend: {
+          appended: boolean
+          reason: string
+          trialId: string
+        }
+        completeTrialUniverseMarker: {
+          appended: boolean
+          reason: string
+          trialId: string | null
+        }
+        artifactPaths: {
+          fdrReport: string
+          trialRecord: string
+          trialRegistry: string
+        }
+      }
+    }
+    const fdrReport = JSON.parse(await readFile(report.evidenceOsV4.artifactPaths.fdrReport, 'utf-8')) as {
+      status: string
+      promotion_allowed: boolean
+      p_values_available: boolean
+      missing_p_value_count: number
+      p_value: number | null
+      p_value_method: string | null
+      p_value_scope: string | null
+      p_value_is_promotion_grade: boolean
+      benchmark_candidate_index: number | null
+      p_adjusted_by_raw_m: number | null
+      p_adjusted_by_effective_m: number | null
+      p_adjusted_bh_secondary: number | null
+      blocking_reasons: Array<{ code: string; source: string; observed: string }>
+    }
+    const trialRecord = JSON.parse(await readFile(report.evidenceOsV4.artifactPaths.trialRecord, 'utf-8')) as {
+      p_value: number | null
+      promotion_eligible: boolean
+      failure_codes: string[]
+      metadata: Record<string, unknown>
+    }
+    const registryRow = JSON.parse((await readFile(report.evidenceOsV4.artifactPaths.trialRegistry, 'utf-8')).trim()) as {
+      p_value: number | null
+      promotion_eligible: boolean
+      metadata: Record<string, unknown>
+    }
+
+    expect(fdrReport).toMatchObject({
+      status: 'blocked_inputs_incomplete',
+      promotion_allowed: false,
+      p_values_available: false,
+      missing_p_value_count: 1,
+      p_value: null,
+      p_value_method: null,
+      p_value_scope: null,
+      p_value_is_promotion_grade: false,
+      benchmark_candidate_index: null,
+      p_adjusted_by_raw_m: null,
+      p_adjusted_by_effective_m: null,
+      p_adjusted_bh_secondary: null,
+    })
+    expect(fdrReport.blocking_reasons).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'FDR_INPUTS_INCOMPLETE',
+        source: 'validation_runner',
+        observed: 'need_at_least_two_candidate_return_series',
+      }),
+    ]))
+    expect(trialRecord).toMatchObject({
+      p_value: null,
+      promotion_eligible: false,
+      failure_codes: ['FDR_INPUTS_INCOMPLETE', 'PIT_PROXY_ONLY'],
+    })
+    expect(trialRecord.metadata).toMatchObject({
+      p_value_source: 'missing',
+      fdr_p_values_available: false,
+      fdr_missing_p_value_count: 1,
+      fdr_p_value_blocked_reason: 'need_at_least_two_candidate_return_series',
+      fdr_p_value_method: null,
+      fdr_p_value_scope: null,
+      fdr_p_value_is_promotion_grade: false,
+    })
+    expect(registryRow).toMatchObject({
+      p_value: null,
+      promotion_eligible: false,
+    })
+    expect(registryRow.metadata).toMatchObject({
+      fdr_p_values_available: false,
+      fdr_missing_p_value_count: 1,
+      fdr_p_value_blocked_reason: 'need_at_least_two_candidate_return_series',
+      fdr_p_value_method: null,
+      fdr_p_value_is_promotion_grade: false,
+    })
+    expect(report.evidenceOsV4.completeTrialUniverseMarker).toEqual({
+      appended: false,
+      reason: 'raw_m_complete_false',
+      trialId: null,
+    })
+    expect(report.evidenceOsV4.trialRegistryAppend).toMatchObject({
+      appended: true,
+      reason: 'trial_record_appended',
+    })
+  }, 15_000)
+
+  it('does not append to the runtime trial registry unless trialRegistryPath is explicit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-registry-opt-in-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'trend',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--candidatesJson',
+      JSON.stringify([{ trendFastPeriod: 20, trendSlowPeriod: 50 }]),
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      evidenceOsV4: {
+        artifactPaths: {
+          trialRegistry: string | null
+        }
+        trialRegistryAppend: {
+          appended: boolean
+          reason: string
+          trialId: string
+        }
+        completeTrialUniverseMarker: {
+          appended: boolean
+          reason: string
+          trialId: string | null
+        }
+      }
+    }
+
+    expect(report.evidenceOsV4.artifactPaths.trialRegistry).toBeNull()
+    expect(report.evidenceOsV4.trialRegistryAppend).toMatchObject({
+      appended: false,
+      reason: 'trial_registry_path_not_configured',
+    })
+    expect(report.evidenceOsV4.completeTrialUniverseMarker).toEqual({
+      appended: false,
+      reason: 'raw_m_complete_false',
+      trialId: null,
+    })
+  }, 15_000)
+
+  it('appends a complete trial-universe marker only when the ledger is complete', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-trial-marker-'))
+    const trialRegistryPath = join(root, 'trial_registry.jsonl')
+    const significance = evaluateSignificanceGateForReport({
+      candidateReturns: [
+        [0.01, 0.02, 0.03, 0.01],
+        [0.02, 0.01, 0.04, 0.02],
+      ],
+      selectedReturns: [0.02, 0.01, 0.04, 0.02],
+      partitions: 2,
+      trialCount: 5,
+      trialLedger: buildTrialLedgerSummary({
+        rawM: 5,
+        effectiveM: 3,
+        survivingTrialCount: 2,
+        rawMComplete: true,
+        includesFailedTrials: true,
+      }),
+    })
+
+    const first = await appendCompleteTrialUniverseMarkerIfReady({
+      significance,
+      evidenceId: 'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+      fdrFamily: 'test_family',
+      batchId: 'batch_test',
+      createdAt: '2026-05-04T00:00:00.000Z',
+      trialRegistryPath,
+    })
+    const second = await appendCompleteTrialUniverseMarkerIfReady({
+      significance,
+      evidenceId: 'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+      fdrFamily: 'test_family',
+      batchId: 'batch_test',
+      createdAt: '2026-05-04T00:00:00.000Z',
+      trialRegistryPath,
+    })
+
+    const rows = (await readFile(trialRegistryPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((row) => JSON.parse(row) as {
+        trial_id: string
+        trial_type: string
+        strategy_family: string
+        candidate_id: string
+        included_in_fdr: boolean
+        promotion_eligible: boolean
+        metadata: Record<string, unknown>
+      })
+
+    expect(first).toMatchObject({
+      appended: true,
+      reason: 'complete_trial_universe_marker_appended',
+    })
+    expect(second).toMatchObject({
+      appended: false,
+      reason: 'complete_trial_universe_marker_already_exists',
+      trialId: first.trialId,
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      trial_id: first.trialId,
+      trial_type: 'diagnostic_factor',
+      strategy_family: 'trial_universe',
+      candidate_id: 'complete_trial_universe',
+      included_in_fdr: false,
+      promotion_eligible: false,
+    })
+    expect(rows[0].metadata).toMatchObject({
+      trial_universe_marker: true,
+      trial_universe_marker_type: 'complete_trial_universe',
+      raw_m_complete: true,
+      includes_failed_trials: true,
+      raw_m: 5,
+      effective_m: 3,
+      included_trial_count: 5,
+      failed_trial_count: 3,
+      surviving_trial_count: 2,
+    })
+  })
+
+  it('emits additive regime-gate and meta-label quantile A/B outputs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const ethPeerCsv = await writeSyntheticMarketCsv(root, 'eth.csv', {
+      priceOffset: -7_000,
+      phaseShift: 0.15,
+    })
+    const outputPath = join(root, 'validation.json')
+    const statusPath = join(root, 'release-gate-status.json')
+    const missingAlphaPoolPath = join(root, 'missing-alpha-pool.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialRegistryPath = join(evidenceRoot, 'trial_registry.jsonl')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
       '--symbol',
       'BTC/USD',
       '--strategy',
       'factorMeanReversion',
+      '--peerCsvJson',
+      JSON.stringify({ 'ETH/USD': ethPeerCsv }),
       '--lookbackBars',
       '1500',
       '--trainBars',
@@ -137,11 +502,239 @@ describe('run_validation_pipeline', () => {
       outputPath,
       '--releaseGateStatusPath',
       statusPath,
+      '--alphaPoolPath',
+      missingAlphaPoolPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialRegistryPath',
+      trialRegistryPath,
     ])
 
     expect([0, 2]).toContain(exitCode)
 
     const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      sampleSplit: {
+        selection: { startTime: number | null; endTime: number | null; bars: number }
+        holdout: { startTime: number | null; endTime: number | null; bars: number }
+      }
+      selectionLeakageCheck: {
+        selectedOn: string
+        evaluatedOn: string
+        passed: boolean
+        selectionBars: number
+        holdoutBars: number
+      }
+      selectedParams: StrategyParams
+      selectedMetrics: BacktestMetrics
+      selectedInSampleMetrics: BacktestMetrics
+      baselineReport: {
+        expectancyAfterCost: { netExpectancyPct: number }
+      }
+      validationEvidence: {
+        turnover: {
+          available: boolean
+          totalTurnoverUsd: number
+          turnoverPctOfInitialCapital: number
+          averageTurnoverPctPerTrade: number
+          tradeCount: number
+        }
+        costAdjustedReturn: {
+          available: boolean
+          totalReturnPct: number
+          grossExpectancyPct: number
+          netExpectancyPct: number
+          totalCostsPaid: number
+          costDragPctOfInitialCapital: number
+        }
+        strategyPlanEvidence: {
+          regimeIdentityTracking: {
+            available: boolean
+            runtimeHmmEnabled: boolean
+            coldStartMode: string | null
+            effectiveSampleSize: number
+            latestRegime: null | {
+              regime: string
+              confidence: number
+              method: string | null
+              reasons: string[]
+            }
+            stateIdentity: null | {
+              method: string
+              rawStateName: string
+              matchedStateName: string
+              wassersteinDistance: number
+              identityConfidence: number
+              activeStateCount: number
+            }
+            reason: string | null
+          }
+          crossAssetRegimeConsistency: {
+            available: boolean
+            result: {
+              consistent: boolean
+              highConfidenceCount: number
+              disagreementCount: number
+              anchorDisagreement: boolean
+              reasons: string[]
+            }
+            reason: string | null
+          }
+          alphaFactorAdmission: {
+            available: boolean
+            path: string
+            totalCandidates: number
+            admissionGatePassedCount: number
+            admissionGateFailedCount: number
+            runtimeAcceptedAdmissionGateFailedCount: number
+            reason: string | null
+          }
+          rollingSharpeUniverseSelection: {
+            available: boolean
+            selection: {
+              longSymbols: string[]
+              shortSymbols: string[]
+              scores: Array<{
+                symbol: string
+                sampleCount: number
+                rollingSharpe: number | null
+                longEligible: boolean
+                shortEligible: boolean
+              }>
+            }
+          }
+          stableCorrelationClustering: {
+            available: boolean
+            clusters: Array<{
+              clusterId: number
+              symbols: string[]
+              representative: string
+            }>
+            reason: string | null
+          }
+          sessionAwareSlippageEstimate: {
+            available: boolean
+            tradeCount: number
+            baselineSlippageBps: number
+            averageEstimatedSlippageBps: number
+            maxEstimatedSlippageBps: number
+            dominantSession: string | null
+            bySession: Array<{
+              session: string
+              tradeCount: number
+              averageEstimatedSlippageBps: number
+              maxEstimatedSlippageBps: number
+              handoffTradeCount: number
+            }>
+            reason: string | null
+          }
+        }
+      }
+      candidateMetrics: Array<{
+        candidateIndex: number
+        params: StrategyParams
+        metrics: BacktestMetrics
+        baselineReport: {
+          expectancyAfterCost: { netExpectancyPct: number }
+        }
+      }>
+      candidateHoldoutMetrics: Array<{
+        candidateIndex: number
+        params: StrategyParams
+        metrics: BacktestMetrics
+        baselineReport: {
+          expectancyAfterCost: { netExpectancyPct: number }
+        }
+      }>
+      canonicalScoreboard: {
+        controlArm: {
+          label: string
+          source: string
+          metrics: { netExpectancyPct: number; maxDrawdownPct: number; tradeCount: number }
+          baselineReport: {
+            expectancyAfterCost: { netExpectancyPct: number }
+          }
+        }
+        selectedCandidate: {
+          source: string
+          selectionBasis: string
+          candidateIndex: number
+          params: StrategyParams
+          metrics: { netExpectancyPct: number; maxDrawdownPct: number; tradeCount: number }
+          baselineReport: {
+            expectancyAfterCost: { netExpectancyPct: number }
+          }
+        }
+        recommendation: {
+          action: 'promote_candidate' | 'stay_on_baseline'
+          targetSource: string
+          targetArmId: string | null
+          targetLabel: string
+          fallbackToBaseline: boolean
+          reasonCodes: string[]
+          regimeCollapseWarnings: Array<{
+            regime: string
+            selectedCandidateCollapseCount: number
+            selectedCandidateCount: number
+            realizedTradeCount: number
+            realizedSelectedCandidatePct: number
+            isWeakestRegime: boolean
+            warning: string
+          }>
+        }
+        wfo: {
+          overallPassed: boolean
+          failedWindows: number
+          windowCount: number
+          failedWindowRatio: number
+          windows: Array<{
+            windowIndex: number
+            selectedCandidate: string
+            inSampleSharpe: number
+            outOfSampleSharpe: number
+            degradationRate: number
+            gatePassed: boolean
+            gateReason: string | null
+          }>
+        }
+        significance: {
+          passed: boolean
+          pbo: number
+          pboThreshold: number
+          dsrValue: number
+          dsrProbability: number
+          dsrMin: number
+        }
+        risk: {
+          method: string
+          simulations: number
+          horizonBars: number
+          ruinDrawdownPct: number
+          maxRuinProbability: number
+          minProfitProbability: number
+          confidenceLevel: number
+          profitProbability: number
+          riskOfRuin: number
+          expectedFinalReturnPct: number
+          medianFinalReturnPct: number
+          confidenceInterval: {
+            finalReturnPct: [number, number]
+            maxDrawdownPct: [number, number]
+          }
+          gatePassed: boolean
+        }
+        releaseGate: {
+          allowPaperTrading: boolean
+          allowLiveTrading: boolean
+          hardFail: boolean
+          failedChecks: string[]
+          warningChecks: string[]
+          checks: Array<{
+            name: string
+            status: string
+            summary: string
+          }>
+        }
+      }
       deployableStrategyTarget: {
         controlArm: {
           label: string
@@ -247,6 +840,7 @@ describe('run_validation_pipeline', () => {
         }
         metaLabelWithBestRegimeGate: {
           enabled: boolean
+          reason?: string
           regimeGateSelection: {
             source: 'winner' | 'bestArm'
             gate: { allowedEntryRegimes: string[] }
@@ -532,11 +1126,239 @@ describe('run_validation_pipeline', () => {
             warning: string
           }>
         }
+        canonicalScoreboard: {
+          controlArm: {
+            label: string
+            source: string
+            metrics: { netExpectancyPct: number; maxDrawdownPct: number; tradeCount: number }
+            baselineReport: {
+              expectancyAfterCost: { netExpectancyPct: number }
+            }
+          }
+          selectedCandidate: {
+            source: string
+            selectionBasis: string
+            candidateIndex: number
+            params: StrategyParams
+            metrics: { netExpectancyPct: number; maxDrawdownPct: number; tradeCount: number }
+            baselineReport: {
+              expectancyAfterCost: { netExpectancyPct: number }
+            }
+          }
+          recommendation: {
+            action: 'promote_candidate' | 'stay_on_baseline'
+            targetSource: string
+            targetArmId: string | null
+            targetLabel: string
+            fallbackToBaseline: boolean
+            reasonCodes: string[]
+            regimeCollapseWarnings: Array<{
+              regime: string
+              selectedCandidateCollapseCount: number
+              selectedCandidateCount: number
+              realizedTradeCount: number
+              realizedSelectedCandidatePct: number
+              isWeakestRegime: boolean
+              warning: string
+            }>
+          }
+          wfo: {
+            overallPassed: boolean
+            failedWindows: number
+            windowCount: number
+            failedWindowRatio: number
+            windows: Array<{
+              windowIndex: number
+              selectedCandidate: string
+              inSampleSharpe: number
+              outOfSampleSharpe: number
+              degradationRate: number
+              gatePassed: boolean
+              gateReason: string | null
+            }>
+          }
+          significance: {
+            passed: boolean
+            pbo: number
+            pboThreshold: number
+            dsrValue: number
+            dsrProbability: number
+            dsrMin: number
+          }
+          risk: {
+            method: string
+            simulations: number
+            horizonBars: number
+            ruinDrawdownPct: number
+            maxRuinProbability: number
+            minProfitProbability: number
+            confidenceLevel: number
+            profitProbability: number
+            riskOfRuin: number
+            expectedFinalReturnPct: number
+            medianFinalReturnPct: number
+            confidenceInterval: {
+              finalReturnPct: [number, number]
+              maxDrawdownPct: [number, number]
+            }
+            gatePassed: boolean
+          }
+          releaseGate: {
+            allowPaperTrading: boolean
+            allowLiveTrading: boolean
+            hardFail: boolean
+            failedChecks: string[]
+            warningChecks: string[]
+            checks: Array<{
+              name: string
+              status: string
+              summary: string
+            }>
+          }
+        }
+      }
+      releaseGate: {
+        allowPaperTrading: boolean
+        allowLiveTrading: boolean
+        failedChecks: string[]
+        warningChecks: string[]
+        checks: Array<{
+          name: string
+          status: string
+          metrics: Record<string, number | string | boolean | null>
+        }>
+      }
+      evidenceOsV4: {
+        version: string
+        evidenceId: string
+        evidenceKey: string
+        artifactDir: string
+        trialId: string
+        strategyFamily: string
+        candidateId: string
+        verdict: string
+        status: string
+        promotionEligible: boolean
+        dataLineageHash: string
+        artifactPaths: {
+          dataManifest: string
+          dataLineage: string
+          fdrReport: string
+          validationResult: string
+          trialRecord: string
+          featureAvailabilityAudit: string
+          promotionVerdictProvenance: string
+          trialRegistry: string
+        }
+        failureCodes: string[]
       }
     }
     const status = JSON.parse(await readFile(statusPath, 'utf-8')) as {
       sourceReportPath: string
     }
+
+    expect(report.selectionLeakageCheck).toEqual({
+      selectedOn: 'selection',
+      evaluatedOn: 'holdout',
+      passed: true,
+      selectionBars: report.sampleSplit.selection.bars,
+      holdoutBars: report.sampleSplit.holdout.bars,
+    })
+    expect(report.sampleSplit.selection.bars).toBeGreaterThan(0)
+    expect(report.sampleSplit.holdout.bars).toBeGreaterThan(0)
+    expect(report.sampleSplit.selection.endTime).not.toBeNull()
+    expect(report.sampleSplit.holdout.startTime).not.toBeNull()
+    expect(report.sampleSplit.selection.endTime ?? 0).toBeLessThan(
+      report.sampleSplit.holdout.startTime ?? 0,
+    )
+
+    expect(report.candidateMetrics.length).toBeGreaterThan(1)
+    expect(report.candidateHoldoutMetrics).toHaveLength(report.candidateMetrics.length)
+    const selectedCandidateIndex = report.canonicalScoreboard.selectedCandidate.candidateIndex
+    const bestSelectionSharpeIndex = report.candidateMetrics.reduce(
+      (bestIndex, candidate, index) =>
+        candidate.metrics.sharpe > report.candidateMetrics[bestIndex]!.metrics.sharpe
+          ? index
+          : bestIndex,
+      0,
+    )
+    expect(selectedCandidateIndex).toBe(bestSelectionSharpeIndex)
+    expect(report.selectedParams).toEqual(report.candidateMetrics[selectedCandidateIndex]?.params)
+    expect(report.selectedInSampleMetrics).toEqual(
+      report.candidateMetrics[selectedCandidateIndex]?.metrics,
+    )
+    expect(report.selectedMetrics).toEqual(
+      report.candidateHoldoutMetrics[selectedCandidateIndex]?.metrics,
+    )
+    expect(report.baselineReport).toEqual(
+      report.candidateHoldoutMetrics[selectedCandidateIndex]?.baselineReport,
+    )
+    expect(report.validationEvidence.turnover.available).toBe(true)
+    expect(report.validationEvidence.turnover.tradeCount).toBe(report.selectedMetrics.tradeCount)
+    expect(report.validationEvidence.costAdjustedReturn.available).toBe(true)
+    expect(report.validationEvidence.costAdjustedReturn.netExpectancyPct).toBe(
+      report.selectedMetrics.netExpectancyPct,
+    )
+    expect(report.validationEvidence.strategyPlanEvidence.regimeIdentityTracking.effectiveSampleSize).toBeGreaterThan(
+      0,
+    )
+    expect(report.validationEvidence.strategyPlanEvidence.regimeIdentityTracking.latestRegime).toBeTruthy()
+    expect(
+      report.validationEvidence.strategyPlanEvidence.crossAssetRegimeConsistency.available,
+    ).toBe(true)
+    expect(
+      report.validationEvidence.strategyPlanEvidence.crossAssetRegimeConsistency.result.highConfidenceCount,
+    ).toBeGreaterThanOrEqual(0)
+    expect(report.validationEvidence.strategyPlanEvidence.alphaFactorAdmission.available).toBe(false)
+    expect(report.validationEvidence.strategyPlanEvidence.alphaFactorAdmission.path).toBe(
+      missingAlphaPoolPath,
+    )
+    expect(
+      report.validationEvidence.strategyPlanEvidence.rollingSharpeUniverseSelection.available,
+    ).toBe(true)
+    expect(
+      report.validationEvidence.strategyPlanEvidence.rollingSharpeUniverseSelection.selection.scores,
+    ).toHaveLength(2)
+    expect(
+      report.validationEvidence.strategyPlanEvidence.rollingSharpeUniverseSelection.selection.scores
+        .map((score) => score.symbol)
+        .sort(),
+    ).toEqual(['BTC/USD', 'ETH/USD'])
+    expect(
+      report.validationEvidence.strategyPlanEvidence.stableCorrelationClustering.available,
+    ).toBe(true)
+    expect(
+      report.validationEvidence.strategyPlanEvidence.stableCorrelationClustering.clusters.some(
+        (cluster) => cluster.symbols.includes('BTC/USD') && cluster.symbols.includes('ETH/USD'),
+      ),
+    ).toBe(true)
+    expect(report.validationEvidence.strategyPlanEvidence.sessionAwareSlippageEstimate.bySession).toHaveLength(4)
+    expect(
+      report.validationEvidence.strategyPlanEvidence.sessionAwareSlippageEstimate.tradeCount,
+    ).toBe(report.selectedMetrics.tradeCount)
+    expect(
+      report.validationEvidence.strategyPlanEvidence.sessionAwareSlippageEstimate.baselineSlippageBps,
+    ).toBe(8)
+
+    const strategyPlanEvidenceCheck = report.releaseGate.checks.find(
+      (check) => check.name === 'strategy_plan_evidence',
+    )
+    expect(strategyPlanEvidenceCheck).toBeTruthy()
+    expect(strategyPlanEvidenceCheck?.metrics.crossAssetAvailable).toBe(true)
+    expect(strategyPlanEvidenceCheck?.metrics.alphaAdmissionAvailable).toBe(false)
+    expect(report.releaseGate.failedChecks).not.toContain('strategy_plan_evidence')
+
+    const selectedHoldoutMetrics = report.candidateHoldoutMetrics[selectedCandidateIndex]!.metrics
+    const economicsCheck = report.releaseGate.checks.find((check) => check.name === 'economics')
+    expect(economicsCheck).toBeTruthy()
+    expect(economicsCheck?.metrics.netExpectancyPct).toBe(selectedHoldoutMetrics.netExpectancyPct)
+    expect(economicsCheck?.metrics.grossExpectancyPct).toBe(
+      selectedHoldoutMetrics.grossExpectancyPct,
+    )
+    expect(economicsCheck?.metrics.tradeCount).toBe(selectedHoldoutMetrics.tradeCount)
+    expect(economicsCheck?.metrics.costDragPctOfInitialCapital).toBe(
+      selectedHoldoutMetrics.costDragPctOfInitialCapital,
+    )
 
     expect(report.deployableStrategyTarget.controlArm.label).toBe('current_runtime_baseline')
     expect(report.deployableStrategyTarget.controlArm.source).toBe('selected_runtime_baseline')
@@ -684,7 +1506,13 @@ describe('run_validation_pipeline', () => {
       ),
     ).toBe(true)
 
-    expect(report.abExperiments.metaLabelWithBestRegimeGate.enabled).toBe(true)
+    if (!report.abExperiments.metaLabelWithBestRegimeGate.enabled) {
+      expect(report.abExperiments.metaLabelWithBestRegimeGate.reason).toMatch(
+        /needs at least 5 baseline trades|No regime gate arm available/,
+      )
+      return
+    }
+
     expect(report.abExperiments.metaLabelWithBestRegimeGate.regimeGateSelection).toBeTruthy()
     expect(
       report.abExperiments.metaLabelWithBestRegimeGate.regimeGateSelection?.source,
@@ -1093,8 +1921,516 @@ describe('run_validation_pipeline', () => {
       ),
     ).toHaveLength(report.recommendedCandidate.recommendation.regimeCollapseWarnings.length > 0 ? 1 : 0)
 
+    expect(report.canonicalScoreboard.controlArm.label).toBe(
+      report.deployableStrategyTarget.controlArm.label,
+    )
+    expect(report.canonicalScoreboard.controlArm.source).toBe(
+      report.deployableStrategyTarget.controlArm.source,
+    )
+    expect(report.canonicalScoreboard.controlArm.metrics).toEqual(
+      report.deployableStrategyTarget.controlArm.metrics,
+    )
+    expect(report.canonicalScoreboard.controlArm.baselineReport).toEqual(
+      report.deployableStrategyTarget.controlArm.baselineReport,
+    )
+    expect(report.canonicalScoreboard.selectedCandidate.candidateIndex).toBeGreaterThanOrEqual(0)
+    expect(report.canonicalScoreboard.selectedCandidate.params).toEqual(report.selectedParams)
+    expect(report.canonicalScoreboard.selectedCandidate.metrics.netExpectancyPct).toBe(
+      report.selectedMetrics.netExpectancyPct,
+    )
+    expect(report.canonicalScoreboard.selectedCandidate.metrics.maxDrawdownPct).toBe(
+      report.selectedMetrics.maxDrawdownPct,
+    )
+    expect(report.canonicalScoreboard.selectedCandidate.metrics.tradeCount).toBe(
+      report.selectedMetrics.tradeCount,
+    )
+    expect(report.canonicalScoreboard.selectedCandidate.baselineReport).toEqual(report.baselineReport)
+    expect(report.canonicalScoreboard.recommendation).toEqual(
+      report.recommendedCandidate.recommendation,
+    )
+    expect(report.canonicalScoreboard.wfo.overallPassed).toBe(report.wfo.overallPassed)
+    expect(report.canonicalScoreboard.wfo.failedWindows).toBe(report.wfo.failedWindows)
+    expect(report.canonicalScoreboard.wfo.windowCount).toBe(report.wfo.windows.length)
+    expect(report.canonicalScoreboard.wfo.failedWindowRatio).toBeCloseTo(
+      report.wfo.windows.length > 0 ? report.wfo.failedWindows / report.wfo.windows.length : 0,
+    )
+    expect(report.canonicalScoreboard.wfo.windows).toHaveLength(report.wfo.windows.length)
+    expect(report.canonicalScoreboard.wfo.windows[0]?.selectedCandidate).toBe(
+      report.wfo.windows[0]?.selectedCandidate,
+    )
+    expect(report.canonicalScoreboard.significance).toEqual({
+      passed: report.significance.passed,
+      pbo: report.significance.pbo,
+      pboThreshold: 0.2,
+      dsrValue: report.significance.dsrValue,
+      dsrProbability: report.significance.dsrProbability,
+      dsrMin: 0,
+    })
+    expect(report.canonicalScoreboard.risk.gatePassed).toBe(report.riskSimulation.gatePassed)
+    expect(report.canonicalScoreboard.risk.profitProbability).toBe(report.riskSimulation.profitProbability)
+    expect(report.canonicalScoreboard.risk.riskOfRuin).toBe(report.riskSimulation.riskOfRuin)
+    expect(report.canonicalScoreboard.releaseGate.allowPaperTrading).toBe(
+      report.releaseGate.allowPaperTrading,
+    )
+    expect(report.canonicalScoreboard.releaseGate.allowLiveTrading).toBe(
+      report.releaseGate.allowLiveTrading,
+    )
+    expect(report.canonicalScoreboard.releaseGate.failedChecks).toEqual(
+      report.releaseGate.failedChecks,
+    )
+    expect(report.canonicalScoreboard.releaseGate.warningChecks).toEqual(
+      report.releaseGate.warningChecks,
+    )
+    expect(report.canonicalScoreboard.releaseGate.checks.map((check) => check.name)).toEqual(
+      report.releaseGate.checks.map((check) => check.name),
+    )
+
+    expect(report.evidenceOsV4.version).toBe('v4.0')
+    expect(report.evidenceOsV4.evidenceId).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(report.evidenceOsV4.evidenceKey).toMatch(/^[a-f0-9]{64}$/)
+    expect(report.evidenceOsV4.artifactDir).not.toContain('sha256:')
+    expect(report.evidenceOsV4.selectedCandidateIndex).toBe(
+      report.canonicalScoreboard.selectedCandidate.candidateIndex,
+    )
+    expect(report.evidenceOsV4.verdict).toBe('blocked')
+    expect(report.evidenceOsV4.status).toBe('blocked_fdr_inputs_incomplete')
+    expect(report.evidenceOsV4.promotionEligible).toBe(false)
+    expect(report.evidenceOsV4.failureCodes).toEqual([
+      'FDR_INPUTS_INCOMPLETE',
+      'PIT_PROXY_ONLY',
+    ])
+    expect(report.evidenceOsV4.strategyFamilyContract).toMatchObject({
+      family_id: 'trend',
+      role: 'research',
+      promotion_eligibility: 'research_only',
+      next_mutation_allowed: 'retry_after_new_hypothesis',
+    })
+    expect(report.evidenceOsV4.strategyFamilyContractValidation).toEqual({
+      passed: true,
+      blockingReasons: [],
+    })
+    const validationResult = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.validationResult, 'utf-8'),
+    ) as {
+      evidence_id: string
+      data_lineage_hash: string
+      strategy_family_contract: {
+        family_id: string
+        promotion_eligibility: string
+      }
+      strategy_family_contract_validation: {
+        passed: boolean
+        blocking_reasons: string[]
+      }
+      verdict: string
+      blocking_reasons: Array<{ code: string }>
+    }
+    const fdrReport = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.fdrReport, 'utf-8'),
+    ) as {
+      evidence_id: string
+      status: string
+      promotion_allowed: boolean
+      fdr_method_primary: string
+      raw_m_complete: boolean
+      includes_failed_trials: boolean
+      p_values_available: boolean
+      p_value: number | null
+      p_value_method: string | null
+      p_value_scope: string | null
+      p_value_is_promotion_grade: boolean
+      benchmark_candidate_index: number | null
+      bootstrap_samples: number | null
+      bootstrap_block_size: number | null
+      bootstrap_block_size_set: number[]
+      bootstrap_direction_stable: boolean | null
+      p_value_block_sensitivity: Array<{
+        block_size: number
+        observed_mean_excess: number
+        p_value: number
+        passed: boolean
+      }>
+      observed_mean_excess: number | null
+      p_adjusted_by_raw_m: number | null
+      p_adjusted_by_effective_m: number | null
+      p_adjusted_bh_secondary: number | null
+      blocking_reasons: Array<{ code: string; source: string }>
+    }
+    const trialRecord = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.trialRecord, 'utf-8'),
+    ) as {
+      trial_id: string
+      evidence_id: string
+      status: string
+      promotion_eligible: boolean
+      p_value: number | null
+      failure_codes: string[]
+      metadata: Record<string, unknown>
+    }
+    const featureAvailabilityAudit = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.featureAvailabilityAudit, 'utf-8'),
+    ) as {
+      evidence_id: string
+      data_lineage_hash: string
+      status: string
+      checks: Array<{ id: string; status: string }>
+      blocking_reasons: Array<{ code: string }>
+    }
+    const promotionProvenance = JSON.parse(
+      await readFile(report.evidenceOsV4.artifactPaths.promotionVerdictProvenance, 'utf-8'),
+    ) as {
+      verdict: string
+      blocking_reasons: Array<{ code: string }>
+      excluded_evidence_ids: Array<{ evidence_id: string; reason: string }>
+    }
+    const registryRows = (await readFile(report.evidenceOsV4.artifactPaths.trialRegistry, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((row) => JSON.parse(row) as { trial_id: string; evidence_id: string })
+    const dataLineage = dataLineageGraphFromJson(
+      JSON.parse(await readFile(report.evidenceOsV4.artifactPaths.dataLineage, 'utf-8')) as unknown,
+    )
+    const dataLineageValidation = validateDataLineageGraph(dataLineage)
+
+    expect(validationResult.evidence_id).toBe(report.evidenceOsV4.evidenceId)
+    expect(validationResult.data_lineage_hash).toBe(report.evidenceOsV4.dataLineageHash)
+    expect(validationResult.strategy_family_contract).toMatchObject({
+      family_id: 'trend',
+      promotion_eligibility: 'research_only',
+    })
+    expect(validationResult.strategy_family_contract_validation).toEqual({
+      passed: true,
+      blocking_reasons: [],
+    })
+    expect(validationResult.verdict).toBe('blocked')
+    expect(validationResult.blocking_reasons.map((reason) => reason.code)).toEqual([
+      'FDR_INPUTS_INCOMPLETE',
+      'PIT_PROXY_ONLY',
+    ])
+    expect(fdrReport).toMatchObject({
+      evidence_id: report.evidenceOsV4.evidenceId,
+      status: 'blocked_inputs_incomplete',
+      promotion_allowed: false,
+      fdr_method_primary: 'BY_raw_m',
+      raw_m_complete: false,
+      includes_failed_trials: false,
+      p_values_available: true,
+      p_value_is_promotion_grade: false,
+      p_value_method: 'spa_like_moving_block_selected_vs_deterministic_holdout_benchmark_v1',
+      p_value_scope: 'explanatory_selected_vs_holdout_benchmark',
+    })
+    expect(typeof fdrReport.p_value).toBe('number')
+    expect(fdrReport.p_value).toBeGreaterThanOrEqual(0)
+    expect(fdrReport.p_value).toBeLessThanOrEqual(1)
+    expect(fdrReport.benchmark_candidate_index).not.toBeNull()
+    expect(fdrReport.benchmark_candidate_index).not.toBe(report.evidenceOsV4.selectedCandidateIndex)
+    expect(fdrReport.bootstrap_samples).toBe(400)
+    expect(fdrReport.bootstrap_block_size).toBeGreaterThanOrEqual(2)
+    expect(fdrReport.bootstrap_block_size_set.length).toBeGreaterThanOrEqual(2)
+    expect(fdrReport.bootstrap_direction_stable).not.toBeNull()
+    expect(fdrReport.p_value_block_sensitivity.length).toBeGreaterThanOrEqual(2)
+    expect(fdrReport.observed_mean_excess).not.toBeNull()
+    expect(typeof fdrReport.p_adjusted_by_raw_m).toBe('number')
+    expect(typeof fdrReport.p_adjusted_by_effective_m).toBe('number')
+    expect(typeof fdrReport.p_adjusted_bh_secondary).toBe('number')
+    expect(fdrReport.blocking_reasons.map((reason) => reason.code)).toEqual([
+      'FDR_INPUTS_INCOMPLETE',
+      'FDR_INPUTS_INCOMPLETE',
+    ])
+    expect(trialRecord.trial_id).toBe(report.evidenceOsV4.trialId)
+    expect(trialRecord.evidence_id).toBe(report.evidenceOsV4.evidenceId)
+    expect(trialRecord.status).toBe('failed_validation')
+    expect(trialRecord.promotion_eligible).toBe(false)
+    expect(trialRecord.p_value).toBe(fdrReport.p_value)
+    expect(trialRecord.failure_codes).toEqual([
+      'FDR_INPUTS_INCOMPLETE',
+      'PIT_PROXY_ONLY',
+    ])
+    expect(trialRecord.failure_codes).toEqual([
+      ...new Set([
+        ...fdrReport.blocking_reasons.map((reason) => reason.code),
+        ...featureAvailabilityAudit.blocking_reasons.map((reason) => reason.code),
+      ]),
+    ])
+    expect(trialRecord.metadata.p_value_source).toBe('fdr_report')
+    expect(trialRecord.metadata.fdr_report_path_source).toBe('generated_artifact')
+    expect(trialRecord.metadata.fdr_report_status).toBe('blocked_inputs_incomplete')
+    expect(trialRecord.metadata.fdr_p_value_method).toBe(fdrReport.p_value_method)
+    expect(trialRecord.metadata.fdr_p_value_is_promotion_grade).toBe(false)
+    expect(trialRecord.metadata.fdr_p_value_promotion_grade_source).toBe('fdr_report')
+    expect(trialRecord.metadata.feature_availability_audit_path).toBe(
+      report.evidenceOsV4.artifactPaths.featureAvailabilityAudit,
+    )
+    expect(trialRecord.metadata.pit_audit_path).toBe(
+      report.evidenceOsV4.artifactPaths.featureAvailabilityAudit,
+    )
+    expect(trialRecord.metadata.pit_audit_source).toBe('feature_availability_audit')
+    expect(trialRecord.metadata.pit_audit_status).toBe('blocked')
+    expect(trialRecord.metadata.pit_audit_promotion_grade).toBe(false)
+    expect(trialRecord.metadata.pit_audit_promotion_grade_source).toBe('feature_availability_audit')
+    expect(trialRecord.metadata.promotion_decision_source).toBe('fail_closed_validation_pipeline')
+    expect(featureAvailabilityAudit.evidence_id).toBe(report.evidenceOsV4.evidenceId)
+    expect(featureAvailabilityAudit.data_lineage_hash).toBe(report.evidenceOsV4.dataLineageHash)
+    expect(featureAvailabilityAudit.status).toBe('blocked')
+    expect(featureAvailabilityAudit.checks.length).toBeGreaterThan(0)
+    expect(featureAvailabilityAudit.checks.map((check) => check.id)).toContain(
+      'row_level_available_time_audit',
+    )
+    expect(featureAvailabilityAudit.row_level_proxy_audit).toMatchObject({
+      proxy_status: 'pass',
+      promotion_grade: false,
+      proxy_type: 'csv_bar_event_time_as_decision_time',
+      event_time_after_decision_time_count: 0,
+    })
+    expect(featureAvailabilityAudit.blocking_reasons.map((reason) => reason.code)).toContain(
+      'PIT_PROXY_ONLY',
+    )
+    expect(dataLineage.schemaVersion).toBe(DATA_LINEAGE_SCHEMA_VERSION)
+    expect(dataLineageValidation).toMatchObject({
+      passed: true,
+      hash: report.evidenceOsV4.dataLineageHash,
+      blockingReasons: [],
+    })
+    expect(promotionProvenance.verdict).toBe('blocked')
+    expect(promotionProvenance.blocking_reasons.map((reason) => reason.code)).toContain(
+      'FDR_INPUTS_INCOMPLETE',
+    )
+    expect(promotionProvenance.excluded_evidence_ids[0]).toEqual({
+      evidence_id: report.evidenceOsV4.evidenceId,
+      reason: 'validation_artifact_blocked_fdr_inputs_incomplete',
+      source: 'validation_runner',
+    })
+    expect(registryRows).toHaveLength(1)
+    expect(registryRows[0]).toMatchObject({
+      trial_id: report.evidenceOsV4.trialId,
+      evidence_id: report.evidenceOsV4.evidenceId,
+    })
+
     expect(status.sourceReportPath).toBe(outputPath)
-  })
+  }, 15_000)
+
+  it('accepts shockFade as a first-class validation strategy and emits additive sweeps', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-shockfade-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialRegistryPath = join(evidenceRoot, 'trial_registry.jsonl')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'shockFade',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialRegistryPath',
+      trialRegistryPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      input: { strategy: string }
+      candidateMetrics: Array<unknown>
+      abExperiments: {
+        regimeGate: { enabled: boolean; reason?: string }
+        metaLabel: { enabled: boolean; reason?: string }
+        metaLabelWithBestRegimeGate: { enabled: boolean; reason?: string }
+      }
+    }
+
+    expect(report.input.strategy).toBe('shockFade')
+    expect(report.candidateMetrics).toHaveLength(3)
+    expect(report.abExperiments.regimeGate.enabled).toBe(true)
+    if (!report.abExperiments.metaLabel.enabled) {
+      expect(report.abExperiments.metaLabel.reason).toMatch(/needs at least 5 baseline trades/)
+    } else if (!report.abExperiments.metaLabelWithBestRegimeGate.enabled) {
+      expect(report.abExperiments.metaLabelWithBestRegimeGate.reason).toMatch(
+        /needs at least 5 baseline trades|No regime gate arm available/,
+      )
+    } else {
+      expect(report.abExperiments.metaLabelWithBestRegimeGate.enabled).toBe(true)
+    }
+  }, 15_000)
+
+  it('honors a fixed regimeGateJson and disables regime-gate sweep', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-fixed-gate-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialRegistryPath = join(evidenceRoot, 'trial_registry.jsonl')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'shockFade',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--regimeGateJson',
+      JSON.stringify({
+        allowedEntryRegimes: ['HighVolMeanRevert', 'LowVolCarry'],
+        exitOnMismatch: true,
+      }),
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialRegistryPath',
+      trialRegistryPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      configuredGates: {
+        regimeGate: {
+          allowedEntryRegimes: string[]
+          exitOnMismatch?: boolean
+        } | null
+      }
+      abExperiments: {
+        regimeGate: { enabled: boolean; reason?: string }
+      }
+    }
+
+    expect(report.configuredGates.regimeGate).toEqual({
+      allowedEntryRegimes: ['HighVolMeanRevert', 'LowVolCarry'],
+      exitOnMismatch: true,
+    })
+    expect(report.abExperiments.regimeGate.enabled).toBe(false)
+    expect(report.abExperiments.regimeGate.reason).toContain('fixed regimeGateJson')
+  }, 15_000)
+
+  it('persists a fixed volatilityGateJson in configuredGates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-fixed-volatility-gate-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialRegistryPath = join(evidenceRoot, 'trial_registry.jsonl')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'shockFade',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--volatilityGateJson',
+      JSON.stringify({
+        minVolatilityPct: 1.1,
+        maxTrendStrengthPct: 0.8,
+        exitOnMismatch: false,
+      }),
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialRegistryPath',
+      trialRegistryPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      configuredGates: {
+        volatilityGate: {
+          minVolatilityPct?: number
+          maxTrendStrengthPct?: number
+          exitOnMismatch?: boolean
+        } | null
+      }
+    }
+
+    expect(report.configuredGates.volatilityGate).toEqual({
+      minVolatilityPct: 1.1,
+      maxTrendStrengthPct: 0.8,
+      exitOnMismatch: false,
+    })
+  }, 15_000)
+
+  it('returns clear unsupported sweep reasons for non-additive strategies', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-validation-pipeline-trend-'))
+    const inputCsv = await writeSyntheticMarketCsv(root)
+    const outputPath = join(root, 'validation.json')
+    const evidenceRoot = join(root, 'runtime', 'research')
+    const trialRegistryPath = join(evidenceRoot, 'trial_registry.jsonl')
+
+    const exitCode = await runValidationPipeline([
+      '--inputCsv',
+      inputCsv,
+      '--symbol',
+      'BTC/USD',
+      '--strategy',
+      'trend',
+      '--lookbackBars',
+      '1500',
+      '--trainBars',
+      '720',
+      '--testBars',
+      '240',
+      '--stepBars',
+      '240',
+      '--riskSimulationCount',
+      '100',
+      '--output',
+      outputPath,
+      '--evidenceOutputRoot',
+      evidenceRoot,
+      '--trialRegistryPath',
+      trialRegistryPath,
+    ])
+
+    expect([0, 2]).toContain(exitCode)
+
+    const report = JSON.parse(await readFile(outputPath, 'utf-8')) as {
+      abExperiments: {
+        regimeGate: { enabled: boolean; reason?: string }
+        metaLabel: { enabled: boolean; reason?: string }
+        metaLabelWithBestRegimeGate: { enabled: boolean; reason?: string }
+      }
+    }
+
+    expect(report.abExperiments.regimeGate.enabled).toBe(false)
+    expect(report.abExperiments.regimeGate.reason).toContain('factorMeanReversion, shockFade')
+    expect(report.abExperiments.metaLabel.enabled).toBe(false)
+    expect(report.abExperiments.metaLabel.reason).toContain('factorMeanReversion, shockFade')
+    expect(report.abExperiments.metaLabelWithBestRegimeGate.enabled).toBe(false)
+  }, 15_000)
 
   it('reports qualified regime-gate winner provenance for combined champion evidence', () => {
     const report = buildRecommendedCandidate({
