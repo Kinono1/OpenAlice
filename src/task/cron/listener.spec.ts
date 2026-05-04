@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { utimes, writeFile } from 'node:fs/promises'
 import { createEventLog, type EventLog, type EventLogEntry } from '../../core/event-log.js'
-import { createCronListener, type CronListener } from './listener.js'
+import { createCronListener, parseCronResponse, type CronListener } from './listener.js'
 import { SessionStore } from '../../core/session.js'
 import type { CronFirePayload } from './engine.js'
 import { ConnectorCenter } from '../../core/connector-center.js'
@@ -147,6 +148,115 @@ describe('cron listener', () => {
       expect(delivered[0]).toBe('AI reply')
     })
 
+    it('should parse CRON_NOTIFY and deliver the CONTENT field', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+
+      mockEngine.setResponse([
+        'STATUS: CRON_NOTIFY',
+        'REASON: Notification artifact says to notify.',
+        'CONTENT: ETH carry runtime is ready for review.',
+      ].join('\n'))
+
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'abc12345',
+        jobName: 'test-job',
+        payload: 'Hello',
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(delivered).toHaveLength(1)
+      })
+
+      expect(delivered[0]).toBe('ETH carry runtime is ready for review.')
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        reply: 'ETH carry runtime is ready for review.',
+        delivered: true,
+        parsedStatus: 'CRON_NOTIFY',
+        parsedReason: 'Notification artifact says to notify.',
+        parsedUnparsed: false,
+      })
+    })
+
+    it('should skip delivery for CRON_SKIP responses', async () => {
+      const notifySpy = vi.spyOn(connectorCenter, 'notify')
+      mockEngine.setResponse([
+        'STATUS: CRON_SKIP',
+        'REASON: flat state, no operator message needed.',
+      ].join('\n'))
+
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'abc12345',
+        jobName: 'test-job',
+        payload: 'Hello',
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+
+      expect(notifySpy).not.toHaveBeenCalled()
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        delivered: false,
+        parsedStatus: 'CRON_SKIP',
+        parsedReason: 'flat state, no operator message needed.',
+      })
+    })
+
+    it('should fail open and deliver unparsed responses', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+
+      mockEngine.setResponse('The script produced a plain-text operator note without structured fields.')
+
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'abc12345',
+        jobName: 'test-job',
+        payload: 'Hello',
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(delivered).toHaveLength(1)
+      })
+
+      expect(delivered[0]).toBe('The script produced a plain-text operator note without structured fields.')
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        reply: 'The script produced a plain-text operator note without structured fields.',
+        delivered: true,
+        parsedStatus: 'CRON_NOTIFY',
+        parsedReason: 'unparsed response',
+        parsedUnparsed: true,
+      })
+    })
+
     it('should handle delivery failure gracefully', async () => {
       connectorCenter.register({
         channel: 'test',
@@ -188,6 +298,361 @@ describe('cron listener', () => {
     })
   })
 
+  describe('script jobs', () => {
+    it('executes allowlisted script jobs without routing to AI', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+
+      const notificationPath = tempPath('json')
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: true,
+            deliveryDecision: 'notify',
+            headline: 'ETH carry is actionable again.',
+            fullText: 'ETH carry is actionable again.\nState: ready_to_trade',
+          }), 'utf-8')
+          return { stdout: 'script ok\n', stderr: '' }
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'script123',
+        jobName: 'eth_carry_refresh_pipeline_daily',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_eth_carry_refresh_pipeline.sh'),
+          notificationPath,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(delivered).toHaveLength(1)
+      })
+
+      expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+      expect(delivered[0]).toBe('ETH carry is actionable again.\nState: ready_to_trade')
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        jobId: 'script123',
+        jobName: 'eth_carry_refresh_pipeline_daily',
+        delivered: true,
+        parsedStatus: 'CRON_NOTIFY',
+        parsedReason: 'ETH carry is actionable again.',
+      })
+    })
+
+    it('fails closed for unsupported script jobs', async () => {
+      const runner = vi.fn(async () => ({ stdout: '', stderr: '' }))
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: runner,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'script123',
+        jobName: 'unsafe-script',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: '/repo/OpenAlice/scripts/delete_everything.sh',
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        const errors = eventLog.recent({ type: 'cron.error' })
+        expect(errors).toHaveLength(1)
+      })
+
+      expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+      expect(runner).not.toHaveBeenCalled()
+      const errors = eventLog.recent({ type: 'cron.error' })
+      expect(errors[0].payload).toMatchObject({
+        jobId: 'script123',
+        jobName: 'unsafe-script',
+      })
+      expect((errors[0].payload as any).error).toContain('unsupported script cron job')
+    })
+
+    it.each([
+      'scripts/cron_paper_policy_shadow_capture.sh',
+      'scripts/cron_paper_policy_shadow_settle.sh',
+      'scripts/cron_paper_pnl_diagnostics.sh',
+      'scripts/cron_pro_policy_window.sh',
+      'scripts/cron_microstructure_stoploss_replay.sh',
+      'scripts/cron_dirty_worktree_audit.sh',
+      'scripts/cron_scheduler_security_audit.sh',
+      'scripts/cron_external_derivatives_data_collect.sh',
+      'scripts/cron_p1_trading_evidence.sh',
+    ])('runs allowlisted paper diagnostic script %s without routing to the AI', async (scriptPath) => {
+      const runner = vi.fn(async () => ({ stdout: 'script ok\n', stderr: '' }))
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: runner,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: `script-${scriptPath}`,
+        jobName: scriptPath,
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve(scriptPath),
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+
+      expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+      expect(runner).toHaveBeenCalledWith(resolve(scriptPath), [], { cwd: undefined })
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        delivered: false,
+        parsedStatus: 'CRON_SKIP',
+      })
+    })
+
+    it('does not notify when script notification artifact suppresses delivery', async () => {
+      const notifySpy = vi.spyOn(connectorCenter, 'notify')
+      const notificationPath = tempPath('json')
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: false,
+            deliveryDecision: 'suppress',
+            headline: 'ETH carry unchanged.',
+            fullText: 'ETH carry unchanged.',
+          }), 'utf-8')
+          return { stdout: 'script ok\n', stderr: '' }
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'script123',
+        jobName: 'eth_carry_refresh_pipeline_daily',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_eth_carry_refresh_pipeline.sh'),
+          notificationPath,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+
+      expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+      expect(notifySpy).not.toHaveBeenCalled()
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        delivered: false,
+        parsedStatus: 'CRON_SKIP',
+        parsedReason: 'ETH carry unchanged.',
+      })
+    })
+
+    it('delivers script notification artifacts even when the script exits non-zero', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+
+      const notificationPath = tempPath('json')
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: true,
+            deliveryDecision: 'notify',
+            headline: 'External derivatives collector failed.',
+            content: 'runId=failed exitCode=1 errors=1 firstError=ETHUSDT/fundingRate:timeout',
+          }), 'utf-8')
+          throw new Error('script exited with code 1')
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'external-derivatives-fail',
+        jobName: 'external_derivatives_data_collect_8h',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_external_derivatives_data_collect.sh'),
+          notificationPath,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(delivered).toHaveLength(1)
+      })
+
+      expect(delivered[0]).toBe('runId=failed exitCode=1 errors=1 firstError=ETHUSDT/fundingRate:timeout')
+      const errors = eventLog.recent({ type: 'cron.error' })
+      expect(errors[0].payload).toMatchObject({
+        jobId: 'external-derivatives-fail',
+        jobName: 'external_derivatives_data_collect_8h',
+        delivered: true,
+        parsedStatus: 'CRON_NOTIFY',
+        parsedReason: 'External derivatives collector failed.',
+        reply: 'runId=failed exitCode=1 errors=1 firstError=ETHUSDT/fundingRate:timeout',
+      })
+    })
+
+    it('delivers a fallback notification when a script fails before writing its notification artifact', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+
+      const notificationPath = tempPath('json')
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          throw new Error('script exited before notification')
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'external-derivatives-no-artifact',
+        jobName: 'external_derivatives_data_collect_8h',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_external_derivatives_data_collect.sh'),
+          notificationPath,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(delivered).toHaveLength(1)
+      })
+
+      expect(delivered[0]).toContain('script cron failed before notification artifact was written')
+      expect(delivered[0]).toContain('jobId=external-derivatives-no-artifact')
+      expect(delivered[0]).toContain('jobName=external_derivatives_data_collect_8h')
+      expect(delivered[0]).toContain('error=script exited before notification')
+      const errors = eventLog.recent({ type: 'cron.error' })
+      expect(errors[0].payload).toMatchObject({
+        jobId: 'external-derivatives-no-artifact',
+        jobName: 'external_derivatives_data_collect_8h',
+        delivered: true,
+        parsedStatus: 'CRON_NOTIFY',
+        parsedReason: 'script cron failed before notification artifact was written',
+      })
+      expect((errors[0].payload as any).reply).toContain('notification artifact was written')
+    })
+
+    it('ignores stale notification artifacts from previous runs when script fails', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'test',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+
+      const notificationPath = tempPath('json')
+      await writeFile(notificationPath, JSON.stringify({
+        shouldNotify: true,
+        deliveryDecision: 'notify',
+        headline: 'Stale prior success',
+        fullText: 'this stale text must not be delivered',
+      }), 'utf-8')
+      const staleDate = new Date(Date.now() - 60_000)
+      await utimes(notificationPath, staleDate, staleDate)
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          throw new Error('fresh script failure')
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'stale-artifact-fail',
+        jobName: 'external_derivatives_data_collect_8h',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_external_derivatives_data_collect.sh'),
+          notificationPath,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(delivered).toHaveLength(1)
+      })
+
+      expect(delivered[0]).toContain('script cron failed before notification artifact was written')
+      expect(delivered[0]).toContain('error=fresh script failure')
+      expect(delivered[0]).not.toContain('stale text')
+      const errors = eventLog.recent({ type: 'cron.error' })
+      expect(errors[0].payload).toMatchObject({
+        jobId: 'stale-artifact-fail',
+        parsedReason: 'script cron failed before notification artifact was written',
+      })
+    })
+  })
+
   // ==================== Error handling ====================
 
   describe('error handling', () => {
@@ -214,11 +679,144 @@ describe('cron listener', () => {
       })
       expect((errors[0].payload as any).durationMs).toBeGreaterThanOrEqual(0)
     })
+
+    it('records a cron.dropped event when a second cron.fire arrives while processing', async () => {
+      let release!: () => void
+      const blocker = new Promise<void>(resolveBlocker => { release = resolveBlocker })
+      mockEngine.askWithSession.mockImplementationOnce(async () => {
+        await blocker
+        return { text: 'STATUS: CRON_SKIP\nREASON: done', media: [] }
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'first-job',
+        jobName: 'first-job',
+        payload: 'long job',
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => {
+        expect(mockEngine.askWithSession).toHaveBeenCalledTimes(1)
+      })
+      await eventLog.append('cron.fire', {
+        jobId: 'second-job',
+        jobName: 'second-job',
+        payload: 'should be dropped',
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        const dropped = eventLog.recent({ type: 'cron.dropped' })
+        expect(dropped).toHaveLength(1)
+      })
+      const dropped = eventLog.recent({ type: 'cron.dropped' })
+      expect(dropped[0].payload).toMatchObject({
+        jobId: 'second-job',
+        jobName: 'second-job',
+        reason: 'listener_already_processing',
+        droppedWhileProcessing: true,
+      })
+
+      release()
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+    })
   })
 
   // ==================== Lifecycle ====================
 
   describe('lifecycle', () => {
+    it('replays unmatched cron.fire events that existed before listener start', async () => {
+      const fire = await eventLog.append('cron.fire', {
+        jobId: 'pre-start-fire',
+        jobName: 'pre-start-fire',
+        payload: 'replay me',
+      } satisfies CronFirePayload)
+
+      listener.start()
+
+      await vi.waitFor(() => {
+        expect(mockEngine.askWithSession).toHaveBeenCalledTimes(1)
+      })
+
+      expect(mockEngine.askWithSession).toHaveBeenCalledWith(
+        'replay me',
+        session,
+        expect.objectContaining({ historyPreamble: expect.any(String) }),
+      )
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[0].payload).toMatchObject({
+        jobId: 'pre-start-fire',
+        sourceFireSeq: fire.seq,
+      })
+    })
+
+    it('does not replay startup cron.fire events that already have source-linked completion', async () => {
+      const fire = await eventLog.append('cron.fire', {
+        jobId: 'already-done-fire',
+        jobName: 'already-done-fire',
+        payload: 'do not replay',
+      } satisfies CronFirePayload)
+      await eventLog.append('cron.done', {
+        jobId: 'already-done-fire',
+        jobName: 'already-done-fire',
+        sourceFireSeq: fire.seq,
+        reply: 'ok',
+        durationMs: 1,
+        delivered: false,
+      })
+
+      listener.start()
+
+      await new Promise((r) => setTimeout(r, 50))
+      expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+    })
+
+    it('replays only the unmatched latest fire when legacy completion precedes another same-job fire', async () => {
+      await eventLog.append('cron.fire', {
+        jobId: 'legacy-job',
+        jobName: 'legacy-job',
+        payload: 'old fire',
+      } satisfies CronFirePayload)
+      await eventLog.append('cron.done', {
+        jobId: 'legacy-job',
+        jobName: 'legacy-job',
+        reply: 'legacy completion without sourceFireSeq',
+        durationMs: 1,
+        delivered: false,
+      })
+      const latestFire = await eventLog.append('cron.fire', {
+        jobId: 'legacy-job',
+        jobName: 'legacy-job',
+        payload: 'latest fire',
+      } satisfies CronFirePayload)
+
+      listener.start()
+
+      await vi.waitFor(() => {
+        expect(mockEngine.askWithSession).toHaveBeenCalledTimes(1)
+      })
+
+      expect(mockEngine.askWithSession).toHaveBeenCalledWith(
+        'latest fire',
+        session,
+        expect.objectContaining({ historyPreamble: expect.any(String) }),
+      )
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(2)
+      })
+      const done = eventLog.recent({ type: 'cron.done' })
+      expect(done[1].payload).toMatchObject({
+        jobId: 'legacy-job',
+        sourceFireSeq: latestFire.seq,
+      })
+    })
+
     it('should stop receiving events after stop()', async () => {
       listener.start()
       listener.stop()
@@ -242,5 +840,35 @@ describe('cron listener', () => {
       listener.stop()
       // No error
     })
+  })
+})
+
+describe('parseCronResponse', () => {
+  it('should parse CRON_SKIP with reason', () => {
+    const r = parseCronResponse('STATUS: CRON_SKIP\nREASON: no notification needed.')
+    expect(r.status).toBe('CRON_SKIP')
+    expect(r.reason).toBe('no notification needed.')
+    expect(r.content).toBe('')
+    expect(r.unparsed).toBe(false)
+  })
+
+  it('should parse CRON_NOTIFY with content', () => {
+    const r = parseCronResponse([
+      'STATUS: CRON_NOTIFY',
+      'REASON: notification needed.',
+      'CONTENT: send this to the user.',
+    ].join('\n'))
+    expect(r.status).toBe('CRON_NOTIFY')
+    expect(r.reason).toBe('notification needed.')
+    expect(r.content).toBe('send this to the user.')
+    expect(r.unparsed).toBe(false)
+  })
+
+  it('should fail open on unstructured text', () => {
+    const r = parseCronResponse('plain text note')
+    expect(r.status).toBe('CRON_NOTIFY')
+    expect(r.reason).toBe('unparsed response')
+    expect(r.content).toBe('plain text note')
+    expect(r.unparsed).toBe(true)
   })
 })

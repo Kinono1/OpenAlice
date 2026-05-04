@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { unlink } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { createCronEngine, parseDuration, nextCronFire, computeNextRun } from './engine.js'
 import { createEventLog, type EventLog, type EventLogEntry } from '../../core/event-log.js'
 import type { CronEngine, CronFirePayload } from './engine.js'
@@ -55,6 +55,38 @@ describe('cron engine', () => {
         enabled: true,
         payload: 'hello',
         schedule: { kind: 'every', every: '1h' },
+      })
+    })
+
+    it('should add a script job and emit script metadata on fire', async () => {
+      const fired: EventLogEntry[] = []
+      eventLog.subscribeType('cron.fire', (e) => fired.push(e))
+
+      const id = await engine.add({
+        name: 'script-job',
+        kind: 'script',
+        schedule: { kind: 'every', every: '1h' },
+        payload: '',
+        script: {
+          path: '/repo/OpenAlice/scripts/cron_eth_carry_refresh_pipeline.sh',
+          cwd: '/repo/OpenAlice',
+          notificationPath: '/repo/OpenAlice/data/runtime/eth_carry_status/eth_carry_actionability_notification.json',
+        },
+      })
+
+      await engine.runNow(id)
+
+      expect(fired).toHaveLength(1)
+      const p = fired[0].payload as CronFirePayload
+      expect(p).toMatchObject({
+        jobId: id,
+        jobName: 'script-job',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: '/repo/OpenAlice/scripts/cron_eth_carry_refresh_pipeline.sh',
+          cwd: '/repo/OpenAlice',
+        },
       })
     })
 
@@ -151,7 +183,7 @@ describe('cron engine', () => {
       expect(p.payload).toBe('run me now')
     })
 
-    it('should update lastRunAtMs and lastStatus', async () => {
+    it('marks a fired job as pending until the listener reports completion', async () => {
       const id = await engine.add({
         name: 'state-check',
         schedule: { kind: 'every', every: '1h' },
@@ -162,7 +194,71 @@ describe('cron engine', () => {
 
       const job = engine.get(id)!
       expect(job.state.lastRunAtMs).toBe(clock)
+      expect(job.state.lastStatus).toBe('fired')
+      expect(job.state.consecutiveErrors).toBe(0)
+    })
+
+    it('marks a fired job ok after cron.done', async () => {
+      const id = await engine.add({
+        name: 'done-check',
+        schedule: { kind: 'every', every: '1h' },
+        payload: 'x',
+      })
+
+      await engine.runNow(id)
+      await eventLog.append('cron.done', {
+        jobId: id,
+        jobName: 'done-check',
+        reply: 'ok',
+        durationMs: 5,
+        delivered: false,
+      })
+
+      const job = engine.get(id)!
       expect(job.state.lastStatus).toBe('ok')
+      expect(job.state.consecutiveErrors).toBe(0)
+    })
+
+    it('marks a fired job error and backs off after cron.error', async () => {
+      const id = await engine.add({
+        name: 'error-check',
+        schedule: { kind: 'every', every: '1h' },
+        payload: 'x',
+      })
+
+      await engine.runNow(id)
+      await eventLog.append('cron.error', {
+        jobId: id,
+        jobName: 'error-check',
+        error: 'script failed',
+        durationMs: 5,
+      })
+
+      const job = engine.get(id)!
+      expect(job.state.lastStatus).toBe('error')
+      expect(job.state.consecutiveErrors).toBe(1)
+      expect(job.state.nextRunAtMs).toBeGreaterThan(clock)
+      expect(job.state.nextRunAtMs).toBeLessThanOrEqual(clock + 30_000 + 2_000)
+    })
+
+    it('treats cron.dropped as an execution error', async () => {
+      const id = await engine.add({
+        name: 'drop-check',
+        schedule: { kind: 'every', every: '1h' },
+        payload: 'x',
+      })
+
+      await engine.runNow(id)
+      await eventLog.append('cron.dropped', {
+        jobId: id,
+        jobName: 'drop-check',
+        reason: 'listener_already_processing',
+        droppedWhileProcessing: true,
+      })
+
+      const job = engine.get(id)!
+      expect(job.state.lastStatus).toBe('error')
+      expect(job.state.consecutiveErrors).toBe(1)
     })
 
     it('should throw on runNow of nonexistent job', async () => {
@@ -195,6 +291,48 @@ describe('cron engine', () => {
       expect(jobs[0].name).toBe('persist-me')
 
       engine2.stop()
+    })
+
+    it('preserves externally installed script jobs when the running engine saves its in-memory store', async () => {
+      await engine.add({
+        name: 'managed-by-engine',
+        schedule: { kind: 'every', every: '1h' },
+        payload: 'hello',
+      })
+      const before = JSON.parse(await readFile(storePath, 'utf-8')) as { jobs: any[] }
+      before.jobs.push({
+        id: 'external1',
+        name: 'external_derivatives_data_collect_8h',
+        enabled: true,
+        kind: 'script',
+        schedule: { kind: 'cron', cron: '7 */8 * * *', timezone: 'UTC' },
+        payload: '',
+        script: {
+          path: '/repo/OpenAlice/scripts/cron_external_derivatives_data_collect.sh',
+        },
+        state: {
+          nextRunAtMs: Date.UTC(2026, 4, 2, 0, 7, 0),
+          lastRunAtMs: null,
+          lastStatus: null,
+          consecutiveErrors: 0,
+        },
+        createdAt: Date.UTC(2026, 4, 2, 0, 0, 0),
+      })
+      await writeFile(storePath, `${JSON.stringify(before, null, 2)}\n`, 'utf-8')
+
+      await engine.add({
+        name: 'second-managed-job',
+        schedule: { kind: 'every', every: '2h' },
+        payload: 'world',
+      })
+
+      const after = JSON.parse(await readFile(storePath, 'utf-8')) as { jobs: any[] }
+      expect(after.jobs.map(job => job.name)).toEqual(expect.arrayContaining([
+        'managed-by-engine',
+        'second-managed-job',
+        'external_derivatives_data_collect_8h',
+      ]))
+      expect(engine.list().some(job => job.name === 'external_derivatives_data_collect_8h')).toBe(true)
     })
   })
 
@@ -283,6 +421,30 @@ describe('nextCronFire', () => {
     const next = nextCronFire('*/15 * * * *', base)
     expect(next).toBe(new Date('2025-06-01T10:15:00Z').getTime())
   })
+
+  it('should evaluate UTC cron schedules without local timezone drift', () => {
+    const base = new Date('2026-03-08T07:59:30Z').getTime()
+    const next = nextCronFire('0 8 * * *', base, 'UTC')
+    expect(next).toBe(new Date('2026-03-08T08:00:00Z').getTime())
+  })
+
+  it('should reject out-of-range cron fields', () => {
+    const base = new Date('2025-06-01T10:00:00Z').getTime()
+
+    expect(nextCronFire('60 * * * *', base)).toBeNull()
+    expect(nextCronFire('0 24 * * *', base)).toBeNull()
+    expect(nextCronFire('0 9 0 * *', base)).toBeNull()
+    expect(nextCronFire('0 9 * 13 *', base)).toBeNull()
+    expect(nextCronFire('0 9 * * 8', base)).toBeNull()
+  })
+
+  it('should reject huge or reversed cron ranges before expanding them', () => {
+    const base = new Date('2025-06-01T10:00:00Z').getTime()
+
+    expect(nextCronFire('0-999999999999999999999 * * * *', base)).toBeNull()
+    expect(nextCronFire('30-10 * * * *', base)).toBeNull()
+    expect(nextCronFire('*/999999999999999999999 * * * *', base)).toBeNull()
+  })
 })
 
 describe('computeNextRun', () => {
@@ -300,5 +462,11 @@ describe('computeNextRun', () => {
   it('should return null for at (past)', () => {
     const past = new Date(Date.now() - 60000).toISOString()
     expect(computeNextRun({ kind: 'at', at: past }, Date.now())).toBeNull()
+  })
+
+  it('should pass UTC cron timezone through computeNextRun', () => {
+    const base = new Date('2026-03-08T07:59:30Z').getTime()
+    expect(computeNextRun({ kind: 'cron', cron: '0 8 * * *', timezone: 'UTC' }, base))
+      .toBe(new Date('2026-03-08T08:00:00Z').getTime())
   })
 })

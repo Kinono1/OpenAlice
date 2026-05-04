@@ -15,28 +15,39 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { EventLog } from '../../core/event-log.js'
+import type { EventLog, EventLogEntry } from '../../core/event-log.js'
 
 // ==================== Types ====================
 
 export type CronSchedule =
   | { kind: 'at'; at: string }
   | { kind: 'every'; every: string }
-  | { kind: 'cron'; cron: string }
+  | { kind: 'cron'; cron: string; timezone?: 'local' | 'UTC' }
 
 export interface CronJobState {
   nextRunAtMs: number | null
   lastRunAtMs: number | null
-  lastStatus: 'ok' | 'error' | null
+  lastStatus: 'fired' | 'ok' | 'error' | null
   consecutiveErrors: number
+}
+
+export type CronJobKind = 'agent' | 'script'
+
+export interface CronScriptSpec {
+  path: string
+  args?: string[]
+  cwd?: string
+  notificationPath?: string
 }
 
 export interface CronJob {
   id: string
   name: string
   enabled: boolean
+  kind?: CronJobKind
   schedule: CronSchedule
   payload: string
+  script?: CronScriptSpec
   state: CronJobState
   createdAt: number
 }
@@ -44,7 +55,9 @@ export interface CronJob {
 export interface CronFirePayload {
   jobId: string
   jobName: string
+  kind?: CronJobKind
   payload: string
+  script?: CronScriptSpec
 }
 
 // ==================== CRUD Types ====================
@@ -53,6 +66,8 @@ export interface CronJobCreate {
   name: string
   schedule: CronSchedule
   payload: string
+  kind?: CronJobKind
+  script?: CronScriptSpec
   enabled?: boolean
 }
 
@@ -60,6 +75,8 @@ export interface CronJobPatch {
   name?: string
   schedule?: CronSchedule
   payload?: string
+  kind?: CronJobKind
+  script?: CronScriptSpec
   enabled?: boolean
 }
 
@@ -93,6 +110,10 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   let jobs: CronJob[] = []
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  let completionUnsubscribers: Array<() => void> = []
+  let saveChain: Promise<void> = Promise.resolve()
+  const removedJobIds = new Set<string>()
+  const removedJobNames = new Set<string>()
 
   // ---------- persistence ----------
 
@@ -111,10 +132,44 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   }
 
   async function save(): Promise<void> {
+    jobs = await mergeExternallyInstalledJobs(jobs)
     await mkdir(dirname(storePath), { recursive: true })
     const tmp = `${storePath}.${process.pid}.tmp`
     await writeFile(tmp, JSON.stringify({ jobs }, null, 2), 'utf-8')
     await rename(tmp, storePath)
+  }
+
+  async function saveQueued(): Promise<void> {
+    const run = saveChain.then(() => save())
+    saveChain = run.catch(() => undefined)
+    return run
+  }
+
+  async function mergeExternallyInstalledJobs(currentJobs: CronJob[]): Promise<CronJob[]> {
+    let persistedJobs: CronJob[]
+    try {
+      const raw = await readFile(storePath, 'utf-8')
+      const data = JSON.parse(raw) as { jobs?: unknown }
+      persistedJobs = Array.isArray(data.jobs) ? data.jobs as CronJob[] : []
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return currentJobs
+      }
+      throw err
+    }
+
+    const currentIds = new Set(currentJobs.map(job => job.id))
+    const currentNames = new Set(currentJobs.map(job => job.name))
+    const merged = [...currentJobs]
+    for (const persisted of persistedJobs) {
+      if (!persisted || typeof persisted.id !== 'string' || typeof persisted.name !== 'string') continue
+      if (removedJobIds.has(persisted.id) || removedJobNames.has(persisted.name)) continue
+      if (currentIds.has(persisted.id) || currentNames.has(persisted.name)) continue
+      merged.push(persisted)
+      currentIds.add(persisted.id)
+      currentNames.add(persisted.name)
+    }
+    return merged
   }
 
   // ---------- timer ----------
@@ -150,26 +205,28 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     }
 
     if (!stopped) {
-      await save()
+      await saveQueued()
       armTimer()
     }
   }
 
   async function fireJob(job: CronJob, currentMs: number): Promise<void> {
     job.state.lastRunAtMs = currentMs
+    job.state.lastStatus = 'fired'
+    let fireAppendFailed = false
 
     try {
       await eventLog.append('cron.fire', {
         jobId: job.id,
         jobName: job.name,
+        kind: job.kind ?? 'agent',
         payload: job.payload,
+        script: job.script,
       } satisfies CronFirePayload)
-
-      job.state.lastStatus = 'ok'
-      job.state.consecutiveErrors = 0
     } catch (err) {
       job.state.lastStatus = 'error'
       job.state.consecutiveErrors += 1
+      fireAppendFailed = true
     }
 
     // Compute next run
@@ -177,12 +234,57 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       // One-shot — disable after execution
       job.enabled = false
       job.state.nextRunAtMs = null
-    } else if (job.state.consecutiveErrors > 0) {
+    } else if (fireAppendFailed || job.state.lastStatus === 'error') {
       job.state.nextRunAtMs = currentMs + errorBackoffMs(job.state.consecutiveErrors)
     } else {
       job.state.nextRunAtMs = computeNextRun(job.schedule, currentMs)
     }
   }
+
+  function subscribeCompletionEvents(): void {
+    if (completionUnsubscribers.length > 0) return
+    const onDone = eventLog.subscribeType('cron.done', (entry) => {
+      void handleCompletionEvent(entry, 'ok')
+    })
+    const onError = eventLog.subscribeType('cron.error', (entry) => {
+      void handleCompletionEvent(entry, 'error')
+    })
+    const onDropped = eventLog.subscribeType('cron.dropped', (entry) => {
+      void handleCompletionEvent(entry, 'error')
+    })
+    completionUnsubscribers = [onDone, onError, onDropped]
+  }
+
+  async function handleCompletionEvent(entry: EventLogEntry, status: 'ok' | 'error'): Promise<void> {
+    const payload = entry.payload as { jobId?: unknown }
+    const jobId = typeof payload?.jobId === 'string' ? payload.jobId : null
+    if (!jobId) return
+
+    const job = jobs.find((j) => j.id === jobId)
+    if (!job) return
+    if (job.state.lastRunAtMs !== null && entry.ts < job.state.lastRunAtMs) return
+
+    if (status === 'ok') {
+      job.state.lastStatus = 'ok'
+      job.state.consecutiveErrors = 0
+    } else {
+      job.state.lastStatus = 'error'
+      job.state.consecutiveErrors += 1
+      if (job.enabled && job.schedule.kind !== 'at') {
+        job.state.nextRunAtMs = entry.ts + errorBackoffMs(job.state.consecutiveErrors)
+        if (timer) { clearTimeout(timer); timer = null }
+        armTimer()
+      }
+    }
+
+    try {
+      await saveQueued()
+    } catch {
+      // Completion state is still updated in memory; the next explicit save will retry persistence.
+    }
+  }
+
+  subscribeCompletionEvents()
 
   // ---------- public ----------
 
@@ -201,13 +303,15 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         }
       }
 
-      await save()
+      await saveQueued()
       armTimer()
     },
 
     stop() {
       stopped = true
       if (timer) { clearTimeout(timer); timer = null }
+      for (const unsubscribe of completionUnsubscribers) unsubscribe()
+      completionUnsubscribers = []
     },
 
     async add(params) {
@@ -218,8 +322,10 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         id,
         name: params.name,
         enabled: params.enabled ?? true,
+        kind: params.kind ?? 'agent',
         schedule: params.schedule,
         payload: params.payload,
+        script: params.script,
         state: {
           nextRunAtMs: computeNextRun(params.schedule, currentMs),
           lastRunAtMs: null,
@@ -230,7 +336,9 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       }
 
       jobs.push(job)
-      await save()
+      removedJobIds.delete(job.id)
+      removedJobNames.delete(job.name)
+      await saveQueued()
 
       // Re-arm in case this job is sooner
       if (timer) { clearTimeout(timer); timer = null }
@@ -245,6 +353,8 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
 
       if (patch.name !== undefined) job.name = patch.name
       if (patch.payload !== undefined) job.payload = patch.payload
+      if (patch.kind !== undefined) job.kind = patch.kind
+      if (patch.script !== undefined) job.script = patch.script
       if (patch.enabled !== undefined) job.enabled = patch.enabled
 
       if (patch.schedule !== undefined) {
@@ -253,7 +363,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         job.state.consecutiveErrors = 0
       }
 
-      await save()
+      await saveQueued()
       if (timer) { clearTimeout(timer); timer = null }
       armTimer()
     },
@@ -261,8 +371,10 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     async remove(id) {
       const idx = jobs.findIndex((j) => j.id === id)
       if (idx === -1) throw new Error(`cron job not found: ${id}`)
+      removedJobIds.add(jobs[idx].id)
+      removedJobNames.add(jobs[idx].name)
       jobs.splice(idx, 1)
-      await save()
+      await saveQueued()
     },
 
     list() {
@@ -273,7 +385,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       const job = jobs.find((j) => j.id === id)
       if (!job) throw new Error(`cron job not found: ${id}`)
       await fireJob(job, now())
-      await save()
+      await saveQueued()
     },
 
     get(id) {
@@ -295,7 +407,7 @@ export function computeNextRun(schedule: CronSchedule, afterMs: number): number 
       return ms ? afterMs + ms : null
     }
     case 'cron':
-      return nextCronFire(schedule.cron, afterMs)
+      return nextCronFire(schedule.cron, afterMs, schedule.timezone)
   }
 }
 
@@ -314,51 +426,97 @@ export function parseDuration(s: string): number | null {
  * Minimal cron expression parser (minute hour dom month dow).
  * Returns the next fire time after `afterMs`, or null if unparseable.
  */
-export function nextCronFire(expr: string, afterMs: number): number | null {
+export function nextCronFire(expr: string, afterMs: number, timezone: 'local' | 'UTC' = 'local'): number | null {
   const parts = expr.trim().split(/\s+/)
   if (parts.length !== 5) return null
 
-  const fields = parts.map(parseFieldValues)
+  const fields = [
+    parseFieldValues(parts[0], 0, 59),
+    parseFieldValues(parts[1], 0, 23),
+    parseFieldValues(parts[2], 1, 31),
+    parseFieldValues(parts[3], 1, 12),
+    parseFieldValues(parts[4], 0, 6),
+  ]
   if (fields.some((f) => f === null)) return null
 
   const [minutes, hours, doms, months, dows] = fields as number[][]
 
   const start = new Date(afterMs)
-  start.setSeconds(0, 0)
-  start.setMinutes(start.getMinutes() + 1)
+  if (timezone === 'UTC') {
+    start.setUTCSeconds(0, 0)
+    start.setUTCMinutes(start.getUTCMinutes() + 1)
+  } else {
+    start.setSeconds(0, 0)
+    start.setMinutes(start.getMinutes() + 1)
+  }
 
   const limit = afterMs + 366 * 24 * 60 * 60 * 1000
   const cursor = new Date(start)
 
   while (cursor.getTime() < limit) {
+    const parts = cronDateParts(cursor, timezone)
     if (
-      months.includes(cursor.getMonth() + 1) &&
-      doms.includes(cursor.getDate()) &&
-      dows.includes(cursor.getDay()) &&
-      hours.includes(cursor.getHours()) &&
-      minutes.includes(cursor.getMinutes())
+      months.includes(parts.month) &&
+      doms.includes(parts.dayOfMonth) &&
+      dows.includes(parts.dayOfWeek) &&
+      hours.includes(parts.hour) &&
+      minutes.includes(parts.minute)
     ) {
       return cursor.getTime()
     }
-    cursor.setMinutes(cursor.getMinutes() + 1)
+    if (timezone === 'UTC') {
+      cursor.setUTCMinutes(cursor.getUTCMinutes() + 1)
+    } else {
+      cursor.setMinutes(cursor.getMinutes() + 1)
+    }
   }
 
   return null
 }
 
-function parseFieldValues(field: string): number[] | null {
+function cronDateParts(date: Date, timezone: 'local' | 'UTC'): {
+  month: number
+  dayOfMonth: number
+  dayOfWeek: number
+  hour: number
+  minute: number
+} {
+  if (timezone === 'UTC') {
+    return {
+      month: date.getUTCMonth() + 1,
+      dayOfMonth: date.getUTCDate(),
+      dayOfWeek: date.getUTCDay(),
+      hour: date.getUTCHours(),
+      minute: date.getUTCMinutes(),
+    }
+  }
+  return {
+    month: date.getMonth() + 1,
+    dayOfMonth: date.getDate(),
+    dayOfWeek: date.getDay(),
+    hour: date.getHours(),
+    minute: date.getMinutes(),
+  }
+}
+
+function parseFieldValues(field: string, min: number, max: number): number[] | null {
   const result: number[] = []
 
   for (const part of field.split(',')) {
     const stepMatch = /^(\*|\d+-\d+)\/(\d+)$/.exec(part)
     if (stepMatch) {
-      const step = Number(stepMatch[2])
-      if (step === 0) return null
-      let start: number, end: number
+      const step = parseBoundedInteger(stepMatch[2], 1, max - min + 1)
+      if (step === null) return null
+      let start: number
+      let end: number
       if (stepMatch[1] === '*') {
-        start = 0; end = 59
+        start = min
+        end = max
       } else {
-        const [a, b] = stepMatch[1].split('-').map(Number)
+        const [aRaw, bRaw] = stepMatch[1].split('-')
+        const a = parseBoundedInteger(aRaw, min, max)
+        const b = parseBoundedInteger(bRaw, min, max)
+        if (a === null || b === null || a > b) return null
         start = a; end = b
       }
       for (let i = start; i <= end; i += step) result.push(i)
@@ -367,23 +525,31 @@ function parseFieldValues(field: string): number[] | null {
 
     const rangeMatch = /^(\d+)-(\d+)$/.exec(part)
     if (rangeMatch) {
-      const a = Number(rangeMatch[1])
-      const b = Number(rangeMatch[2])
+      const a = parseBoundedInteger(rangeMatch[1], min, max)
+      const b = parseBoundedInteger(rangeMatch[2], min, max)
+      if (a === null || b === null || a > b) return null
       for (let i = a; i <= b; i++) result.push(i)
       continue
     }
 
     if (part === '*') {
-      for (let i = 0; i <= 59; i++) result.push(i)
+      for (let i = min; i <= max; i++) result.push(i)
       continue
     }
 
-    const n = Number(part)
-    if (Number.isNaN(n)) return null
+    const n = parseBoundedInteger(part, min, max)
+    if (n === null) return null
     result.push(n)
   }
 
   return result.length > 0 ? result : null
+}
+
+function parseBoundedInteger(value: string | undefined, min: number, max: number): number | null {
+  if (!value || !/^\d+$/.test(value)) return null
+  const n = Number(value)
+  if (!Number.isSafeInteger(n) || n < min || n > max) return null
+  return n
 }
 
 // ==================== Error Backoff ====================

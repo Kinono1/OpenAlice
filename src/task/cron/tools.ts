@@ -15,16 +15,23 @@ const scheduleSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('at'),
     at: z.string().describe('ISO timestamp for one-shot execution, e.g. "2025-06-01T14:00:00Z"'),
-  }),
+  }).strict(),
   z.object({
     kind: z.literal('every'),
     every: z.string().describe('Repeating interval, e.g. "2h", "30m", "5m30s"'),
-  }),
+  }).strict(),
   z.object({
     kind: z.literal('cron'),
     cron: z.string().describe('5-field cron expression, e.g. "0 9 * * 1-5" (weekdays 9am)'),
-  }),
+    timezone: z.enum(['local', 'UTC']).optional().describe('Cron evaluation timezone. Use UTC for market-data jobs.'),
+  }).strict(),
 ])
+
+function hasScriptMetadata(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false
+  const record = input as Record<string, unknown>
+  return record.kind !== undefined || record.script !== undefined
+}
 
 // ==================== Factory ====================
 
@@ -65,8 +72,12 @@ export function createCronTools(cronEngine: CronEngine) {
           .enum(['main', 'isolated'])
           .optional()
           .describe('Where to run: "main" injects into heartbeat session (default), "isolated" runs in a fresh session'),
-      }),
-      execute: async ({ name, payload, schedule, enabled }) => {
+      }).strict(),
+      execute: async (input) => {
+        if (hasScriptMetadata(input)) {
+          return { error: 'cronAdd can only create agent cron jobs; script jobs must be installed by approved deterministic installers' }
+        }
+        const { name, payload, schedule, enabled } = input
         if (!schedule) {
           return { error: 'schedule is required' }
         }
@@ -95,8 +106,12 @@ export function createCronTools(cronEngine: CronEngine) {
           .enum(['main', 'isolated'])
           .optional()
           .describe('New session target'),
-      }),
-      execute: async ({ id, name, payload, schedule, enabled }) => {
+      }).strict(),
+      execute: async (input) => {
+        if (hasScriptMetadata(input)) {
+          return { error: 'cronUpdate cannot modify cron job kind or script metadata' }
+        }
+        const { id, name, payload, schedule, enabled } = input
         try {
           await cronEngine.update(id, { name, payload, schedule, enabled })
           return { ok: true }
