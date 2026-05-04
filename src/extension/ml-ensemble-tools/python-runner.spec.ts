@@ -2,7 +2,12 @@ import { existsSync } from "fs";
 import { resolve } from "path";
 import { describe, expect, it } from "vitest";
 import type { MarketData } from "../analysis-kit/data/interfaces";
-import { runMlEnsemblePredict } from "./python-runner";
+import {
+  MAX_ML_ENSEMBLE_INPUT_BYTES,
+  runMlEnsemblePredict,
+  serializeMlEnsembleInput,
+  validateMlEnsemblePythonOverride,
+} from "./python-runner";
 
 function makeRng(seed: number) {
   let s = seed >>> 0;
@@ -46,6 +51,33 @@ const hasLocalPython = existsSync(resolve(".venv/bin/python"));
 const maybeIt = hasLocalPython ? it : it.skip;
 
 describe("runMlEnsemblePredict", () => {
+  it("only accepts absolute Python interpreter paths from ML_ENSEMBLE_PYTHON", () => {
+    expect(validateMlEnsemblePythonOverride(undefined)).toBeNull();
+    expect(validateMlEnsemblePythonOverride("/opt/conda/envs/openalice/bin/python")).toBe(
+      "/opt/conda/envs/openalice/bin/python"
+    );
+    expect(validateMlEnsemblePythonOverride("/opt/conda/envs/openalice/bin/python3.11")).toBe(
+      "/opt/conda/envs/openalice/bin/python3.11"
+    );
+    expect(() => validateMlEnsemblePythonOverride("python3")).toThrow(/absolute path/);
+    expect(() => validateMlEnsemblePythonOverride("/tmp/run-anything")).toThrow(
+      /Python executable/
+    );
+    expect(() => validateMlEnsemblePythonOverride("/tmp/python\n--bad")).toThrow(
+      /control-line/
+    );
+  });
+
+  it("rejects oversized serialized inputs before writing the temp file", () => {
+    const candles = makePredictableCandles(10);
+    const oversized = {
+      candles,
+      modelSelectionMetric: "x".repeat(MAX_ML_ENSEMBLE_INPUT_BYTES),
+    };
+
+    expect(() => serializeMlEnsembleInput(oversized)).toThrow(/too large/);
+  });
+
   maybeIt(
     "beats baseline direction accuracy on synthetic data",
     async () => {
