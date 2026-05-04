@@ -18,7 +18,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsc --noEmit",
     "decision:validate": "python3 scripts/validate_decision_packet.py",
-    "governance:validate": "python3 scripts/validate_decision_packet.py",
+    "governance:validate": "python3 scripts/validate_decision_packet.py --output /tmp/openalice_decision_verdict.validation.json",
     "test:watch": "vitest",
     "research:strategy:mvp-validate": "tsx scripts/run_strategy_mvp_validation.ts",
     "research:strategy:validate": "tsx scripts/run_validation_pipeline.ts",
