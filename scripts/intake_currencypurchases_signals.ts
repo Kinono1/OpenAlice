@@ -54,6 +54,24 @@ export interface LocalGateResult {
   meta: Record<string, unknown>
 }
 
+export interface BridgePayloadFreshnessSummary {
+  mode: BridgePayload['mode']
+  signalCount: number
+  positiveTargets: number
+  zeroTargetSignalCount: number
+  freshSignalCount: number
+  ttlExpiredSignalCount: number
+  invalidTimestampCount: number
+  invalidTtlCount: number
+  maxSignalAgeMs: number | null
+  oldestAsOf: string | null
+  newestAsOf: string | null
+  minTtlMs: number | null
+  maxTtlMs: number | null
+  paperExecutionAllowed: false
+  liveExecutionAllowed: false
+}
+
 function main(): void {
   if (!existsSync(BRIDGE_PATH)) {
     console.log('cp_intake: bridge file not found, skipping')
@@ -84,6 +102,13 @@ function main(): void {
   }
 
   console.log(`cp_intake: mode=${payload.mode} signals=${payload.signals.length} cycle=${payload.cp_cycle_id}`)
+  const payloadSummary = summarizeBridgePayloadFreshness(payload)
+  writeTrace({
+    signal_id: 'BRIDGE',
+    step: 'payload_summary',
+    status: payloadSummary.freshSignalCount > 0 ? 'ok' : 'alert',
+    meta: payloadSummary,
+  })
 
   const executed = loadExecuted()
   const activeIds = new Set(payload.signals.map(s => s.signal_id))
@@ -132,6 +157,68 @@ function main(): void {
   saveExecuted(pruned)
 
   console.log(`cp_intake: ${intakeCount} signals processed, ${executed.length} total executed IDs`)
+}
+
+export function summarizeBridgePayloadFreshness(
+  payload: Pick<BridgePayload, 'mode' | 'signals'>,
+  nowMs = Date.now(),
+): BridgePayloadFreshnessSummary {
+  let positiveTargets = 0
+  let zeroTargetSignalCount = 0
+  let freshSignalCount = 0
+  let ttlExpiredSignalCount = 0
+  let invalidTimestampCount = 0
+  let invalidTtlCount = 0
+  let maxSignalAgeMs: number | null = null
+  let oldestAsOfMs: number | null = null
+  let newestAsOfMs: number | null = null
+  let minTtlMs: number | null = null
+  let maxTtlMs: number | null = null
+
+  for (const signal of payload.signals) {
+    const targetPositionPct = finiteNumber(signal.target_position_pct)
+    if (targetPositionPct != null && targetPositionPct > 0) positiveTargets += 1
+    if (targetPositionPct === 0) zeroTargetSignalCount += 1
+
+    const asOfMs = Date.parse(signal.as_of)
+    if (!Number.isFinite(asOfMs)) {
+      invalidTimestampCount += 1
+      continue
+    }
+    oldestAsOfMs = oldestAsOfMs == null ? asOfMs : Math.min(oldestAsOfMs, asOfMs)
+    newestAsOfMs = newestAsOfMs == null ? asOfMs : Math.max(newestAsOfMs, asOfMs)
+
+    const ttlMs = finiteNumber(signal.ttl_ms)
+    if (ttlMs == null || ttlMs <= 0 || ttlMs > 24 * 60 * 60 * 1000) {
+      invalidTtlCount += 1
+      continue
+    }
+    minTtlMs = minTtlMs == null ? ttlMs : Math.min(minTtlMs, ttlMs)
+    maxTtlMs = maxTtlMs == null ? ttlMs : Math.max(maxTtlMs, ttlMs)
+
+    const ageMs = nowMs - asOfMs
+    maxSignalAgeMs = maxSignalAgeMs == null ? ageMs : Math.max(maxSignalAgeMs, ageMs)
+    if (ageMs >= 0 && ageMs <= ttlMs) freshSignalCount += 1
+    else ttlExpiredSignalCount += 1
+  }
+
+  return {
+    mode: payload.mode,
+    signalCount: payload.signals.length,
+    positiveTargets,
+    zeroTargetSignalCount,
+    freshSignalCount,
+    ttlExpiredSignalCount,
+    invalidTimestampCount,
+    invalidTtlCount,
+    maxSignalAgeMs,
+    oldestAsOf: oldestAsOfMs == null ? null : new Date(oldestAsOfMs).toISOString(),
+    newestAsOf: newestAsOfMs == null ? null : new Date(newestAsOfMs).toISOString(),
+    minTtlMs,
+    maxTtlMs,
+    paperExecutionAllowed: false,
+    liveExecutionAllowed: false,
+  }
 }
 
 

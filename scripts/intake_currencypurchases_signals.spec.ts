@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   evaluateLocalGates,
+  summarizeBridgePayloadFreshness,
   type BridgePayload,
   type CPExtSignal,
   type ExecutedEntry,
@@ -137,5 +138,40 @@ describe('intake_currencypurchases_signals', () => {
       new Set(['CP-1']),
       nowMs,
     )).toMatchObject({ status: 'reject', meta: { reason: 'already_executed' } })
+  })
+
+  it('summarizes bridge payload freshness without enabling execution', () => {
+    const summary = summarizeBridgePayloadFreshness({
+      mode: 'observation',
+      signals: [
+        signal({ signal_id: 'fresh-zero', target_position_pct: 0 }),
+        signal({
+          signal_id: 'stale-positive',
+          as_of: '2026-05-03T23:00:00.000Z',
+          ttl_ms: 120_000,
+          target_position_pct: 0.1,
+        }),
+        signal({ signal_id: 'bad-time', as_of: 'not-a-date' }),
+        signal({ signal_id: 'bad-ttl', ttl_ms: 0 }),
+      ],
+    }, nowMs)
+
+    expect(summary).toEqual({
+      mode: 'observation',
+      signalCount: 4,
+      positiveTargets: 1,
+      zeroTargetSignalCount: 3,
+      freshSignalCount: 1,
+      ttlExpiredSignalCount: 1,
+      invalidTimestampCount: 1,
+      invalidTtlCount: 1,
+      maxSignalAgeMs: 3_600_000,
+      oldestAsOf: '2026-05-03T23:00:00.000Z',
+      newestAsOf: '2026-05-03T23:59:30.000Z',
+      minTtlMs: 120_000,
+      maxTtlMs: 120_000,
+      paperExecutionAllowed: false,
+      liveExecutionAllowed: false,
+    })
   })
 })
