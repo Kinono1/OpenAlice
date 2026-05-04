@@ -31,11 +31,11 @@ function clampActionToMaxRisk(
 function scoreToBaseAction(
   totalScore: number,
   preferReduceOnWeakSignal = false,
-): Exclude<ActionStatus, 'reduce' | 'exit'> {
+): ActionStatus {
   if (totalScore >= 85) return 'attack'
   if (totalScore >= 70) return 'attack-lite'
   if (totalScore >= 55) return 'probe'
-  if (totalScore >= 40) return preferReduceOnWeakSignal ? 'hold' : 'hold'
+  if (totalScore >= 40) return preferReduceOnWeakSignal ? 'reduce' : 'hold'
   return 'no-trade'
 }
 
@@ -47,7 +47,7 @@ export function evaluateSignalGovernance(
   const baseActionStatus = scoreToBaseAction(
     breakdown.totalScore,
     context.preferReduceOnWeakSignal,
-  )
+  ) as GovernanceEvaluation['baseActionStatus']
 
   const maxActionDuringFreeze = context.maxActionDuringFreeze ?? 'reduce'
   const eventWindowFrozen = context.eventWindowFrozen === true

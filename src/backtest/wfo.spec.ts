@@ -31,18 +31,21 @@ describe("wfo", () => {
       trainBars: 200,
       testBars: 60,
       stepBars: 60,
+      embargoBars: 0,
     });
 
     expect(windows.length).toBe(5);
     expect(windows[0]).toEqual({
       trainStart: 0,
       trainEndExclusive: 200,
+      embargoEndExclusive: 200,
       testStart: 200,
       testEndExclusive: 260,
     });
     expect(windows[4]).toEqual({
       trainStart: 240,
       trainEndExclusive: 440,
+      embargoEndExclusive: 440,
       testStart: 440,
       testEndExclusive: 500,
     });
@@ -98,5 +101,33 @@ describe("wfo", () => {
 
     expect(result.overallPassed).toBe(false);
     expect(result.windows.some((w) => w.gateReason === "insufficient_oos_trades")).toBe(true);
+  });
+
+  it("applies volatility gates inside each walk-forward window", () => {
+    const candles = makeCandles(360, 0.35);
+
+    const result = runStrategyWalkForward({
+      strategy: "breakout",
+      candles,
+      candidates: [{ allowShort: false, breakoutPeriod: 12, breakoutExitPeriod: 6 }],
+      volatilityGate: {
+        minVolatilityPct: 999,
+      },
+      config: {
+        trainBars: 180,
+        testBars: 60,
+        stepBars: 60,
+        minTradesPerWindow: 1,
+      },
+      costModel: {
+        feeRate: 0,
+        slippageBps: 0,
+        latencyBars: 0,
+      },
+    });
+
+    expect(result.overallPassed).toBe(false);
+    expect(result.windows.every((w) => !w.gatePassed)).toBe(true);
+    expect(result.windows.every((w) => w.outOfSample.tradeCount === 0)).toBe(true);
   });
 });

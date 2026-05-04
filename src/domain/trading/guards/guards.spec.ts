@@ -19,6 +19,7 @@ function makePlaceOrderOp(overrides: {
   action?: 'BUY' | 'SELL'
   orderType?: string
   cashQty?: number
+  lmtPrice?: number
   totalQuantity?: Decimal
 } = {}): Operation {
   const contract = makeContract({ symbol: overrides.symbol ?? 'AAPL' })
@@ -28,6 +29,9 @@ function makePlaceOrderOp(overrides: {
   order.totalQuantity = overrides.totalQuantity ?? new Decimal(10)
   if (overrides.cashQty != null) {
     order.cashQty = overrides.cashQty
+  }
+  if (overrides.lmtPrice != null) {
+    order.lmtPrice = overrides.lmtPrice
   }
   return { action: 'placeOrder', contract, order }
 }
@@ -90,6 +94,27 @@ describe('MaxPositionSizeGuard', () => {
     expect(result).toContain('30.0%')
   })
 
+  it('allows risk-reducing sells even when the current long position is already above limit', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'AAPL',
+        action: 'SELL',
+        cashQty: 5_000,
+      }),
+      positions: [
+        makePosition({
+          contract: makeContract({ symbol: 'AAPL' }),
+          side: 'long',
+          marketValue: 30_000,
+        }),
+      ],
+      account: { netLiquidation: 100_000 },
+    })
+
+    expect(guard.check(ctx)).toBeNull()
+  })
+
   it('uses default 25% if no option provided', () => {
     const guard = new MaxPositionSizeGuard({})
     const ctx = makeContext({
@@ -108,11 +133,28 @@ describe('MaxPositionSizeGuard', () => {
     expect(guard.check(ctx)).toBeNull()
   })
 
-  it('allows when addedValue cannot be estimated (qty-based, no existing position)', () => {
+  it('rejects qty-only new-symbol orders when it cannot estimate notional', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
     })
+
+    const result = guard.check(ctx)
+    expect(result).not.toBeNull()
+    expect(result).toContain('Cannot estimate position size')
+    expect(result).toContain('NEW_STOCK')
+  })
+
+  it('uses limit price to estimate qty-only new-symbol orders', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'NEW_STOCK',
+        totalQuantity: new Decimal(10),
+        lmtPrice: 50,
+      }),
+    })
+
     expect(guard.check(ctx)).toBeNull()
   })
 })

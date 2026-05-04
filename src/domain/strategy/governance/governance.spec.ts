@@ -65,6 +65,47 @@ describe('strategy governance', () => {
     expect(result.cappedByEventWindow).toBe(true)
   })
 
+  it('does not promote conservative signals during an event freeze window', () => {
+    const result = evaluateSignalGovernance(
+      {
+        sourceTier: 'L5',
+        useType: 'U4',
+        decisionStrength: 'D5',
+        sentiment: 'S+2',
+      },
+      {
+        eventWindowFrozen: true,
+        eventSeverity: 'high',
+        maxActionDuringFreeze: 'reduce',
+      },
+    )
+
+    expect(result.baseActionStatus).toBe('no-trade')
+    expect(result.actionStatus).toBe('no-trade')
+    expect(result.cappedByEventWindow).toBe(false)
+  })
+
+  it('maps weak signals to reduce only when preferReduceOnWeakSignal is enabled', () => {
+    const signalScore = {
+      sourceTier: 'L4',
+      useType: 'U4',
+      decisionStrength: 'D5',
+      sentiment: 'S0',
+    } as const
+
+    const holdResult = evaluateSignalGovernance(signalScore)
+    const reduceResult = evaluateSignalGovernance(signalScore, {
+      preferReduceOnWeakSignal: true,
+    })
+
+    expect(holdResult.breakdown.totalScore).toBeGreaterThanOrEqual(40)
+    expect(holdResult.breakdown.totalScore).toBeLessThan(55)
+    expect(holdResult.baseActionStatus).toBe('hold')
+    expect(holdResult.actionStatus).toBe('hold')
+    expect(reduceResult.baseActionStatus).toBe('reduce')
+    expect(reduceResult.actionStatus).toBe('reduce')
+  })
+
   it('drops weak signals to no-trade', () => {
     const result = evaluateSignalGovernance({
       sourceTier: 'L5',

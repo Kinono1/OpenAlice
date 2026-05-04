@@ -1,7 +1,47 @@
 import { UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import type { Order } from '@traderalice/ibkr'
 import type { OperationGuard, GuardContext } from './types.js'
 
 const DEFAULT_MAX_PERCENT = 25
+
+function estimateAddedNotionalUsd(
+  order: Order,
+  existing: { marketPrice: number } | undefined,
+): number | null {
+  const cashQty = order.cashQty !== UNSET_DOUBLE ? order.cashQty : undefined
+  if (typeof cashQty === 'number' && cashQty > 0) {
+    return cashQty
+  }
+
+  const qty = !order.totalQuantity.equals(UNSET_DECIMAL)
+    ? order.totalQuantity.toNumber()
+    : undefined
+  if (typeof qty !== 'number' || qty <= 0) {
+    return null
+  }
+
+  const limitPrice = order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : undefined
+  if (typeof limitPrice === 'number' && limitPrice > 0) {
+    return qty * limitPrice
+  }
+
+  if (existing && typeof existing.marketPrice === 'number' && existing.marketPrice > 0) {
+    return qty * existing.marketPrice
+  }
+
+  return null
+}
+
+function isRiskReducingOrder(
+  order: Order,
+  existing: { side: 'long' | 'short' } | undefined,
+): boolean {
+  if (!existing) return false
+  return (
+    (existing.side === 'long' && order.action === 'SELL') ||
+    (existing.side === 'short' && order.action === 'BUY')
+  )
+}
 
 export class MaxPositionSizeGuard implements OperationGuard {
   readonly name = 'max-position-size'
@@ -20,22 +60,17 @@ export class MaxPositionSizeGuard implements OperationGuard {
     const existing = positions.find(p => p.contract.symbol === symbol)
     const currentValue = existing?.marketValue ?? 0
 
-    // Estimate added value from IBKR Order fields
-    const { order } = operation
-    const cashQty = order.cashQty !== UNSET_DOUBLE ? order.cashQty : undefined
-    const qty = !order.totalQuantity.equals(UNSET_DECIMAL) ? order.totalQuantity.toNumber() : undefined
-
-    let addedValue = 0
-    if (cashQty && cashQty > 0) {
-      addedValue = cashQty
-    } else if (qty && existing) {
-      addedValue = qty * existing.marketPrice
+    const addedValue = estimateAddedNotionalUsd(operation.order, existing)
+    if (addedValue === null) {
+      if (!existing) {
+        return `Cannot estimate position size for ${symbol}: qty-only new-symbol order needs cashQty or limit price.`
+      }
+      return null
     }
-    // If we can't estimate (new symbol + qty-based without existing position), allow — broker will validate
 
-    if (addedValue === 0) return null
-
-    const projectedValue = currentValue + addedValue
+    const projectedValue = isRiskReducingOrder(operation.order, existing)
+      ? Math.max(0, currentValue - addedValue)
+      : currentValue + addedValue
     const percent = account.netLiquidation > 0 ? (projectedValue / account.netLiquidation) * 100 : 0
 
     if (percent > this.maxPercent) {

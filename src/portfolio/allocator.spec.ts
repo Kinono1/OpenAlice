@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allocateInverseVolatilityPortfolio,
+  allocateSignedRiskConstrainedPortfolio,
   computeAnnualizedVolatility,
   computeCorrelation,
   computePortfolioAnnualizedVolatility,
@@ -92,5 +93,38 @@ describe("portfolio allocator", () => {
     expect(corr).toBeGreaterThan(-1);
     expect(corr).toBeLessThanOrEqual(1);
     expect(portfolioVol).toBeGreaterThan(0);
+  });
+
+  it("allocates signed alpha without converting shorts into long-only risk budgets", () => {
+    const btc = makeSeries(300, 0.001, 0.01);
+    const eth = makeSeries(300, 0.0008, 0.012);
+    const sol = makeSeries(300, -0.0002, 0.02);
+
+    const result = allocateSignedRiskConstrainedPortfolio(
+      { btc, eth, sol },
+      { btc: 0.8, eth: -0.6, sol: 0.2 },
+      {
+        targetGrossExposure: 1,
+        maxNetExposure: 0.25,
+      },
+    );
+
+    expect(result.signedWeights.btc).toBeGreaterThan(0);
+    expect(result.signedWeights.eth).toBeLessThan(0);
+    expect(Math.abs(result.netExposure)).toBeLessThanOrEqual(0.25 + 1e-12);
+    expect(result.grossExposure).toBeLessThanOrEqual(1);
+    expect(result.predictedAnnualVolatility).toBeGreaterThan(0);
+  });
+
+  it("rejects signed allocation when all alpha scores are neutral", () => {
+    expect(() =>
+      allocateSignedRiskConstrainedPortfolio(
+        {
+          btc: makeSeries(100, 0, 0.01),
+          eth: makeSeries(100, 0, 0.01),
+        },
+        { btc: 0, eth: 0 },
+      ),
+    ).toThrow("zero gross alpha");
   });
 });

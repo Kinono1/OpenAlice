@@ -13,16 +13,23 @@ export interface PboResult {
 export interface DeflatedSharpeInput {
   returns: number[]
   trialCount: number
+  independentBetCount?: number
+  minimumIndependentBets?: number
 }
 
 export interface DeflatedSharpeResult {
   observedSharpe: number
   benchmarkSharpe: number
   dsrValue: number
-  dsrProbability: number
+  dsrProbability: number | null
   skewness: number
   kurtosis: number
   trialCount: number
+  independentBets?: number
+  minimumIndependentBets?: number
+  diagnosticQuality?: 'ok' | 'low_sample'
+  promotionEligible?: boolean
+  blockedReason?: string | null
 }
 
 export interface SignificanceGateInput {
@@ -32,6 +39,47 @@ export interface SignificanceGateInput {
   trialCount?: number
   pboThreshold?: number
   dsrMin?: number
+  trialLedger?: TrialLedgerSummary | null
+  fdrDiagnostics?: {
+    method?: string
+    bootstrapDirectionStable?: boolean | null
+    unstableBootstrapCandidateIndexes?: number[] | null
+    blockSizeSet?: number[] | null
+  } | null
+}
+
+export interface TrialLedgerSummary {
+  rawM: number
+  effectiveM?: number | null
+  rawMComplete: boolean
+  includesFailedTrials: boolean
+  failedTrialCount: number
+  survivingTrialCount: number
+  fdrMethodPrimary?: 'BY_raw_m' | 'BY_effective_m' | 'BH_secondary' | string
+}
+
+export function buildTrialLedgerSummary(input: {
+  rawM: number
+  effectiveM?: number | null
+  survivingTrialCount?: number
+  rawMComplete?: boolean
+  includesFailedTrials?: boolean
+  fdrMethodPrimary?: TrialLedgerSummary['fdrMethodPrimary']
+}): TrialLedgerSummary {
+  const rawM = Math.max(0, Math.floor(input.rawM))
+  const survivingTrialCount = Math.max(
+    0,
+    Math.min(rawM, Math.floor(input.survivingTrialCount ?? (rawM > 0 ? 1 : 0))),
+  )
+  return {
+    rawM,
+    effectiveM: input.effectiveM ?? null,
+    rawMComplete: input.rawMComplete ?? false,
+    includesFailedTrials: input.includesFailedTrials ?? false,
+    failedTrialCount: Math.max(0, rawM - survivingTrialCount),
+    survivingTrialCount,
+    fdrMethodPrimary: input.fdrMethodPrimary ?? 'BY_raw_m',
+  }
 }
 
 export interface SignificanceGateResult {
@@ -40,6 +88,10 @@ export interface SignificanceGateResult {
   dsrResult: DeflatedSharpeResult
   pboThreshold: number
   dsrMin: number
+  candidateTrialCount?: number
+  fdrQ?: number | null
+  trialLedger?: TrialLedgerSummary | null
+  fdrDiagnostics?: SignificanceGateInput['fdrDiagnostics']
 }
 
 export interface SpaLikeInput {
@@ -47,6 +99,8 @@ export interface SpaLikeInput {
   benchmarkIndex: number
   bootstrapSamples?: number
   blockSize?: number
+  blockSizeSet?: number[]
+  alpha?: number
 }
 
 export interface SpaLikeCandidateResult {
@@ -56,12 +110,24 @@ export interface SpaLikeCandidateResult {
   pValue: number
   bootstrapSamples: number
   blockSize: number
+  blockSensitivity: Array<{
+    blockSize: number
+    observedMeanExcess: number
+    pValue: number
+    passed: boolean
+  }>
+  bootstrapDirectionStable: boolean
+  unstableBootstrap: boolean
 }
 
 export interface SpaLikeResult {
   benchmarkIndex: number
   bootstrapSamples: number
   blockSize: number
+  alpha: number
+  blockSizeSet: number[]
+  bootstrapDirectionStable: boolean
+  unstableBootstrapCandidateIndexes: number[]
   items: SpaLikeCandidateResult[]
 }
 
@@ -119,6 +185,14 @@ export function computeDeflatedSharpe(input: DeflatedSharpeInput): DeflatedSharp
     throw new Error('trialCount must be > 0.')
   }
   const trialCount = Math.max(2, Math.floor(input.trialCount))
+  const independentBets = Math.max(
+    0,
+    Math.floor(input.independentBetCount ?? input.returns.length),
+  )
+  const minimumIndependentBets = Math.max(
+    1,
+    Math.floor(input.minimumIndependentBets ?? 100),
+  )
 
   const observedSharpe = sharpe(returns)
   const skewness = skew(returns)
@@ -137,7 +211,8 @@ export function computeDeflatedSharpe(input: DeflatedSharpeInput): DeflatedSharp
   const benchmarkSharpe = sigmaSharpe * ((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2)
 
   const zScore = (observedSharpe - benchmarkSharpe) / Math.max(sigmaSharpe, 1e-12)
-  const dsrProbability = normalCdf(zScore)
+  const sampleEligible = independentBets >= minimumIndependentBets
+  const dsrProbability = sampleEligible ? normalCdf(zScore) : null
   const dsrValue = observedSharpe - benchmarkSharpe
 
   return {
@@ -148,12 +223,23 @@ export function computeDeflatedSharpe(input: DeflatedSharpeInput): DeflatedSharp
     skewness,
     kurtosis,
     trialCount,
+    independentBets,
+    minimumIndependentBets,
+    diagnosticQuality: sampleEligible ? 'ok' : 'low_sample',
+    promotionEligible: sampleEligible,
+    blockedReason: sampleEligible
+      ? null
+      : `independent_bets_below_${minimumIndependentBets}`,
   }
 }
 
 export function evaluateSignificanceGate(input: SignificanceGateInput): SignificanceGateResult {
-  const pboThreshold = clamp(input.pboThreshold ?? 0.2, 0, 1)
-  const dsrMin = input.dsrMin ?? 0
+  const pboThreshold = clamp(input.pboThreshold ?? 0.1, 0, 1)
+  const dsrMin = clamp(input.dsrMin ?? 0.95, 0, 1)
+  const candidateTrialCount = Math.max(
+    0,
+    Math.floor(input.trialCount ?? input.candidateReturns.length),
+  )
 
   const pboResult =
     input.candidateReturns.length < 2
@@ -173,7 +259,7 @@ export function evaluateSignificanceGate(input: SignificanceGateInput): Signific
     trialCount: input.trialCount ?? input.candidateReturns.length,
   })
 
-  const passed = pboResult.pbo < pboThreshold && dsrResult.dsrValue > dsrMin
+  const passed = pboResult.pbo <= pboThreshold && (dsrResult.dsrProbability ?? -Infinity) >= dsrMin
 
   return {
     passed,
@@ -181,6 +267,10 @@ export function evaluateSignificanceGate(input: SignificanceGateInput): Signific
     dsrResult,
     pboThreshold,
     dsrMin,
+    candidateTrialCount,
+    fdrQ: null,
+    trialLedger: input.trialLedger ?? null,
+    fdrDiagnostics: input.fdrDiagnostics ?? null,
   }
 }
 
@@ -193,72 +283,140 @@ export function computeSpaLikePValues(input: SpaLikeInput): SpaLikeResult {
   const bootstrapSamples = resolveSpaBootstrapSamples(
     input.bootstrapSamples ?? DEFAULT_SPA_BOOTSTRAP_SAMPLES,
   )
+  const alpha = validateSpaAlpha(input.alpha ?? 0.1)
   const minLen = Math.min(...candidateReturns.map((series) => series.length))
   const normalizedReturns = candidateReturns.map((series) =>
     series.slice(series.length - minLen),
   )
   const blockSize = resolveSpaBlockSize(
-    input.blockSize ?? Math.max(4, Math.round(Math.sqrt(minLen))),
+    input.blockSize ?? defaultSpaBlockSize(minLen),
     minLen,
   )
-  const benchmarkReturns = normalizedReturns[benchmarkIndex]
+  const blockSizeSet = resolveSpaBlockSizeSet(
+    [...(input.blockSizeSet ?? defaultSpaBlockSizeSet(blockSize)), blockSize],
+    minLen,
+  )
+  const itemSets = blockSizeSet.map(size => computeSpaLikeItems({
+    normalizedReturns,
+    benchmarkIndex,
+    bootstrapSamples,
+    blockSize: size,
+  }))
+  const primaryItems = computeSpaLikeItems({
+    normalizedReturns,
+    benchmarkIndex,
+    bootstrapSamples,
+    blockSize,
+  })
+  const itemSetsByBlockSize = new Map<number, SpaLikeCandidateResult[]>(
+    itemSets.map((items, index) => [blockSizeSet[index], items]),
+  )
+  itemSetsByBlockSize.set(blockSize, primaryItems)
+  const enrichedItems = primaryItems.map(item => {
+    const blockSensitivity = blockSizeSet.map(size => {
+      const sensitivityItem = itemSetsByBlockSize.get(size)?.[item.candidateIndex] ?? item
+      return {
+        blockSize: size,
+        observedMeanExcess: sensitivityItem.observedMeanExcess,
+        pValue: sensitivityItem.pValue,
+        passed: sensitivityItem.pValue <= alpha,
+      }
+    })
+    const passStates = new Set(blockSensitivity.map(entry => entry.passed))
+    const signStates = new Set(blockSensitivity.map(entry =>
+      entry.observedMeanExcess > 0 ? 'positive' : entry.observedMeanExcess < 0 ? 'negative' : 'zero',
+    ))
+    const bootstrapDirectionStable = passStates.size <= 1 && signStates.size <= 1
+    return {
+      ...item,
+      blockSensitivity,
+      bootstrapDirectionStable,
+      unstableBootstrap: !bootstrapDirectionStable,
+    }
+  })
+  const unstableBootstrapCandidateIndexes = enrichedItems
+    .filter(item => item.unstableBootstrap)
+    .map(item => item.candidateIndex)
 
   return {
     benchmarkIndex,
     bootstrapSamples,
     blockSize,
-    items: normalizedReturns.map((returns, candidateIndex) => {
-      if (candidateIndex === benchmarkIndex) {
-        return {
-          candidateIndex,
-          benchmarkIndex,
-          observedMeanExcess: 0,
-          pValue: 1,
-          bootstrapSamples,
-          blockSize,
-        }
-      }
+    alpha,
+    blockSizeSet,
+    bootstrapDirectionStable: unstableBootstrapCandidateIndexes.length === 0,
+    unstableBootstrapCandidateIndexes,
+    items: enrichedItems,
+  }
+}
 
-      const excessReturns = returns.map(
-        (value, index) => value - benchmarkReturns[index],
-      )
-      const observedMeanExcess = mean(excessReturns)
-      if (observedMeanExcess <= 0) {
-        return {
-          candidateIndex,
-          benchmarkIndex,
-          observedMeanExcess,
-          pValue: 1,
-          bootstrapSamples,
-          blockSize,
-        }
-      }
-
-      const centeredExcess = excessReturns.map(
-        (value) => value - observedMeanExcess,
-      )
-      let exceedCount = 0
-      for (
-        let sampleIndex = 0;
-        sampleIndex < bootstrapSamples;
-        sampleIndex += 1
-      ) {
-        const sampled = sampleMovingBlocks(centeredExcess, blockSize, sampleIndex)
-        if (mean(sampled) >= observedMeanExcess) {
-          exceedCount += 1
-        }
-      }
-
+function computeSpaLikeItems(input: {
+  normalizedReturns: number[][]
+  benchmarkIndex: number
+  bootstrapSamples: number
+  blockSize: number
+}): SpaLikeCandidateResult[] {
+  const benchmarkReturns = input.normalizedReturns[input.benchmarkIndex]
+  return input.normalizedReturns.map((returns, candidateIndex) => {
+    if (candidateIndex === input.benchmarkIndex) {
       return {
         candidateIndex,
-        benchmarkIndex,
-        observedMeanExcess,
-        pValue: (exceedCount + 1) / (bootstrapSamples + 1),
-        bootstrapSamples,
-        blockSize,
+        benchmarkIndex: input.benchmarkIndex,
+        observedMeanExcess: 0,
+        pValue: 1,
+        bootstrapSamples: input.bootstrapSamples,
+        blockSize: input.blockSize,
+        blockSensitivity: [],
+        bootstrapDirectionStable: true,
+        unstableBootstrap: false,
       }
-    }),
-  }
+    }
+
+    const excessReturns = returns.map(
+      (value, index) => value - benchmarkReturns[index],
+    )
+    const observedMeanExcess = mean(excessReturns)
+    if (observedMeanExcess <= 0) {
+      return {
+        candidateIndex,
+        benchmarkIndex: input.benchmarkIndex,
+        observedMeanExcess,
+        pValue: 1,
+        bootstrapSamples: input.bootstrapSamples,
+        blockSize: input.blockSize,
+        blockSensitivity: [],
+        bootstrapDirectionStable: true,
+        unstableBootstrap: false,
+      }
+    }
+
+    const centeredExcess = excessReturns.map(
+      (value) => value - observedMeanExcess,
+    )
+    let exceedCount = 0
+    for (
+      let sampleIndex = 0;
+      sampleIndex < input.bootstrapSamples;
+      sampleIndex += 1
+    ) {
+      const sampled = sampleMovingBlocks(centeredExcess, input.blockSize, sampleIndex)
+      if (mean(sampled) >= observedMeanExcess) {
+        exceedCount += 1
+      }
+    }
+
+    return {
+      candidateIndex,
+      benchmarkIndex: input.benchmarkIndex,
+      observedMeanExcess,
+      pValue: (exceedCount + 1) / (input.bootstrapSamples + 1),
+      bootstrapSamples: input.bootstrapSamples,
+      blockSize: input.blockSize,
+      blockSensitivity: [],
+      bootstrapDirectionStable: true,
+      unstableBootstrap: false,
+    }
+  })
 }
 
 function validateCandidateReturns(candidateReturns: number[][]): number[][] {
@@ -294,11 +452,38 @@ function resolveSpaBootstrapSamples(value: number): number {
   return value
 }
 
+function defaultSpaBlockSize(seriesLength: number): number {
+  return Math.max(5, Math.floor(seriesLength ** (1 / 3)))
+}
+
+function defaultSpaBlockSizeSet(baseBlockSize: number): number[] {
+  return [
+    Math.max(2, Math.floor(0.5 * baseBlockSize)),
+    baseBlockSize,
+    2 * baseBlockSize,
+  ]
+}
+
 function resolveSpaBlockSize(value: number, seriesLength: number): number {
   if (!Number.isInteger(value) || value < 2) {
     throw new Error('spaBlockSize must be an integer >= 2.')
   }
   return Math.min(value, Math.max(2, seriesLength))
+}
+
+function resolveSpaBlockSizeSet(values: number[], seriesLength: number): number[] {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error('spaBlockSizeSet must be a non-empty array.')
+  }
+  return [...new Set(values.map(value => resolveSpaBlockSize(value, seriesLength)))]
+    .sort((left, right) => left - right)
+}
+
+function validateSpaAlpha(value: number): number {
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error('spa alpha must be in (0, 1].')
+  }
+  return value
 }
 
 function resolvePartitions(value: number): number {
@@ -357,7 +542,7 @@ function sharpe(values: number[]): number {
   const variance = values.reduce((sum, value) => {
     const centered = value - avg
     return sum + centered * centered
-  }, 0) / values.length
+  }, 0) / (values.length - 1)
   if (variance <= 0) {
     return 0
   }

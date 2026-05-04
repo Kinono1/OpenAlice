@@ -4,11 +4,16 @@ import type {
   StrategyName,
   StrategyParams,
 } from './strategy-validation/types.js'
-import type { BacktestCostModel, BacktestMetrics } from './strategy-validation/backtest.js'
+import type {
+  BacktestCostModel,
+  BacktestMetrics,
+  StrategyBacktestInput,
+} from './strategy-validation/backtest.js'
 
 export interface WfoWindow {
   trainStart: number
   trainEndExclusive: number
+  embargoEndExclusive: number
   testStart: number
   testEndExclusive: number
 }
@@ -19,6 +24,7 @@ export interface WfoConfig {
   stepBars?: number
   degradationThreshold?: number
   minTradesPerWindow?: number
+  embargoBars?: number
 }
 
 export interface WfoCandidate<TParams> {
@@ -57,6 +63,9 @@ export interface StrategyWfoInput {
   candidates: StrategyParams[]
   initialCapital?: number
   costModel?: Partial<BacktestCostModel>
+  regimeGate?: StrategyBacktestInput['regimeGate']
+  volatilityGate?: StrategyBacktestInput['volatilityGate']
+  entryGate?: StrategyBacktestInput['entryGate']
   config: WfoConfig
 }
 
@@ -66,24 +75,26 @@ const DEFAULT_WFO_CONFIG: Required<WfoConfig> = {
   stepBars: 24 * 90,
   degradationThreshold: 0.4,
   minTradesPerWindow: 1,
+  embargoBars: 24,
 }
 
 export function createRollingWindows(totalBars: number, config: WfoConfig): WfoWindow[] {
   const resolved = resolveWfoConfig(config)
   const windows: WfoWindow[] = []
-  if (totalBars < resolved.trainBars + resolved.testBars) {
+  if (totalBars < resolved.trainBars + resolved.embargoBars + resolved.testBars) {
     return windows
   }
 
   for (
     let trainStart = 0;
-    trainStart + resolved.trainBars + resolved.testBars <= totalBars;
+    trainStart + resolved.trainBars + resolved.embargoBars + resolved.testBars <= totalBars;
     trainStart += resolved.stepBars
   ) {
     const trainEndExclusive = trainStart + resolved.trainBars
-    const testStart = trainEndExclusive
+    const embargoEndExclusive = trainEndExclusive + resolved.embargoBars
+    const testStart = embargoEndExclusive
     const testEndExclusive = testStart + resolved.testBars
-    windows.push({ trainStart, trainEndExclusive, testStart, testEndExclusive })
+    windows.push({ trainStart, trainEndExclusive, embargoEndExclusive, testStart, testEndExclusive })
   }
   return windows
 }
@@ -101,7 +112,7 @@ export function runStrategyWalkForward(input: StrategyWfoInput): WfoResult<Strat
   const windows = createRollingWindows(input.candles.length, config)
   if (windows.length === 0) {
     throw new Error(
-      `Not enough candles for WFO. Need at least ${config.trainBars + config.testBars}, got ${input.candles.length}.`,
+      `Not enough candles for WFO. Need at least ${config.trainBars + config.embargoBars + config.testBars}, got ${input.candles.length}.`,
     )
   }
 
@@ -119,6 +130,9 @@ export function runStrategyWalkForward(input: StrategyWfoInput): WfoResult<Strat
         params: selected.params,
         initialCapital: input.initialCapital,
         costModel: input.costModel,
+        regimeGate: input.regimeGate,
+        volatilityGate: input.volatilityGate,
+        entryGate: input.entryGate,
       }).metrics,
     )
 
@@ -131,6 +145,9 @@ export function runStrategyWalkForward(input: StrategyWfoInput): WfoResult<Strat
           params: candidate.params,
           initialCapital: input.initialCapital,
           costModel: input.costModel,
+          regimeGate: input.regimeGate,
+          volatilityGate: input.volatilityGate,
+          entryGate: input.entryGate,
         }).metrics,
       )
       if (
@@ -150,6 +167,9 @@ export function runStrategyWalkForward(input: StrategyWfoInput): WfoResult<Strat
         params: selected.params,
         initialCapital: input.initialCapital,
         costModel: input.costModel,
+        regimeGate: input.regimeGate,
+        volatilityGate: input.volatilityGate,
+        entryGate: input.entryGate,
       }).metrics,
     )
 
@@ -232,6 +252,10 @@ function resolveWfoConfig(config: WfoConfig): Required<WfoConfig> {
     minTradesPerWindow: toNonNegativeInt(
       config.minTradesPerWindow ?? DEFAULT_WFO_CONFIG.minTradesPerWindow,
       'minTradesPerWindow',
+    ),
+    embargoBars: toNonNegativeInt(
+      config.embargoBars ?? DEFAULT_WFO_CONFIG.embargoBars,
+      'embargoBars',
     ),
   }
 }
