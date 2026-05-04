@@ -9,6 +9,7 @@
 
 import Decimal from 'decimal.js'
 import { Contract, Order, ContractDescription, ContractDetails, UNSET_DECIMAL } from '@traderalice/ibkr'
+import { withTimeout } from '../../core/timeout.js'
 import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type TpSlParams } from './brokers/types.js'
 import { TradingGit } from './git/TradingGit.js'
 import type {
@@ -106,6 +107,7 @@ export class UnifiedTradingAccount {
   private static readonly OFFLINE_THRESHOLD = 6
   private static readonly RECOVERY_BASE_MS = 5_000
   private static readonly RECOVERY_MAX_MS = 60_000
+  private static readonly SYNC_ORDER_TIMEOUT_MS = 15_000
 
   private _consecutiveFailures = 0
   private _lastError?: string
@@ -115,6 +117,7 @@ export class UnifiedTradingAccount {
   private _recovering = false
   private _disabled = false
   private _connectPromise: Promise<void>
+  private _accountOperationQueue: Promise<void> = Promise.resolve()
 
   constructor(broker: IBroker, options: UnifiedTradingAccountOptions = {}) {
     this.broker = broker
@@ -259,6 +262,21 @@ export class UnifiedTradingAccount {
       const brokerErr = BrokerError.from(err)
       this._onFailure(brokerErr)
       throw brokerErr
+    }
+  }
+
+  private async _withAccountOperationLock<T>(task: () => Promise<T>): Promise<T> {
+    const prev = this._accountOperationQueue
+    let release!: () => void
+    this._accountOperationQueue = new Promise<void>(resolve => {
+      release = resolve
+    })
+
+    await prev
+    try {
+      return await task()
+    } finally {
+      release()
     }
   }
 
@@ -435,21 +453,25 @@ export class UnifiedTradingAccount {
   }
 
   async push(): Promise<PushResult> {
-    if (this._disabled) {
-      throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
-    }
-    if (this.health === 'offline') {
-      throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
-    }
-    const result = await this.git.push()
-    Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
-    return result
+    return this._withAccountOperationLock(async () => {
+      if (this._disabled) {
+        throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
+      }
+      if (this.health === 'offline') {
+        throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
+      }
+      const result = await this.git.push()
+      Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
+      return result
+    })
   }
 
   async reject(reason?: string): Promise<RejectResult> {
-    const result = await this.git.reject(reason)
-    Promise.resolve(this._onPostReject?.(this.id)).catch(() => {})
-    return result
+    return this._withAccountOperationLock(async () => {
+      const result = await this.git.reject(reason)
+      Promise.resolve(this._onPostReject?.(this.id)).catch(() => {})
+      return result
+    })
   }
 
   // ==================== Git queries ====================
@@ -466,7 +488,11 @@ export class UnifiedTradingAccount {
     return this.git.status()
   }
 
-  async sync(opts?: { delayMs?: number }): Promise<SyncResult> {
+  async sync(opts?: { delayMs?: number; orderTimeoutMs?: number }): Promise<SyncResult> {
+    return this._withAccountOperationLock(() => this._syncLocked(opts))
+  }
+
+  private async _syncLocked(opts?: { delayMs?: number; orderTimeoutMs?: number }): Promise<SyncResult> {
     const pendingByOrderId = new Map<string, { orderId: string; symbol: string }>()
     for (const pendingOrder of this.git.getPendingOrderIds()) {
       pendingByOrderId.delete(pendingOrder.orderId)
@@ -481,9 +507,25 @@ export class UnifiedTradingAccount {
     if (opts?.delayMs) await new Promise(r => setTimeout(r, opts.delayMs))
 
     const updatesByOrderId = new Map<string, OrderStatusUpdate>()
+    const orderTimeoutMs = opts?.orderTimeoutMs ?? UnifiedTradingAccount.SYNC_ORDER_TIMEOUT_MS
 
     for (const { orderId, symbol } of pendingOrders) {
-      const brokerOrder = await this._callBroker(() => this.broker.getOrder(orderId))
+      let brokerOrder: OpenOrder | null
+      try {
+        brokerOrder = await this._callBroker(() =>
+          withTimeout(
+            `sync order ${orderId}`,
+            orderTimeoutMs,
+            () => this.broker.getOrder(orderId),
+          ),
+        )
+      } catch (err) {
+        console.warn(
+          `UTA[${this.id}]: sync order ${orderId} skipped:`,
+          err instanceof Error ? err.message : String(err),
+        )
+        continue
+      }
       if (!brokerOrder) continue
 
       const status = brokerOrder.orderState.status

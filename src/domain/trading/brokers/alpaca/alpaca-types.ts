@@ -4,6 +4,8 @@ export interface AlpacaBrokerConfig {
   apiKey: string
   secretKey: string
   paper: boolean
+  allowLiveTrading?: boolean
+  liveTradingConfirmation?: string
 }
 
 // ==================== Alpaca SDK raw shapes ====================

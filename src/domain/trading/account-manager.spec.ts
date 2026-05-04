@@ -6,10 +6,22 @@ import {
   MockBroker,
   makeContract,
 } from './brokers/mock/index.js'
+import type { AccountConfig } from '../../core/config.js'
 import './contract-ext.js'
 
 function makeUta(broker: MockBroker): UnifiedTradingAccount {
   return new UnifiedTradingAccount(broker)
+}
+
+function makeAccountConfig(id: string, enabled = true): AccountConfig {
+  return {
+    id,
+    label: id,
+    type: 'mock',
+    enabled,
+    guards: [],
+    brokerConfig: {},
+  }
 }
 
 describe('AccountManager', () => {
@@ -47,6 +59,51 @@ describe('AccountManager', () => {
 
     it('returns undefined for unknown id', () => {
       expect(manager.get('nope')).toBeUndefined()
+    })
+  })
+
+  describe('initConfiguredAccounts', () => {
+    it('shares a single initialization for concurrent calls to the same account', async () => {
+      const cfg = makeAccountConfig('race')
+      const uta = makeUta(new MockBroker({ id: 'race' }))
+      const initUnlocked = vi
+        .spyOn(manager as any, 'initAccountUnlocked')
+        .mockImplementation(async () => {
+          await new Promise(resolve => setTimeout(resolve, 1))
+          manager.add(uta)
+          return uta
+        })
+
+      const [first, second] = await Promise.all([
+        manager.initAccount(cfg),
+        manager.initAccount(cfg),
+      ])
+
+      expect(initUnlocked).toHaveBeenCalledTimes(1)
+      expect(first).toBe(second)
+      expect(manager.size).toBe(1)
+      expect(manager.get('race')).toBe(first)
+    })
+
+    it('continues after one account fails to initialize', async () => {
+      const initAccount = vi.spyOn(manager, 'initAccount').mockImplementation(async (cfg) => {
+        if (cfg.id === 'bad') {
+          throw new Error('boom')
+        }
+        return {} as UnifiedTradingAccount
+      })
+
+      const summary = await manager.initConfiguredAccounts([
+        makeAccountConfig('ok-1'),
+        makeAccountConfig('bad'),
+        makeAccountConfig('disabled', false),
+        makeAccountConfig('ok-2'),
+      ])
+
+      expect(initAccount).toHaveBeenCalledTimes(3)
+      expect(initAccount.mock.calls.map(([cfg]) => cfg.id)).toEqual(['ok-1', 'bad', 'ok-2'])
+      expect(summary.initialized).toEqual(['ok-1', 'ok-2'])
+      expect(summary.failed).toEqual([{ id: 'bad', error: 'boom' }])
     })
   })
 

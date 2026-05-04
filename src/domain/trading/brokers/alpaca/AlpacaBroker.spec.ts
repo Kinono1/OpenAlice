@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Decimal from 'decimal.js'
 import { Contract, Order, UNSET_DOUBLE } from '@traderalice/ibkr'
 import { AlpacaBroker } from './AlpacaBroker.js'
 import '../../contract-ext.js'
+
+const LIVE_TRADING_CONFIRMATION = 'I_UNDERSTAND_LIVE_TRADING_RISK'
 
 // ==================== Alpaca SDK mock ====================
 
@@ -95,6 +97,10 @@ describe('AlpacaBroker — searchContracts()', () => {
 
 describe('AlpacaBroker — placeOrder()', () => {
   beforeEach(() => vi.clearAllMocks())
+  afterEach(() => {
+    delete process.env.OPENALICE_ALLOW_LIVE_TRADING
+    delete process.env.OPENALICE_LIVE_TRADING_CONFIRMATION
+  })
 
   it('returns success with orderId on filled order', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
@@ -138,6 +144,48 @@ describe('AlpacaBroker — placeOrder()', () => {
     const result = await acc.placeOrder(contract, order)
     expect(result.success).toBe(false)
     expect(result.error).toContain('Cannot resolve')
+  })
+
+  it('blocks live placeOrder without explicit confirmation', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: false })
+    const createOrder = vi.fn()
+    ;(acc as any).client = { createOrder }
+    const contract = new Contract()
+    contract.symbol = 'AAPL'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal(1)
+
+    const result = await acc.placeOrder(contract, order)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('requires explicit live trading confirmation')
+    expect(createOrder).not.toHaveBeenCalled()
+  })
+
+  it('allows live placeOrder with explicit config confirmation', async () => {
+    const acc = new AlpacaBroker({
+      apiKey: 'k',
+      secretKey: 's',
+      paper: false,
+      allowLiveTrading: true,
+      liveTradingConfirmation: LIVE_TRADING_CONFIRMATION,
+    } as any)
+    const createOrder = vi.fn().mockResolvedValue({ id: 'live-ord-1', status: 'new' })
+    ;(acc as any).client = { createOrder }
+    const contract = new Contract()
+    contract.symbol = 'AAPL'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal(1)
+
+    const result = await acc.placeOrder(contract, order)
+
+    expect(result.success).toBe(true)
+    expect(result.orderId).toBe('live-ord-1')
+    expect(createOrder).toHaveBeenCalledOnce()
   })
 })
 
@@ -225,6 +273,10 @@ describe('AlpacaBroker — getContractDetails()', () => {
 
 describe('AlpacaBroker — modifyOrder()', () => {
   beforeEach(() => vi.clearAllMocks())
+  afterEach(() => {
+    delete process.env.OPENALICE_ALLOW_LIVE_TRADING
+    delete process.env.OPENALICE_LIVE_TRADING_CONFIRMATION
+  })
 
   it('calls client.replaceOrder with mapped IBKR fields', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
@@ -267,12 +319,28 @@ describe('AlpacaBroker — modifyOrder()', () => {
     expect(result.success).toBe(false)
     expect(result.error).toBe('Order not found')
   })
+
+  it('blocks live modifyOrder without explicit confirmation', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: false })
+    const replaceOrder = vi.fn()
+    ;(acc as any).client = { replaceOrder }
+
+    const result = await acc.modifyOrder('ord-1', new Order())
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('requires explicit live trading confirmation')
+    expect(replaceOrder).not.toHaveBeenCalled()
+  })
 })
 
 // ==================== cancelOrder ====================
 
 describe('AlpacaBroker — cancelOrder()', () => {
   beforeEach(() => vi.clearAllMocks())
+  afterEach(() => {
+    delete process.env.OPENALICE_ALLOW_LIVE_TRADING
+    delete process.env.OPENALICE_LIVE_TRADING_CONFIRMATION
+  })
 
   it('returns PlaceOrderResult with Cancelled status on success', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
@@ -296,12 +364,28 @@ describe('AlpacaBroker — cancelOrder()', () => {
     expect(result.success).toBe(false)
     expect(result.error).toBe('Cannot cancel')
   })
+
+  it('blocks live cancelOrder without explicit confirmation', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: false })
+    const cancelOrder = vi.fn()
+    ;(acc as any).client = { cancelOrder }
+
+    const result = await acc.cancelOrder('ord-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('requires explicit live trading confirmation')
+    expect(cancelOrder).not.toHaveBeenCalled()
+  })
 })
 
 // ==================== closePosition ====================
 
 describe('AlpacaBroker — closePosition()', () => {
   beforeEach(() => vi.clearAllMocks())
+  afterEach(() => {
+    delete process.env.OPENALICE_ALLOW_LIVE_TRADING
+    delete process.env.OPENALICE_LIVE_TRADING_CONFIRMATION
+  })
 
   it('full close via native client.closePosition', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
@@ -367,6 +451,20 @@ describe('AlpacaBroker — closePosition()', () => {
     const result = await acc.closePosition(contract)
     expect(result.success).toBe(false)
     expect(result.error).toContain('Cannot resolve')
+  })
+
+  it('blocks live closePosition without explicit confirmation', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: false })
+    const closePosition = vi.fn()
+    ;(acc as any).client = { closePosition }
+    const contract = new Contract()
+    contract.symbol = 'AAPL'
+
+    const result = await acc.closePosition(contract)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('requires explicit live trading confirmation')
+    expect(closePosition).not.toHaveBeenCalled()
   })
 })
 

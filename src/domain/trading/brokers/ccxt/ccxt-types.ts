@@ -44,11 +44,26 @@ export interface FundingRate {
   timestamp: Date
 }
 
+export interface FundingRateHistoryPoint {
+  contract: Contract
+  fundingRate: number
+  timestamp: Date
+  previousFundingRate?: number
+}
+
 export interface OpenInterestSnapshot {
   contract: Contract
   openInterest: number
   openInterestValue?: number
   timestamp: Date
+}
+
+export interface OpenInterestHistoryPoint {
+  contract: Contract
+  openInterest: number
+  openInterestValue?: number
+  timestamp: Date
+  timeframe?: string
 }
 
 export interface LiquidationSummary {

@@ -81,19 +81,17 @@ export function normalizeOpenInterestPayload(payload: unknown): {
   }
 }
 
-export function summarizeLiquidationRows(
-  rows: unknown[] | null | undefined,
-): {
-  count: number
-  totalContracts: number
-  totalNotional?: number
-  latestTimestamp?: number
-} {
-  let totalContracts = 0
-  let totalNotional = 0
-  let latestTimestamp = 0
+export interface NormalizedLiquidationRow {
+  contracts: number
+  price: number
+  notional?: number
+  timestamp?: number
+}
 
-  for (const row of rows ?? []) {
+export function normalizeLiquidationRows(
+  rows: unknown[] | null | undefined,
+): NormalizedLiquidationRow[] {
+  return (rows ?? []).map((row) => {
     const record = asRecord(row)
     const contracts =
       readFirstFiniteNumber(record, [
@@ -109,22 +107,47 @@ export function summarizeLiquidationRows(
       'notionalValue',
       'value',
     ])
-    const timestamp = readTimestamp(record) ?? 0
-
-    if (Number.isFinite(contracts)) {
-      totalContracts += contracts
-    }
-
     const resolvedNotional =
       explicitNotional != null
         ? explicitNotional
         : Number.isFinite(contracts) && Number.isFinite(price)
           ? contracts * price
-          : 0
+          : undefined
 
-    if (Number.isFinite(resolvedNotional)) {
-      totalNotional += resolvedNotional
+    return {
+      contracts,
+      price,
+      notional:
+        resolvedNotional != null && Number.isFinite(resolvedNotional) && resolvedNotional > 0
+          ? resolvedNotional
+          : undefined,
+      timestamp: readTimestamp(record),
     }
+  })
+}
+
+export function summarizeLiquidationRows(
+  rows: unknown[] | null | undefined,
+): {
+  count: number
+  totalContracts: number
+  totalNotional?: number
+  latestTimestamp?: number
+} {
+  let totalContracts = 0
+  let totalNotional = 0
+  let latestTimestamp = 0
+
+  for (const normalized of normalizeLiquidationRows(rows)) {
+    const contracts = normalized.contracts
+    if (Number.isFinite(contracts)) {
+      totalContracts += contracts
+    }
+
+    if (normalized.notional != null) {
+      totalNotional += normalized.notional
+    }
+    const timestamp = normalized.timestamp ?? 0
     if (timestamp > latestTimestamp) {
       latestTimestamp = timestamp
     }

@@ -40,6 +40,29 @@ import { RequestBridge } from './request-bridge.js'
 import { resolveSymbol } from './ibkr-contracts.js'
 import type { IbkrBrokerConfig } from './ibkr-types.js'
 
+const LIVE_TRADING_CONFIRMATION = 'I_UNDERSTAND_LIVE_TRADING_RISK'
+
+type IbkrLiveTradingConfig = IbkrBrokerConfig & {
+  paper?: boolean
+  allowLiveTrading?: boolean
+  liveTradingConfirmation?: string
+}
+
+type IbkrClientWithRequests = EClient & {
+  reqMatchingSymbols(reqId: number, pattern: string): void
+  reqContractDetails(reqId: number, contract: Contract): void
+  placeOrder(orderId: number, contract: Contract, order: Order): void
+  cancelOrder(orderId: number, orderCancel: OrderCancel): void
+  reqMktData(
+    reqId: number,
+    contract: Contract,
+    genericTickList: string,
+    snapshot: boolean,
+    regulatorySnapshot: boolean,
+    mktDataOptions: unknown[],
+  ): void
+}
+
 export class IbkrBroker implements IBroker {
   // ---- Self-registration ----
 
@@ -49,6 +72,8 @@ export class IbkrBroker implements IBroker {
     clientId: z.number().int().default(0),
     accountId: z.string().optional(),
     paper: z.boolean().default(true),
+    allowLiveTrading: z.boolean().optional(),
+    liveTradingConfirmation: z.string().optional(),
   })
 
   static configFields: BrokerConfigField[] = [
@@ -57,6 +82,8 @@ export class IbkrBroker implements IBroker {
     { name: 'clientId', type: 'number', label: 'Client ID', default: 0 },
     { name: 'accountId', type: 'text', label: 'Account ID', placeholder: 'Auto-detected from TWS' },
     { name: 'paper', type: 'boolean', label: 'Paper Trading', default: true, description: 'Authentication is handled by TWS/Gateway login — no API keys needed.' },
+    { name: 'allowLiveTrading', type: 'boolean', label: 'Allow Live Trading', default: false, description: `Required for live IBKR write operations. Must be paired with liveTradingConfirmation=${LIVE_TRADING_CONFIRMATION}.` },
+    { name: 'liveTradingConfirmation', type: 'password', label: 'Live Trading Confirmation', sensitive: true, description: `Set exactly to ${LIVE_TRADING_CONFIRMATION} to enable non-paper write operations.` },
   ]
 
   static fromConfig(config: { id: string; label?: string; brokerConfig: Record<string, unknown> }): IbkrBroker {
@@ -68,7 +95,10 @@ export class IbkrBroker implements IBroker {
       port: bc.port,
       clientId: bc.clientId,
       accountId: bc.accountId,
-    })
+      paper: bc.paper,
+      allowLiveTrading: bc.allowLiveTrading,
+      liveTradingConfirmation: bc.liveTradingConfirmation,
+    } as IbkrLiveTradingConfig)
   }
 
   // ---- Instance ----
@@ -77,7 +107,7 @@ export class IbkrBroker implements IBroker {
   readonly label: string
 
   private bridge: RequestBridge
-  private client: EClient
+  private client: IbkrClientWithRequests
   private readonly config: IbkrBrokerConfig
   private accountId: string | null = null
 
@@ -86,7 +116,7 @@ export class IbkrBroker implements IBroker {
     this.id = config.id ?? 'ibkr'
     this.label = config.label ?? 'Interactive Brokers'
     this.bridge = new RequestBridge()
-    this.client = new EClient(this.bridge)
+    this.client = new EClient(this.bridge) as IbkrClientWithRequests
   }
 
   // ==================== Lifecycle ====================
@@ -150,6 +180,9 @@ export class IbkrBroker implements IBroker {
   // ==================== Trading operations ====================
 
   async placeOrder(contract: Contract, order: Order, _tpsl?: TpSlParams): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('placeOrder')
+    if (liveGuard) return liveGuard
+
     // TWS requires exchange and currency on the contract. Upstream layers
     // (staging, AI tools) typically only populate symbol + secType.
     // Default to SMART routing. Currency defaults to USD — non-USD markets
@@ -174,6 +207,9 @@ export class IbkrBroker implements IBroker {
   }
 
   async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('modifyOrder')
+    if (liveGuard) return liveGuard
+
     try {
       // IBKR modifies orders by re-calling placeOrder with the same orderId
       const original = await this.getOrder(orderId)
@@ -207,6 +243,9 @@ export class IbkrBroker implements IBroker {
   }
 
   async cancelOrder(orderId: string, orderCancel?: OrderCancel): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('cancelOrder')
+    if (liveGuard) return liveGuard
+
     try {
       const numericId = parseInt(orderId, 10)
       const promise = this.bridge.requestOrder(numericId)
@@ -222,6 +261,9 @@ export class IbkrBroker implements IBroker {
   }
 
   async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('closePosition')
+    if (liveGuard) return liveGuard
+
     const symbol = resolveSymbol(contract)
 
     // Find current position to determine side
@@ -247,6 +289,29 @@ export class IbkrBroker implements IBroker {
   }
 
   // ==================== Queries ====================
+
+  private checkLiveWriteAllowed(operation: string): PlaceOrderResult | null {
+    const liveConfig = this.config as IbkrLiveTradingConfig
+    if (liveConfig.paper !== false) {
+      return null
+    }
+
+    const configConfirmed =
+      liveConfig.allowLiveTrading === true &&
+      liveConfig.liveTradingConfirmation === LIVE_TRADING_CONFIRMATION
+    const envConfirmed =
+      process.env.OPENALICE_ALLOW_LIVE_TRADING === '1' &&
+      process.env.OPENALICE_LIVE_TRADING_CONFIRMATION === LIVE_TRADING_CONFIRMATION
+
+    if (configConfirmed || envConfirmed) {
+      return null
+    }
+
+    return {
+      success: false,
+      error: `Blocked IBKR live ${operation}: paper=false requires explicit live trading confirmation.`,
+    }
+  }
 
   /**
    * Get account summary.

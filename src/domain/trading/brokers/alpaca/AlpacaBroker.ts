@@ -36,6 +36,13 @@ import type {
 } from './alpaca-types.js'
 import { makeContract, resolveSymbol, mapAlpacaOrderStatus, makeOrderState } from './alpaca-contracts.js'
 
+const LIVE_TRADING_CONFIRMATION = 'I_UNDERSTAND_LIVE_TRADING_RISK'
+
+type LiveTradingConfig = {
+  allowLiveTrading?: boolean
+  liveTradingConfirmation?: string
+}
+
 /** Map IBKR orderType codes to Alpaca API order type strings. */
 function ibkrOrderTypeToAlpaca(orderType: string): string {
   switch (orderType) {
@@ -67,12 +74,16 @@ export class AlpacaBroker implements IBroker {
     paper: z.boolean().default(true),
     apiKey: z.string().optional(),
     apiSecret: z.string().optional(),
+    allowLiveTrading: z.boolean().optional(),
+    liveTradingConfirmation: z.string().optional(),
   })
 
   static configFields: BrokerConfigField[] = [
     { name: 'paper', type: 'boolean', label: 'Paper Trading', default: true, description: 'When enabled, orders are routed to Alpaca\'s paper trading environment.' },
     { name: 'apiKey', type: 'password', label: 'API Key', required: true, sensitive: true },
     { name: 'apiSecret', type: 'password', label: 'Secret Key', required: true, sensitive: true },
+    { name: 'allowLiveTrading', type: 'boolean', label: 'Allow Live Trading', default: false, description: `Required for live Alpaca write operations. Must be paired with liveTradingConfirmation=${LIVE_TRADING_CONFIRMATION}.` },
+    { name: 'liveTradingConfirmation', type: 'password', label: 'Live Trading Confirmation', sensitive: true, description: `Set exactly to ${LIVE_TRADING_CONFIRMATION} to enable non-paper write operations.` },
   ]
 
   static fromConfig(config: { id: string; label?: string; brokerConfig: Record<string, unknown> }): AlpacaBroker {
@@ -83,7 +94,9 @@ export class AlpacaBroker implements IBroker {
       apiKey: bc.apiKey ?? '',
       secretKey: bc.apiSecret ?? '',
       paper: bc.paper,
-    })
+      allowLiveTrading: bc.allowLiveTrading,
+      liveTradingConfirmation: bc.liveTradingConfirmation,
+    } as AlpacaBrokerConfig & LiveTradingConfig)
   }
 
   // ---- Instance ----
@@ -179,6 +192,9 @@ export class AlpacaBroker implements IBroker {
   // ---- Trading operations ----
 
   async placeOrder(contract: Contract, order: Order, tpsl?: TpSlParams): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('placeOrder')
+    if (liveGuard) return liveGuard
+
     const symbol = resolveSymbol(contract)
     if (!symbol) {
       return { success: false, error: 'Cannot resolve contract to Alpaca symbol' }
@@ -238,6 +254,9 @@ export class AlpacaBroker implements IBroker {
   }
 
   async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('modifyOrder')
+    if (liveGuard) return liveGuard
+
     try {
       const patch: Record<string, unknown> = {}
       if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = parseFloat(changes.totalQuantity.toString())
@@ -259,6 +278,9 @@ export class AlpacaBroker implements IBroker {
   }
 
   async cancelOrder(orderId: string): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('cancelOrder')
+    if (liveGuard) return liveGuard
+
     try {
       await this.client.cancelOrder(orderId)
       const orderState = new OrderState()
@@ -270,6 +292,9 @@ export class AlpacaBroker implements IBroker {
   }
 
   async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
+    const liveGuard = this.checkLiveWriteAllowed('closePosition')
+    if (liveGuard) return liveGuard
+
     const symbol = resolveSymbol(contract)
     if (!symbol) {
       return { success: false, error: 'Cannot resolve contract to Alpaca symbol' }
@@ -422,6 +447,29 @@ export class AlpacaBroker implements IBroker {
   }
 
   // ---- Internal ----
+
+  private checkLiveWriteAllowed(operation: string): PlaceOrderResult | null {
+    if (this.config.paper !== false) {
+      return null
+    }
+
+    const liveConfig = this.config as AlpacaBrokerConfig & LiveTradingConfig
+    const configConfirmed =
+      liveConfig.allowLiveTrading === true &&
+      liveConfig.liveTradingConfirmation === LIVE_TRADING_CONFIRMATION
+    const envConfirmed =
+      process.env.OPENALICE_ALLOW_LIVE_TRADING === '1' &&
+      process.env.OPENALICE_LIVE_TRADING_CONFIRMATION === LIVE_TRADING_CONFIRMATION
+
+    if (configConfirmed || envConfirmed) {
+      return null
+    }
+
+    return {
+      success: false,
+      error: `Blocked Alpaca live ${operation}: paper=false requires explicit live trading confirmation.`,
+    }
+  }
 
   private mapOpenOrder(o: AlpacaOrderRaw): OpenOrder {
     const contract = makeContract(o.symbol)

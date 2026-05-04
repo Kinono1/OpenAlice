@@ -576,6 +576,26 @@ describe('UTA — sync', () => {
     const result = await uta.sync()
     expect(result.updatedCount).toBe(0)
   })
+
+  it('skips a hung per-order sync query instead of blocking the account', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: 10, lmtPrice: 150 })
+    uta.commit('limit buy')
+    await uta.push()
+
+    vi.spyOn(broker, 'getOrder').mockImplementation(() => new Promise(() => {}))
+
+    const result = await uta.sync({ orderTimeoutMs: 5 })
+
+    expect(result.updatedCount).toBe(0)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('sync order'),
+      expect.stringContaining('timed out after 5ms'),
+    )
+    warn.mockRestore()
+  })
 })
 
 // ==================== guards ====================

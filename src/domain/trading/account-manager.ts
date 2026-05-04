@@ -54,6 +54,11 @@ export interface ContractSearchResult {
   results: ContractDescription[]
 }
 
+export interface AccountInitSummary {
+  initialized: string[]
+  failed: Array<{ id: string; error: string }>
+}
+
 // ==================== AccountManager ====================
 
 export interface SnapshotHooks {
@@ -64,6 +69,7 @@ export interface SnapshotHooks {
 export class AccountManager {
   private entries = new Map<string, UnifiedTradingAccount>()
   private reconnecting = new Set<string>()
+  private initLocks = new Map<string, Promise<UnifiedTradingAccount>>()
   private ccxtExecutionRuntime = new Map<string, CcxtExecutionRuntime>()
   private strategyConfig?: StrategyConfig
   private cryptoClient?: CryptoClientLike
@@ -94,6 +100,23 @@ export class AccountManager {
 
   /** Create a UTA from account config, register it, and start async broker connection. */
   async initAccount(accCfg: AccountConfig): Promise<UnifiedTradingAccount> {
+    const inFlight = this.initLocks.get(accCfg.id)
+    if (inFlight) {
+      return inFlight
+    }
+
+    const promise = this.initAccountUnlocked(accCfg)
+    this.initLocks.set(accCfg.id, promise)
+    try {
+      return await promise
+    } finally {
+      if (this.initLocks.get(accCfg.id) === promise) {
+        this.initLocks.delete(accCfg.id)
+      }
+    }
+  }
+
+  private async initAccountUnlocked(accCfg: AccountConfig): Promise<UnifiedTradingAccount> {
     const broker = createBroker(accCfg)
     const savedState = await loadGitState(accCfg.id)
     const ccxtExecutionBridge = broker instanceof CcxtBroker
@@ -126,6 +149,30 @@ export class AccountManager {
       this.ccxtExecutionRuntime.delete(accCfg.id)
     }
     return uta
+  }
+
+  async initConfiguredAccounts(accountConfigs: AccountConfig[]): Promise<AccountInitSummary> {
+    const summary: AccountInitSummary = { initialized: [], failed: [] }
+
+    for (const accCfg of accountConfigs) {
+      if (accCfg.enabled === false) {
+        continue
+      }
+      try {
+        await this.initAccount(accCfg)
+        summary.initialized.push(accCfg.id)
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        summary.failed.push({ id: accCfg.id, error })
+        try {
+          await this.eventLog?.append('account.init_failed', { accountId: accCfg.id, error })
+        } catch {
+          // Keep account isolation even if diagnostics cannot be persisted.
+        }
+      }
+    }
+
+    return summary
   }
 
   /** Reconnect an account: close old → re-read config → create new → verify connection. */

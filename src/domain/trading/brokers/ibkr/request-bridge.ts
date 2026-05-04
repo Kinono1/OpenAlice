@@ -35,6 +35,13 @@ import type {
   CollectedOpenOrder,
 } from './ibkr-types.js'
 
+type IbkrClientWithRequests = EClient & {
+  reqOpenOrders(): void
+  reqCompletedOrders(apiOnly: boolean): void
+  reqCurrentTime(): void
+  reqAccountUpdates(subscribe: boolean, acctCode: string): void
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000
 const ACCOUNT_READY_TIMEOUT_MS = 20_000
 
@@ -43,7 +50,7 @@ export class RequestBridge extends DefaultEWrapper {
   private nextReqId_ = 10_000
   private nextOrderId_ = 0
   private accountId_: string | null = null
-  private client_: EClient | null = null
+  private client_: IbkrClientWithRequests | null = null
 
   // ---- Mode A: reqId-based pending requests ----
   private pending = new Map<number, PendingRequest>()
@@ -96,7 +103,7 @@ export class RequestBridge extends DefaultEWrapper {
 
   /** Store reference to the EClient for unsubscribe calls. */
   setClient(client: EClient): void {
-    this.client_ = client
+    this.client_ = client as IbkrClientWithRequests
   }
 
   /** Allocate a unique reqId (starts at 10000 to avoid orderId range). */
@@ -124,7 +131,7 @@ export class RequestBridge extends DefaultEWrapper {
     clientId: number,
     timeoutMs = 15_000,
   ): Promise<void> {
-    this.client_ = client
+    this.client_ = client as IbkrClientWithRequests
 
     const promise = new Promise<void>((resolve, reject) => {
       this.connectResolve = resolve

@@ -21,6 +21,12 @@ export interface IbkrBrokerConfig {
   clientId?: number
   /** IB account code (e.g. "DU12345"). Auto-detected from managedAccounts if omitted. */
   accountId?: string
+  /** Defaults to true. Set false only for a live TWS/Gateway account. */
+  paper?: boolean
+  /** Required, with liveTradingConfirmation, before non-paper write operations are allowed. */
+  allowLiveTrading?: boolean
+  /** Must equal the broker confirmation phrase before non-paper write operations are allowed. */
+  liveTradingConfirmation?: string
 }
 
 // ==================== Internal bridge types ====================
