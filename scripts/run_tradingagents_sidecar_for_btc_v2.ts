@@ -1,16 +1,22 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   appendExecutionJournal,
   readJsonIfExists,
   sanitizeError,
 } from "./lib/execution_journal.js";
+import {
+  buildSourceEligibilityFields,
+  resolveSourceEligibility,
+} from "../src/runtime/source_eligibility.js";
 
 const TOTAL_TIMEOUT_MS = 120_000;
 const PROBE_TIMEOUT_MS = 45_000;
 
 interface CliArgs {
+  dryRun: boolean;
   request: string;
   output: string;
   mode: "smoke" | "full";
@@ -18,11 +24,17 @@ interface CliArgs {
 }
 
 interface ResearchDecision {
+  sourceValidity?: unknown;
+  donorNative?: boolean;
+  promotionEligible?: boolean;
+  admissionIntent?: string;
+  eligibilityBlockers?: string[];
   provenance?: {
     producer?: string;
     mode?: string;
     evidenceStrength?: string;
     generation?: string;
+    fallbackReason?: string;
   };
 }
 
@@ -45,8 +57,29 @@ interface DiagnosticPayload {
   success?: boolean | null;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      family: "tradingagents_sidecar",
+      command: "run_tradingagents_sidecar_for_btc_v2",
+      executionMode: {
+        dryRun: true,
+        writesExecutionJournal: false,
+        spawnsTradingAgentsSidecar: false,
+        writesOutputArtifact: false,
+        writesDiagnosticsArtifact: false,
+        writesFailureArtifact: false,
+        promotionEligible: false,
+      },
+      output: args.output || null,
+      optIn: {
+        runSidecar: "--dryRun false",
+      },
+    }, null, 2));
+    return;
+  }
+
   const runId = `tradingagents_sidecar.${new Date().toISOString().replace(/[:.]/g, "")}`;
   const paths = deriveArtifactPaths(args.output);
   let failureAlreadyLogged = false;
@@ -388,6 +421,17 @@ async function normalizeLiveOutput(path: string): Promise<void> {
     evidenceStrength: payload.provenance?.evidenceStrength ?? "live",
     generation: payload.provenance?.generation ?? "v2_live_donor",
   };
+  Object.assign(
+    payload,
+    buildSourceEligibilityFields(
+      resolveSourceEligibility({
+        provenance: payload.provenance,
+        donorNative: true,
+        promotionEligible: true,
+        admissionIntent: "promotion",
+      }),
+    ),
+  );
   await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
 }
 
@@ -420,6 +464,18 @@ async function writeFailureArtifact(
     schemaVersion: "research_decision.v1",
     generatedAt: new Date().toISOString(),
     symbol: "BTC/USD",
+    ...buildSourceEligibilityFields(
+      resolveSourceEligibility({
+        provenance: {
+          mode: "sidecar_failure",
+          evidenceStrength: "unavailable",
+          fallbackReason: failureCode,
+        },
+        donorNative: false,
+        promotionEligible: false,
+        admissionIntent: "exploratory",
+      }),
+    ),
     decisionContext: {
       releaseGateMode: "paper",
     },
@@ -500,14 +556,18 @@ function replaceJsonSuffix(path: string, suffix: string): string {
 
 function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
+  const dryRun = parseBoolArg(raw.get("dryRun"), true);
   const request = raw.get("request");
   const output = raw.get("output");
-  if (!request) throw new Error("--request is required.");
-  if (!output) throw new Error("--output is required.");
+  if (!dryRun) {
+    if (!request) throw new Error("--request is required.");
+    if (!output) throw new Error("--output is required.");
+  }
   const mode = raw.get("mode") === "full" ? "full" : "smoke";
   return {
-    request,
-    output,
+    dryRun,
+    request: request ?? "",
+    output: output ?? "",
     mode,
     tradingAgentsRoot:
       raw.get("tradingagents-root") ??
@@ -520,7 +580,13 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token?.startsWith("--")) continue;
-    const key = token.slice(2);
+    const withoutPrefix = token.slice(2);
+    const eq = withoutPrefix.indexOf("=");
+    if (eq >= 0) {
+      out.set(withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1));
+      continue;
+    }
+    const key = withoutPrefix;
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       out.set(key, "true");
@@ -532,7 +598,23 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exitCode = 1;
-});
+function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  throw new Error(`Invalid boolean value: ${raw}`);
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
+
+export {
+  main,
+  parseArgs,
+};

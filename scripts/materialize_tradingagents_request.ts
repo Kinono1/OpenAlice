@@ -1,22 +1,18 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   appendExecutionJournal,
   sanitizeError,
 } from "./lib/execution_journal.js";
-
-interface CandleRow {
-  timestamp: string;
-  iso: string;
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  volume: string;
-}
+import {
+  readCandles,
+  readNewsItems,
+} from "./lib/tradingagents_request.js";
 
 interface CliArgs {
+  dryRun: boolean;
   inputCsv: string;
   output: string;
   lookbackBars: number;
@@ -25,10 +21,33 @@ interface CliArgs {
   selectedAnalysts: string[];
   researchDepth: number;
   releaseGateMode: string;
+  newsJson?: string;
+  windowStart?: string;
+  windowEnd?: string;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      family: "tradingagents_request",
+      command: "materialize_tradingagents_request",
+      executionMode: {
+        dryRun: true,
+        writesExecutionJournal: false,
+        readsInputCsv: false,
+        readsNewsJson: false,
+        writesRequestArtifact: false,
+        promotionEligible: false,
+      },
+      output: args.output || null,
+      optIn: {
+        materializeRequest: "--dryRun false",
+      },
+    }, null, 2));
+    return;
+  }
+
   const runId = `tradingagents_request.${new Date().toISOString().replace(/[:.]/g, "")}`;
   await appendExecutionJournal({
     runId,
@@ -43,6 +62,9 @@ async function main(): Promise<void> {
       selectedAnalysts: args.selectedAnalysts,
       researchDepth: args.researchDepth,
       releaseGateMode: args.releaseGateMode,
+      newsJson: args.newsJson ? resolve(args.newsJson) : null,
+      windowStart: args.windowStart ?? null,
+      windowEnd: args.windowEnd ?? null,
     },
     outputs: {
       request: resolve(args.output),
@@ -52,10 +74,17 @@ async function main(): Promise<void> {
   });
 
   try {
-    const candles = await readCandles(args.inputCsv, args.lookbackBars);
+    const candles = await readCandles(args.inputCsv, {
+      lookbackBars: args.lookbackBars,
+      windowStart: args.windowStart,
+      windowEnd: args.windowEnd,
+    });
     if (candles.length < 1) {
-      throw new Error(`No candles available in ${args.inputCsv}`);
+      throw new Error(
+        `No candles available in ${args.inputCsv} for requested strict window.`,
+      );
     }
+    const newsItems = await readNewsItems(args.newsJson);
     const windowStart = candles[0].iso;
     const windowEnd = candles[candles.length - 1].iso;
     const payload = {
@@ -74,7 +103,7 @@ async function main(): Promise<void> {
         })),
       },
       newsContext: {
-        items: [],
+        items: newsItems,
       },
       decisionContext: {
         selectedAnalysts: args.selectedAnalysts,
@@ -145,25 +174,6 @@ async function main(): Promise<void> {
   }
 }
 
-async function readCandles(path: string, lookbackBars: number): Promise<CandleRow[]> {
-  const raw = await readFile(resolve(path), "utf-8");
-  const lines = raw.trim().split("\n");
-  const [header, ...rows] = lines;
-  if (!header) return [];
-  const keys = header.split(",");
-  return rows
-    .slice(Math.max(0, rows.length - lookbackBars))
-    .map((line) => {
-      const values = line.split(",");
-      const row = Object.fromEntries(keys.map((key, index) => [key, values[index] ?? ""])) as Record<
-        string,
-        string
-      >;
-      return row as unknown as CandleRow;
-    })
-    .filter((row) => row.iso);
-}
-
 function computePayloadHash(payload: unknown): string {
   const canonical = stableStringify(payload);
   return createHash("sha256").update(canonical, "utf-8").digest("hex");
@@ -186,14 +196,18 @@ function stableStringify(value: unknown): string {
 
 function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
+  const dryRun = parseBoolArg(raw.get("dryRun"), true);
   const inputCsv = raw.get("input-csv");
   const output = raw.get("output");
-  if (!inputCsv) throw new Error("--input-csv is required.");
-  if (!output) throw new Error("--output is required.");
+  if (!dryRun) {
+    if (!inputCsv) throw new Error("--input-csv is required.");
+    if (!output) throw new Error("--output is required.");
+  }
   const lookbackBars = Number(raw.get("lookback-bars") ?? 240);
   return {
-    inputCsv,
-    output,
+    dryRun,
+    inputCsv: inputCsv ?? "",
+    output: output ?? "",
     lookbackBars: Number.isInteger(lookbackBars) && lookbackBars > 0 ? lookbackBars : 240,
     symbol: raw.get("symbol") ?? "BTC/USD",
     sourceId: raw.get("source-id") ?? "openalice_local_market_context",
@@ -203,6 +217,9 @@ function parseArgs(argv: string[]): CliArgs {
       .filter(Boolean),
     researchDepth: Math.max(0, Number(raw.get("research-depth") ?? 0)),
     releaseGateMode: raw.get("release-gate-mode") ?? "paper",
+    newsJson: raw.get("news-json"),
+    windowStart: raw.get("window-start"),
+    windowEnd: raw.get("window-end"),
   };
 }
 
@@ -211,7 +228,13 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token?.startsWith("--")) continue;
-    const key = token.slice(2);
+    const withoutPrefix = token.slice(2);
+    const eq = withoutPrefix.indexOf("=");
+    if (eq >= 0) {
+      out.set(withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1));
+      continue;
+    }
+    const key = withoutPrefix;
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       out.set(key, "true");
@@ -223,7 +246,23 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exitCode = 1;
-});
+function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  throw new Error(`Invalid boolean value: ${raw}`);
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
+
+export {
+  main,
+  parseArgs,
+};

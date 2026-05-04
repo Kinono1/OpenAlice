@@ -1,9 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   appendExecutionJournal,
   sanitizeError,
 } from "./lib/execution_journal.js";
+import {
+  buildSourceEligibilityFields,
+  resolveSourceEligibility,
+} from "../src/runtime/source_eligibility.js";
 
 interface StrictRequest {
   payload: {
@@ -31,13 +36,33 @@ interface StrictRequest {
 }
 
 interface CliArgs {
+  dryRun: boolean;
   request: string;
   output: string;
   fallbackReason: string;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      family: "tradingagents_proxy_decision",
+      command: "materialize_tradingagents_proxy_decision",
+      executionMode: {
+        dryRun: true,
+        writesExecutionJournal: false,
+        readsRequestArtifact: false,
+        writesDecisionArtifact: false,
+        promotionEligible: false,
+      },
+      output: args.output || null,
+      optIn: {
+        materializeProxyDecision: "--dryRun false",
+      },
+    }, null, 2));
+    return;
+  }
+
   const runId = `tradingagents_proxy.${new Date().toISOString().replace(/[:.]/g, "")}`;
   await appendExecutionJournal({
     runId,
@@ -62,6 +87,9 @@ async function main(): Promise<void> {
     if (!Array.isArray(candles) || candles.length < 2) {
       throw new Error("Strict request must contain at least 2 candles.");
     }
+    const newsItems = Array.isArray(request.payload.newsContext.items)
+      ? request.payload.newsContext.items
+      : [];
 
     const first = candles[0];
     const last = candles[candles.length - 1];
@@ -85,10 +113,22 @@ async function main(): Promise<void> {
       signal = -1;
     }
     const confidence = Number(Math.max(0.35, Math.min(0.8, Math.abs(driftScore))).toFixed(4));
+    const sourceEligibility = resolveSourceEligibility({
+      provenance: {
+        mode: "sidecar_proxy",
+        producer: "tradingagents.sidecar.local_proxy",
+        evidenceStrength: "proxy",
+        fallbackReason: args.fallbackReason,
+      },
+      donorNative: false,
+      promotionEligible: false,
+      admissionIntent: "exploratory",
+    });
     const decision = {
       schemaVersion: "research_decision.v1",
       generatedAt: new Date().toISOString(),
       symbol: request.payload.symbol,
+      ...buildSourceEligibilityFields(sourceEligibility),
       decisionContext: {
         releaseGateMode: request.payload.decisionContext.releaseGateMode ?? "paper",
       },
@@ -118,32 +158,44 @@ async function main(): Promise<void> {
         error: "proxy_decision_without_llm_runtime",
       },
       news: {
-        totalNews: Array.isArray(request.payload.newsContext.items)
-          ? request.payload.newsContext.items.length
-          : 0,
+        totalNews: newsItems.length,
         positiveNews: 0,
         negativeNews: 0,
-        neutralNews: Array.isArray(request.payload.newsContext.items)
-          ? request.payload.newsContext.items.length
-          : 0,
+        neutralNews: newsItems.length,
         highRiskNews: 0,
         sentimentScore: 0,
         riskScore: Number(Math.max(0.05, Math.min(0.95, rangePct)).toFixed(4)),
         topThemes: [],
         flags: [],
-        latestHeadlines: [],
+        latestHeadlines: newsItems
+          .map((item) =>
+            item && typeof item === "object"
+              ? (item as { headline?: unknown }).headline
+              : null,
+          )
+          .filter((headline): headline is string => typeof headline === "string" && headline.trim().length > 0)
+          .slice(0, 5),
       },
       releaseGate: null,
       decision: {
         action,
         confidence,
-        tradeAllowed: action === "long",
-        blockedBy: action === "long" ? [] : ["proxy_sidecar_no_high_conviction_long"],
+        tradeAllowed: false,
+        blockedBy: [
+          "proxy_runtime_not_admission_grade",
+          ...sourceEligibility.eligibilityBlockers,
+          ...(action === "long" ? [] : ["proxy_sidecar_no_high_conviction_long"]),
+        ],
         reasons: [
           "TradingAgents live sidecar was unavailable or too slow for the current session.",
-          "This proxy preserves the same decision contract while using deterministic local market state.",
+          "This proxy preserves deterministic diagnostics only and is blocked from admission-grade materialization.",
         ],
-        suggestedExposurePct: action === "long" ? Math.round(confidence * 25) : 0,
+        suggestedExposurePct: 0,
+        exploratorySignal: {
+          action,
+          confidence,
+          suggestedExposurePct: action === "long" ? Math.round(confidence * 25) : 0,
+        },
       },
     };
 
@@ -190,13 +242,17 @@ async function main(): Promise<void> {
 
 function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
+  const dryRun = parseBoolArg(raw.get("dryRun"), true);
   const request = raw.get("request");
   const output = raw.get("output");
-  if (!request) throw new Error("--request is required.");
-  if (!output) throw new Error("--output is required.");
+  if (!dryRun) {
+    if (!request) throw new Error("--request is required.");
+    if (!output) throw new Error("--output is required.");
+  }
   return {
-    request,
-    output,
+    dryRun,
+    request: request ?? "",
+    output: output ?? "",
     fallbackReason:
       raw.get("fallback-reason") ??
       "tradingagents_live_sidecar_timeout_or_runtime_unavailable",
@@ -208,7 +264,13 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token?.startsWith("--")) continue;
-    const key = token.slice(2);
+    const withoutPrefix = token.slice(2);
+    const eq = withoutPrefix.indexOf("=");
+    if (eq >= 0) {
+      out.set(withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1));
+      continue;
+    }
+    const key = withoutPrefix;
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       out.set(key, "true");
@@ -220,7 +282,23 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exitCode = 1;
-});
+function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  throw new Error(`Invalid boolean value: ${raw}`);
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
+
+export {
+  main,
+  parseArgs,
+};

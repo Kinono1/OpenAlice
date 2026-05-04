@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   appendExecutionJournal,
   sanitizeError,
@@ -17,8 +18,14 @@ import {
   type TradingAgentsValidationPoolProfile,
   type TradingAgentsDecision,
 } from "./lib/tradingagents_manifest.js";
+import {
+  buildSourceEligibilityFields,
+  deriveManifestSourceDefaults,
+  resolveSourceEligibility,
+} from "../src/runtime/source_eligibility.js";
 
 interface CliArgs {
+  dryRun: boolean;
   inputJson: string;
   baseManifest: string;
   output: string;
@@ -32,8 +39,34 @@ interface CliArgs {
   poolProfile: TradingAgentsValidationPoolProfile;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      family: "tradingagents_btc_validation_manifest",
+      command: "materialize_tradingagents_btc_validation_manifest",
+      executionMode: {
+        dryRun: true,
+        writesExecutionJournal: false,
+        readsInputArtifact: false,
+        readsBaseManifest: false,
+        writesManifest: false,
+        writesProvenance: false,
+        writesCompilerNote: false,
+        promotionEligible: false,
+      },
+      outputs: {
+        manifest: args.output || null,
+        provenance: args.provenanceOutput || null,
+        note: args.noteOutput || null,
+      },
+      optIn: {
+        materializeManifest: "--dryRun false",
+      },
+    }, null, 2));
+    return;
+  }
+
   const runId = `${args.paradigmId}.${new Date().toISOString().replace(/[:.]/g, "")}`;
   await appendExecutionJournal({
     runId,
@@ -111,35 +144,50 @@ async function main(): Promise<void> {
       validationPool.profile === "baseline_robust_anchor_v1";
     const usesIndependentGuard =
       validationPool.profile === "baseline_independent_guard_v1";
+    const notes = [
+      `source_paradigm=${args.paradigmId}`,
+      `source_id=${args.sourceId}`,
+      `input_artifact=${resolve(args.inputJson)}`,
+      `donor_action=${validationPool.donorAction}`,
+      `donor_signal=${validationPool.donorSignal}`,
+      `compiler_mode=single_donor_plus_controls`,
+      `validation_pool_size=${validationPool.candidates.length}`,
+      `benchmark_strategy_id=${validationPool.benchmarkStrategyId}`,
+      `donor_strategy_id=${validationPool.donorCandidate.strategyId}`,
+      `validation_pool_profile=${validationPool.profile}`,
+      "baseline_control_profile=trend_50_100_long_only",
+      "baseline_control_window_compat_adjustment=true",
+      "admission_intent=exploratory",
+      "promotion_eligible=false",
+      usesRobustnessAnchor
+        ? "robustness_anchor_source=route_batch8_btc_phaseb_baseline.phaseb_native_v1.HC001_COS_34_65_ls"
+        : usesIndependentGuard
+          ? "independent_guard_source=route_batch35_btc_20260303T034851Z_trial0_base.HC001_REG_48_16_lo"
+          : "controls_preregistered=true",
+      usesRobustnessAnchor
+        ? "neutral_guard_replaced_with_fixed_robustness_anchor=true"
+        : usesIndependentGuard
+          ? "neutral_guard_replaced_with_fixed_independent_guard=true"
+          : "neutral_guard_retained=true",
+    ];
+    const sourceDefaults = deriveManifestSourceDefaults(notes);
+    const sourceBlockedCandidates = validationPool.candidates.map((candidate) => ({
+      ...candidate,
+      ...buildSourceEligibilityFields(
+        resolveSourceEligibility(
+          candidate.strategyId === validationPool.donorCandidate.strategyId
+            ? decision
+            : { role: candidate.role },
+          sourceDefaults,
+        ),
+      ),
+    }));
     const manifestBase = buildManifestFromBase({
       baseManifest,
       batchId: args.batchId,
       batchGoal: args.batchGoal,
-      notes: [
-        `source_paradigm=${args.paradigmId}`,
-        `source_id=${args.sourceId}`,
-        `input_artifact=${resolve(args.inputJson)}`,
-        `donor_action=${validationPool.donorAction}`,
-        `donor_signal=${validationPool.donorSignal}`,
-        `compiler_mode=single_donor_plus_controls`,
-        `validation_pool_size=${validationPool.candidates.length}`,
-        `benchmark_strategy_id=${validationPool.benchmarkStrategyId}`,
-        `donor_strategy_id=${validationPool.donorCandidate.strategyId}`,
-        `validation_pool_profile=${validationPool.profile}`,
-        "baseline_control_profile=trend_50_100_long_only",
-        "baseline_control_window_compat_adjustment=true",
-        usesRobustnessAnchor
-          ? "robustness_anchor_source=route_batch8_btc_phaseb_baseline.phaseb_native_v1.HC001_COS_34_65_ls"
-          : usesIndependentGuard
-            ? "independent_guard_source=route_batch35_btc_20260303T034851Z_trial0_base.HC001_REG_48_16_lo"
-            : "controls_preregistered=true",
-        usesRobustnessAnchor
-          ? "neutral_guard_replaced_with_fixed_robustness_anchor=true"
-          : usesIndependentGuard
-            ? "neutral_guard_replaced_with_fixed_independent_guard=true"
-            : "neutral_guard_retained=true",
-      ],
-      candidates: validationPool.candidates,
+      notes,
+      candidates: sourceBlockedCandidates,
     });
 
     const manifest: CandidateManifest = {
@@ -187,7 +235,7 @@ async function main(): Promise<void> {
             : "Validation pool adds preregistered baseline_control and neutral_guard controls.",
         "Manifest is intended for benchmark-aware validation, not for replacing the main TradingAgents v2 lane.",
       ],
-      emittedCandidateIds: validationPool.candidates.map((candidate) => candidate.strategyId),
+      emittedCandidateIds: sourceBlockedCandidates.map((candidate) => candidate.strategyId),
       inputsSnapshot: {
         validationPoolProfile: validationPool.profile,
         donorAction: validationPool.donorAction,
@@ -314,22 +362,26 @@ function buildUnavailableProvenance(
 
 function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
+  const dryRun = parseBoolArg(raw.get("dryRun"), true);
   const inputJson = raw.get("input-json");
   const baseManifest = raw.get("base-manifest");
   const output = raw.get("output");
   const provenanceOutput = raw.get("provenance-output");
   const noteOutput = raw.get("note-output");
-  if (!inputJson) throw new Error("--input-json is required.");
-  if (!baseManifest) throw new Error("--base-manifest is required.");
-  if (!output) throw new Error("--output is required.");
-  if (!provenanceOutput) throw new Error("--provenance-output is required.");
-  if (!noteOutput) throw new Error("--note-output is required.");
+  if (!dryRun) {
+    if (!inputJson) throw new Error("--input-json is required.");
+    if (!baseManifest) throw new Error("--base-manifest is required.");
+    if (!output) throw new Error("--output is required.");
+    if (!provenanceOutput) throw new Error("--provenance-output is required.");
+    if (!noteOutput) throw new Error("--note-output is required.");
+  }
   return {
-    inputJson,
-    baseManifest,
-    output,
-    provenanceOutput,
-    noteOutput,
+    dryRun,
+    inputJson: inputJson ?? "",
+    baseManifest: baseManifest ?? "",
+    output: output ?? "",
+    provenanceOutput: provenanceOutput ?? "",
+    noteOutput: noteOutput ?? "",
     paradigmId:
       raw.get("paradigm-id") ?? "tradingagents_research_sidecar_v2_validation",
     donorRepo: raw.get("donor-repo") ?? "TradingAgents",
@@ -354,7 +406,13 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token?.startsWith("--")) continue;
-    const key = token.slice(2);
+    const withoutPrefix = token.slice(2);
+    const eq = withoutPrefix.indexOf("=");
+    if (eq >= 0) {
+      out.set(withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1));
+      continue;
+    }
+    const key = withoutPrefix;
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       out.set(key, "true");
@@ -366,9 +424,25 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out;
 }
 
-main().catch((error) => {
-  console.error(
-    error instanceof Error ? error.stack ?? error.message : String(error),
-  );
-  process.exitCode = 1;
-});
+function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  throw new Error(`Invalid boolean value: ${raw}`);
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(
+      error instanceof Error ? error.stack ?? error.message : String(error),
+    );
+    process.exitCode = 1;
+  });
+}
+
+export {
+  main,
+  parseArgs,
+};

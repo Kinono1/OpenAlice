@@ -4,8 +4,18 @@ set -u
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_FILE="${1:-$ROOT_DIR/logs/download_supervisor.log}"
 INTERVAL_SEC="${INTERVAL_SEC:-60}"
+OKX_PROGRESS_LOG="${OKX_PROGRESS_LOG:-}"
+DRY_RUN="${DRY_RUN:-1}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
+
+if [[ -z "$OKX_PROGRESS_LOG" ]]; then
+  if [[ -f "$ROOT_DIR/logs/okx_download_all_1d.log" ]]; then
+    OKX_PROGRESS_LOG="$ROOT_DIR/logs/okx_download_all_1d.log"
+  else
+    OKX_PROGRESS_LOG="$ROOT_DIR/logs/okx_all_1d_full.log"
+  fi
+fi
 
 count_files() {
   local dir="$1"
@@ -37,6 +47,16 @@ is_running() {
   echo "interval_sec=$INTERVAL_SEC"
 } >> "$LOG_FILE"
 
+if [[ "$DRY_RUN" == "1" ]]; then
+  {
+    echo "dry_run=1"
+    echo "would watch Binance/OKX download processes and append supervisor progress; set DRY_RUN=0 to start polling"
+    echo "===== supervisor dry-run done $(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
+  } >> "$LOG_FILE"
+  cat "$LOG_FILE"
+  exit 0
+fi
+
 while true; do
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -50,7 +70,7 @@ while true; do
 
   um_prog="$(last_match "$ROOT_DIR/logs/binance_um_all_usdt_1d.log" "progress .*\\/51168|done:|EXIT:")"
   spot_prog="$(last_match "$ROOT_DIR/logs/binance_spot_all_usdt_1d.log" "progress .*\\/66847|done:|EXIT:")"
-  okx_prog="$(tail -n 1 "$ROOT_DIR/logs/okx_all_1d_full.log" 2>/dev/null || true)"
+  okx_prog="$(tail -n 1 "$OKX_PROGRESS_LOG" 2>/dev/null || true)"
 
   fs_line="$(df -h "$ROOT_DIR" | awk 'NR==2 {print $4 " free, " $5 " used"}')"
 
@@ -58,6 +78,7 @@ while true; do
     echo "[$ts] running um=$um_run spot=$spot_run okx=$okx_run | files um_zip=$um_zip spot_zip=$spot_zip okx_csv=$okx_csv | disk $fs_line"
     echo "  um:   ${um_prog:-n/a}"
     echo "  spot: ${spot_prog:-n/a}"
+    echo "  okx_log: ${OKX_PROGRESS_LOG}"
     echo "  okx:  ${okx_prog:-n/a}"
   } >> "$LOG_FILE"
 

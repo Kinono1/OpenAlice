@@ -2,20 +2,26 @@ import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { writeReleaseGateStatus } from '../src/runtime/release_gate_status.js'
 
 type StrategyName =
   | 'trend'
   | 'regimeTrend'
   | 'meanReversion'
+  | 'factorMeanReversion'
+  | 'shockFade'
   | 'breakout'
   | 'ensemble'
+  | 'enhancedCarry'
+  | 'liquidationAftermath'
 type GateProfile = 'stage1' | 'stage2' | 'hard'
 type PartitionMode = 'none' | 'exchange' | 'exchange_regime'
 type RegimeScheme = 'rule_v1' | 'kmeans_v1'
 type Readiness = 'ready_for_paper' | 'candidate_needs_iteration' | 'not_ready'
 
 interface CliArgs {
+  dryRun: boolean
   trainingRoot: string
   objectiveMetric: string
   objectiveMode: 'auto' | 'max' | 'min'
@@ -117,7 +123,13 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]
     if (!token?.startsWith('--')) continue
-    const key = token.slice(2)
+    const withoutPrefix = token.slice(2)
+    const eq = withoutPrefix.indexOf('=')
+    if (eq >= 0) {
+      out.set(withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1))
+      continue
+    }
+    const key = withoutPrefix
     const next = tokens[index + 1]
     if (!next || next.startsWith('--')) {
       out.set(key, 'true')
@@ -164,8 +176,12 @@ function parseStrategies(raw: string | undefined): StrategyName[] {
       strategy === 'trend' ||
       strategy === 'regimeTrend' ||
       strategy === 'meanReversion' ||
+      strategy === 'factorMeanReversion' ||
+      strategy === 'shockFade' ||
       strategy === 'breakout' ||
-      strategy === 'ensemble'
+      strategy === 'ensemble' ||
+      strategy === 'enhancedCarry' ||
+      strategy === 'liquidationAftermath'
     ) {
       out.push(strategy)
     }
@@ -231,6 +247,7 @@ function parseArgs(argv: string[]): CliArgs {
   const regimeScheme = parseRegimeScheme(raw.get('regimeScheme') ?? raw.get('regime-scheme'))
   const defaults = gateDefaults(gateProfile)
   return {
+    dryRun: parseBoolArg(raw.get('dryRun'), true),
     trainingRoot: raw.get('trainingRoot') ?? 'data/training-data/full-v1',
     objectiveMetric: raw.get('objectiveMetric') ?? 'accuracyLift',
     objectiveMode,
@@ -472,6 +489,27 @@ async function runProcess(
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      family: 'openalice_completion',
+      command: 'run_openalice_completion',
+      executionMode: {
+        dryRun: true,
+        readsTrainingArtifacts: false,
+        runsValidationPipeline: false,
+        runsUnitTests: false,
+        writesCompletionReport: false,
+        writesReleaseGateStatus: false,
+        promotionEligible: false,
+      },
+      output: args.output,
+      optIn: {
+        runCompletion: '--dryRun false',
+      },
+    }, null, 2))
+    return
+  }
+
   const minSignificancePassRatio = clamp(args.minSignificancePassRatio, 0, 1)
   const maxMeanPbo = clamp(args.maxMeanPbo, 0, 1)
   const minMeanDsrProbability = clamp(args.minMeanDsrProbability, 0, 1)
@@ -934,7 +972,15 @@ async function main(): Promise<void> {
   )
 }
 
-main().catch((err) => {
-  console.error('run_openalice_completion failed:', err)
-  process.exit(1)
-})
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : ''
+if (import.meta.url === invokedPath) {
+  main().catch((err) => {
+    console.error('run_openalice_completion failed:', err)
+    process.exit(1)
+  })
+}
+
+export {
+  main,
+  parseArgs,
+}

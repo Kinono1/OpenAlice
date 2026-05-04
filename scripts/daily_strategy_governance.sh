@@ -61,7 +61,7 @@ RUN_HEALTH_CHECK="${RUN_HEALTH_CHECK:-1}"
 RUN_GATE_SUMMARY="${RUN_GATE_SUMMARY:-1}"
 RUN_REVIEW_GATE="${RUN_REVIEW_GATE:-1}"
 CONTINUE_ON_ERROR="${CONTINUE_ON_ERROR:-1}"
-DRY_RUN="${DRY_RUN:-0}"
+DRY_RUN="${DRY_RUN:-1}"
 REVIEW_GATE_MODE="${REVIEW_GATE_MODE:-changed}"
 REVIEW_GATE_BLOCK_SEVERITIES="${REVIEW_GATE_BLOCK_SEVERITIES:-critical,high}"
 
@@ -76,7 +76,7 @@ OPTIMIZE_TOP_K="${OPTIMIZE_TOP_K:-2}"
 OPTIMIZE_MAX_RUNS_PER_CARD="${OPTIMIZE_MAX_RUNS_PER_CARD:-2}"
 OPTIMIZE_SKIP_WATCH="${OPTIMIZE_SKIP_WATCH:-1}"
 OPTIMIZE_DRAIN_QUEUE_FIRST="${OPTIMIZE_DRAIN_QUEUE_FIRST:-1}"
-OPTIMIZE_EXECUTE="${OPTIMIZE_EXECUTE:-1}"
+OPTIMIZE_EXECUTE="${OPTIMIZE_EXECUTE:-0}"
 OPTIMIZE_CONTINUE_ON_ERROR="${OPTIMIZE_CONTINUE_ON_ERROR:-1}"
 OPTIMIZE_ALLOW_REPEAT_CARDS="${OPTIMIZE_ALLOW_REPEAT_CARDS:-0}"
 
@@ -102,6 +102,9 @@ run_step() {
 }
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] daily_strategy_governance start"
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] daily_strategy_governance dry-run: child steps receive DRY_RUN=1 and optimize EXECUTE=${OPTIMIZE_EXECUTE}"
+fi
 
 if [[ "$RUN_REVIEW_GATE" == "1" ]]; then
   REVIEW_CMD=(
@@ -114,6 +117,14 @@ fi
 
 if [[ "$RUN_DATA_PULL" == "1" ]]; then
   run_step "daily_crypto_data_pull" env DRY_RUN="$DRY_RUN" bash scripts/daily_crypto_data_pull.sh
+  if [[ " ${FAILED_STEPS[*]} " == *" daily_crypto_data_pull "* ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] freshness guard: data pull failed; skipping freshness-dependent strategy steps" >&2
+    RUN_ADMISSION=0
+    RUN_FAILURE_BREAKDOWN=0
+    RUN_OPTIMIZE_LOOP=0
+    RUN_HEALTH_CHECK=0
+    RUN_GATE_SUMMARY=0
+  fi
 fi
 
 if [[ "$RUN_EXTERNAL_BENCHMARK" == "1" ]]; then

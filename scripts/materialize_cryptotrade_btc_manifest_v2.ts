@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   appendExecutionJournal,
   sanitizeError,
@@ -18,6 +19,11 @@ import {
   writeCompilerArtifacts,
   writeUnavailableArtifacts,
 } from "./lib/btc_paradigm_compiler.js";
+import {
+  buildSourceEligibilityFields,
+  deriveManifestSourceDefaults,
+  resolveSourceEligibility,
+} from "../src/runtime/source_eligibility.js";
 
 interface V2ReflectionContext {
   schemaVersion?: string;
@@ -36,6 +42,7 @@ interface V2ReflectionContext {
 }
 
 interface CliArgs {
+  dryRun: boolean;
   inputJson: string;
   baseManifest: string;
   output: string;
@@ -49,8 +56,34 @@ interface CliArgs {
   candidateCap: number;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.dryRun) {
+    console.log(JSON.stringify({
+      family: "cryptotrade_btc_manifest_v2",
+      command: "materialize_cryptotrade_btc_manifest_v2",
+      executionMode: {
+        dryRun: true,
+        writesExecutionJournal: false,
+        readsInputArtifact: false,
+        readsBaseManifest: false,
+        writesManifest: false,
+        writesProvenance: false,
+        writesCompilerNote: false,
+        promotionEligible: false,
+      },
+      outputs: {
+        manifest: args.output || null,
+        provenance: args.provenanceOutput || null,
+        note: args.noteOutput || null,
+      },
+      optIn: {
+        materializeManifest: "--dryRun false",
+      },
+    }, null, 2));
+    return;
+  }
+
   const runId = `${args.paradigmId}.${new Date().toISOString().replace(/[:.]/g, "")}`;
   await appendExecutionJournal({
     runId,
@@ -98,19 +131,30 @@ async function main(): Promise<void> {
       return;
     }
 
-    const candidates = buildCandidates(context).slice(0, args.candidateCap);
+    const notes = [
+      `source_paradigm=${args.paradigmId}`,
+      `source_id=${args.sourceId}`,
+      `input_artifact=${resolve(args.inputJson)}`,
+      `candidate_cap=${args.candidateCap}`,
+      `reflection_source=openalice_paper_history`,
+      `not_donor_native=true`,
+      "admission_intent=exploratory",
+      "promotion_eligible=false",
+    ];
+    const sourceDefaults = deriveManifestSourceDefaults(notes);
+    const candidates = buildCandidates(context)
+      .slice(0, args.candidateCap)
+      .map(candidate => ({
+        ...candidate,
+        ...buildSourceEligibilityFields(
+          resolveSourceEligibility(context, sourceDefaults),
+        ),
+      }));
     const manifest = buildManifestFromBase({
       baseManifest,
       batchId: args.batchId,
       batchGoal: args.batchGoal,
-      notes: [
-        `source_paradigm=${args.paradigmId}`,
-        `source_id=${args.sourceId}`,
-        `input_artifact=${resolve(args.inputJson)}`,
-        `candidate_cap=${args.candidateCap}`,
-        `reflection_source=openalice_paper_history`,
-        `not_donor_native=true`,
-      ],
+      notes,
       candidates,
     });
 
@@ -257,22 +301,26 @@ function buildUnavailableProvenance(args: CliArgs, failureCode: string, failureM
 
 function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
+  const dryRun = parseBoolArg(raw.get("dryRun"), true);
   const inputJson = raw.get("input-json");
   const baseManifest = raw.get("base-manifest");
   const output = raw.get("output");
   const provenanceOutput = raw.get("provenance-output");
   const noteOutput = raw.get("note-output");
-  if (!inputJson) throw new Error("--input-json is required.");
-  if (!baseManifest) throw new Error("--base-manifest is required.");
-  if (!output) throw new Error("--output is required.");
-  if (!provenanceOutput) throw new Error("--provenance-output is required.");
-  if (!noteOutput) throw new Error("--note-output is required.");
+  if (!dryRun) {
+    if (!inputJson) throw new Error("--input-json is required.");
+    if (!baseManifest) throw new Error("--base-manifest is required.");
+    if (!output) throw new Error("--output is required.");
+    if (!provenanceOutput) throw new Error("--provenance-output is required.");
+    if (!noteOutput) throw new Error("--note-output is required.");
+  }
   return {
-    inputJson,
-    baseManifest,
-    output,
-    provenanceOutput,
-    noteOutput,
+    dryRun,
+    inputJson: inputJson ?? "",
+    baseManifest: baseManifest ?? "",
+    output: output ?? "",
+    provenanceOutput: provenanceOutput ?? "",
+    noteOutput: noteOutput ?? "",
     paradigmId: raw.get("paradigm-id") ?? "cryptotrade_reflection_narrative_v2",
     donorRepo: raw.get("donor-repo") ?? "CryptoTrade",
     sourceId: raw.get("source-id") ?? "cryptotrade_reflection_narrative_v2",
@@ -287,7 +335,13 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token?.startsWith("--")) continue;
-    const key = token.slice(2);
+    const withoutPrefix = token.slice(2);
+    const eq = withoutPrefix.indexOf("=");
+    if (eq >= 0) {
+      out.set(withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1));
+      continue;
+    }
+    const key = withoutPrefix;
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) { out.set(key, "true"); continue; }
     out.set(key, next);
@@ -296,7 +350,23 @@ function parseRawArgs(argv: string[]): Map<string, string> {
   return out;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exitCode = 1;
-});
+function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  throw new Error(`Invalid boolean value: ${raw}`);
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
+
+export {
+  main,
+  parseArgs,
+};
