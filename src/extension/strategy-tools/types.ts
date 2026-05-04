@@ -4,8 +4,12 @@ export type StrategyName =
   | "trend"
   | "regimeTrend"
   | "meanReversion"
+  | "factorMeanReversion"
+  | "shockFade"
   | "breakout"
-  | "ensemble";
+  | "ensemble"
+  | "enhancedCarry"
+  | "liquidationAftermath";
 export type PositionSignal = -1 | 0 | 1;
 export type StrategyRegimeLabel =
   | "HighVolTrend"

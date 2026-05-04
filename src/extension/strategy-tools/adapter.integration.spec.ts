@@ -37,7 +37,7 @@ const candlesBySymbol: Record<string, MarketData[]> = {
 };
 
 const marketDataProvider: IMarketDataProvider = {
-  async getMarketData(symbol: string) {
+  async getMarketData(_time: Date, symbol: string) {
     const candles = candlesBySymbol[symbol];
     if (!candles) {
       throw new Error(`Missing ${symbol} market data.`);

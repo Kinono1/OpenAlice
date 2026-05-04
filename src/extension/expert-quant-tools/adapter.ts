@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
 import type { IAnalysisContext } from "../analysis-tools/interfaces.js";
@@ -24,6 +25,11 @@ import {
   type PersistedReleaseGateStatus,
 } from "../../runtime/release_gate_status.js";
 import { evaluateRuntimeTruthPipeline } from "../../runtime/runtime_truth_pipeline.js";
+import {
+  DEFAULT_PROMOTION_READINESS_V2_PATH,
+  tryLoadPromotionReadinessV2,
+  tryLoadValidatedPromotionReadinessV2,
+} from "../../runtime/promotion_v2_artifacts.js";
 
 const StrategyParamsObjectSchema = z.object({
   allowShort: z.boolean().optional(),
@@ -105,8 +111,12 @@ const STRATEGY_CANDIDATES: StrategyName[] = [
   "trend",
   "regimeTrend",
   "meanReversion",
+  "factorMeanReversion",
+  "shockFade",
   "breakout",
   "ensemble",
+  "enhancedCarry",
+  "liquidationAftermath",
 ];
 
 function finiteOrUndefined(value: unknown): number | undefined {
@@ -169,7 +179,7 @@ function buildRuntimePlanningState(
   releaseGateStatus: PersistedReleaseGateStatus | null,
   now: Date,
 ) {
-  const releaseGateDecision = isReleaseGateStatusBlocking(releaseGateStatus, now);
+  const releaseGateDecision = isReleaseGateStatusBlocking(releaseGateStatus, "live", now);
   return {
     regimeSeverity: "stable" as const,
     regimeReason: null,
@@ -407,6 +417,11 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         championRegistryPath: z
           .string()
           .default("data/runtime/paper_champion_registry.json"),
+        requirePromotionV2: z.boolean().default(false),
+        validatePromotionV2Artifacts: z.boolean().default(true),
+        promotionReadinessV2Path: z
+          .string()
+          .default(DEFAULT_PROMOTION_READINESS_V2_PATH),
         paperBasisEquityUsd: z.number().positive().default(1_000),
         paperMaxTurnoverPct: z.number().positive().default(1),
         policy: z
@@ -436,6 +451,9 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         validationRunsPath = "data/research/strategy/strategy_validation_runs.json",
         experimentVerdictPath = "data/research/strategy/experiment_verdict.v2.json",
         championRegistryPath = "data/runtime/paper_champion_registry.json",
+        requirePromotionV2 = false,
+        validatePromotionV2Artifacts = true,
+        promotionReadinessV2Path = DEFAULT_PROMOTION_READINESS_V2_PATH,
         paperBasisEquityUsd = 1_000,
         paperMaxTurnoverPct = 1,
         policy,
@@ -537,12 +555,23 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
           }
         }
 
-        const [releaseGateStatus, validationRuns, experimentVerdict, championRegistry] =
+        const [
+          releaseGateStatus,
+          validationRuns,
+          experimentVerdict,
+          championRegistry,
+          promotionV2Load,
+        ] =
           await Promise.all([
             loadReleaseGateStatus(releaseGateStatusPath),
             readJsonOrNull(validationRunsPath),
             readJsonOrNull(experimentVerdictPath),
             loadChampionRegistry(championRegistryPath),
+            requirePromotionV2
+              ? validatePromotionV2Artifacts
+                ? tryLoadValidatedPromotionReadinessV2(dirname(promotionReadinessV2Path), { now })
+                : tryLoadPromotionReadinessV2(promotionReadinessV2Path)
+              : Promise.resolve(null),
           ]);
         const ensembleScore =
           typeof strategyDecision.indicators?.ensembleScore === "number"
@@ -609,6 +638,13 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
           verdictPath: experimentVerdictPath,
           releaseGateStatusPath,
           registryPath: championRegistryPath,
+          promotionReadinessV2:
+            promotionV2Load?.kind === "loaded"
+              ? promotionV2Load.readiness
+              : promotionV2Load?.kind === "invalid" && promotionV2Load.readiness
+                ? promotionV2Load.readiness
+              : null,
+          requirePromotionV2,
           now,
         });
 
@@ -664,6 +700,15 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
             paperGate: runtimeTruth.paperGate,
             executionPlan: runtimeTruth.executionPlan,
             snapshot: runtimeTruth.snapshot,
+            promotionV2: {
+              required: requirePromotionV2,
+              path: promotionReadinessV2Path,
+              loadStatus: promotionV2Load?.kind ?? "not_requested",
+              error:
+                promotionV2Load && promotionV2Load.kind !== "loaded"
+                  ? promotionV2Load.error
+                  : null,
+            },
           },
           decision,
         };

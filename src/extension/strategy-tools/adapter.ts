@@ -13,8 +13,12 @@ const StrategyNameSchema = z.enum([
   "trend",
   "regimeTrend",
   "meanReversion",
+  "factorMeanReversion",
+  "shockFade",
   "breakout",
   "ensemble",
+  "enhancedCarry",
+  "liquidationAftermath",
 ]);
 
 const StrategyParamsObjectSchema = z.object({
@@ -308,7 +312,7 @@ type CompareSignificanceSummary = {
   pbo: number;
   pboThreshold: number;
   dsrValue: number;
-  dsrProbability: number;
+  dsrProbability: number | null;
   dsrMin: number;
 };
 type CompareDeltaSummary = {
@@ -393,7 +397,9 @@ function summarizeSignificance(
     pbo: Number(gate.pboResult.pbo.toFixed(4)),
     pboThreshold: gate.pboThreshold,
     dsrValue: Number(gate.dsrResult.dsrValue.toFixed(4)),
-    dsrProbability: Number(gate.dsrResult.dsrProbability.toFixed(4)),
+    dsrProbability: gate.dsrResult.dsrProbability == null
+      ? null
+      : Number(gate.dsrResult.dsrProbability.toFixed(4)),
     dsrMin: gate.dsrMin,
   };
 }
@@ -879,7 +885,9 @@ Optional advanced modes:
             pbo: Number(gate.pboResult.pbo.toFixed(4)),
             pboThreshold: gate.pboThreshold,
             dsrValue: Number(gate.dsrResult.dsrValue.toFixed(4)),
-            dsrProbability: Number(gate.dsrResult.dsrProbability.toFixed(4)),
+            dsrProbability: gate.dsrResult.dsrProbability == null
+              ? null
+              : Number(gate.dsrResult.dsrProbability.toFixed(4)),
             dsrMin: gate.dsrMin,
           };
         }
