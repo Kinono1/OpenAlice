@@ -4,6 +4,8 @@ import { serve } from '@hono/node-server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { createCorsOriginResolver } from '../core/cors.js'
+import { createRequireAuth, createRequireTrade } from '../core/auth.js'
+import { createMcpAuthMiddleware } from '../core/mcp-auth-policy.js'
 import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
 
@@ -59,6 +61,76 @@ export function buildMcpToolRegistration(name: string, tool: McpToolRegistration
   }
 }
 
+export function createMcpApp(options: {
+  toolCenter: ToolCenter
+  allowOrigins?: string[]
+  enforceAuth?: boolean
+}) {
+  const { toolCenter, allowOrigins = [], enforceAuth = true } = options
+
+  let cachedMcpServer: McpServer | null = null
+
+  const createMcpServer = async () => {
+    const tools = await toolCenter.getMcpTools()
+    const mcp = new McpServer({ name: 'open-alice', version: '1.0.0' })
+
+    for (const [name, t] of Object.entries(tools)) {
+      if (!t.execute) continue
+
+      const { description, inputSchema } = buildMcpToolRegistration(name, t)
+
+      mcp.registerTool(name, {
+        description,
+        inputSchema,
+      }, async (args: any) => {
+        try {
+          const result = await t.execute!(args, {
+            toolCallId: crypto.randomUUID(),
+            messages: [],
+          })
+          return { content: toMcpContent(result) }
+        } catch (err) {
+          return {
+            content: [{ type: 'text' as const, text: `Error: ${err}` }],
+            isError: true,
+          }
+        }
+      })
+    }
+
+    return mcp
+  }
+
+  const getOrCreateMcpServer = async () => {
+    if (!cachedMcpServer) {
+      cachedMcpServer = await createMcpServer()
+    }
+    return cachedMcpServer
+  }
+
+  const app = new Hono()
+  const requireAuth = createRequireAuth(enforceAuth)
+  const requireTrade = createRequireTrade(enforceAuth)
+
+  app.use('*', cors({
+    origin: createCorsOriginResolver(allowOrigins),
+    allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version', 'Authorization'],
+    exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
+  }))
+
+  app.use('/mcp', createMcpAuthMiddleware(requireAuth, requireTrade))
+
+  app.all('/mcp', async (c) => {
+    const transport = new WebStandardStreamableHTTPServerTransport()
+    const mcp = await getOrCreateMcpServer()
+    await mcp.connect(transport)
+    return transport.handleRequest(c.req.raw)
+  })
+
+  return app
+}
+
 /**
  * MCP Plugin — exposes tools via Streamable HTTP.
  *
@@ -75,54 +147,11 @@ export class McpPlugin implements Plugin {
     private allowOrigins: string[] = [],
   ) {}
 
-  async start(_ctx: EngineContext) {
-    const toolCenter = this.toolCenter
-
-    const createMcpServer = async () => {
-      const tools = await toolCenter.getMcpTools()
-      const mcp = new McpServer({ name: 'open-alice', version: '1.0.0' })
-
-      for (const [name, t] of Object.entries(tools)) {
-        if (!t.execute) continue
-
-        const { description, inputSchema } = buildMcpToolRegistration(name, t)
-
-        mcp.registerTool(name, {
-          description,
-          inputSchema,
-        }, async (args: any) => {
-          try {
-            const result = await t.execute!(args, {
-              toolCallId: crypto.randomUUID(),
-              messages: [],
-            })
-            return { content: toMcpContent(result) }
-          } catch (err) {
-            return {
-              content: [{ type: 'text' as const, text: `Error: ${err}` }],
-              isError: true,
-            }
-          }
-        })
-      }
-
-      return mcp
-    }
-
-    const app = new Hono()
-
-    app.use('*', cors({
-      origin: createCorsOriginResolver(this.allowOrigins),
-      allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version'],
-      exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
-    }))
-
-    app.all('/mcp', async (c) => {
-      const transport = new WebStandardStreamableHTTPServerTransport()
-      const mcp = await createMcpServer()
-      await mcp.connect(transport)
-      return transport.handleRequest(c.req.raw)
+  async start(ctx: EngineContext) {
+    const app = createMcpApp({
+      toolCenter: this.toolCenter,
+      allowOrigins: this.allowOrigins,
+      enforceAuth: ctx.config.auth.enforceAuth,
     })
 
     this.server = serve({ fetch: app.fetch, port: this.port }, (info) => {
