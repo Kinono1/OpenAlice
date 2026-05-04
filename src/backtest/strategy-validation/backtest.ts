@@ -53,6 +53,16 @@ export interface BacktestRegimeSummary {
   totalNetReturnPct: number
 }
 
+export interface BacktestSideSummary {
+  tradeCount: number
+  winRatePct: number
+  grossExpectancyPct: number
+  netExpectancyPct: number
+  totalGrossReturnPct: number
+  totalNetReturnPct: number
+  averageHoldingHours: number
+}
+
 export interface BacktestMetrics {
   initialCapital: number
   finalEquity: number
@@ -85,6 +95,10 @@ export interface BacktestMetrics {
   totalFundingPaid: number
   totalCostsPaid: number
   costDragPctOfInitialCapital: number
+  totalTurnoverUsd: number
+  turnoverPctOfInitialCapital: number
+  averageTurnoverPctPerTrade: number
+  sideSummary: Record<'long' | 'short', BacktestSideSummary>
   regimeSummary: Partial<Record<StrategyRegimeLabel, BacktestRegimeSummary>>
 }
 
@@ -106,6 +120,13 @@ export interface StrategyBacktestInput {
   costModel?: Partial<BacktestCostModel>
   regimeGate?: {
     allowedEntryRegimes: StrategyRegimeLabel[]
+    exitOnMismatch?: boolean
+  }
+  volatilityGate?: {
+    minVolatilityPct?: number
+    maxVolatilityPct?: number
+    minTrendStrengthPct?: number
+    maxTrendStrengthPct?: number
     exitOnMismatch?: boolean
   }
   entryGate?: {
@@ -130,8 +151,17 @@ function exposureFractionForStrategy(
   strategy: StrategyName,
   params: Required<StrategyParams>,
 ): number {
-  if (strategy === 'factorMeanReversion') {
+  if (
+    strategy === 'factorMeanReversion' ||
+    strategy === 'shockFade'
+  ) {
     return params.factorPositionPctOfEquity
+  }
+  if (strategy === 'enhancedCarry') {
+    return 0.08
+  }
+  if (strategy === 'liquidationAftermath') {
+    return 0.06
   }
   return 1
 }
@@ -224,6 +254,40 @@ function isEntryTimeAllowed(
   return gate.allowedEntryTimes.includes(time)
 }
 
+function isVolatilityGateAllowed(
+  snapshot: ReturnType<typeof classifyStrategyRegimeSnapshot>,
+  gate: StrategyBacktestInput['volatilityGate'] | undefined,
+): boolean {
+  if (!gate) {
+    return true
+  }
+  if (
+    gate.minVolatilityPct !== undefined &&
+    snapshot.volatilityPct < gate.minVolatilityPct
+  ) {
+    return false
+  }
+  if (
+    gate.maxVolatilityPct !== undefined &&
+    snapshot.volatilityPct > gate.maxVolatilityPct
+  ) {
+    return false
+  }
+  if (
+    gate.minTrendStrengthPct !== undefined &&
+    snapshot.trendStrengthPct < gate.minTrendStrengthPct
+  ) {
+    return false
+  }
+  if (
+    gate.maxTrendStrengthPct !== undefined &&
+    snapshot.trendStrengthPct > gate.maxTrendStrengthPct
+  ) {
+    return false
+  }
+  return true
+}
+
 function annualizedSharpe(stepReturns: number[], barsPerYear: number): number {
   if (stepReturns.length < 2) {
     return 0
@@ -297,6 +361,7 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
   let totalFeesPaid = 0
   let totalSlippagePaid = 0
   let totalFundingPaid = 0
+  let totalTurnoverUsd = 0
   let lastDecision: StrategyDecision = {
     strategy: input.strategy,
     signal: 0,
@@ -326,10 +391,27 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
       params,
     })
     const regimeAllowed = isRegimeAllowed(barRegime.label, input.regimeGate)
+    const volatilityAllowed = isVolatilityGateAllowed(barRegime, input.volatilityGate)
     const queuedSignal = pendingSignals.get(index)
     let targetPosition: PositionSignal = queuedSignal ?? position
     const entryTimeAllowed = isEntryTimeAllowed(barStart.time, input.entryGate)
     if (queuedSignal !== undefined && position === 0 && targetPosition !== 0 && !entryTimeAllowed) {
+      targetPosition = 0
+    }
+    const wantsNewEntry =
+      targetPosition !== 0 &&
+      (position === 0 || Math.sign(targetPosition) !== Math.sign(position))
+    if (wantsNewEntry && !volatilityAllowed) {
+      targetPosition =
+        position !== 0 && !(input.volatilityGate?.exitOnMismatch ?? false)
+          ? position
+          : 0
+    } else if (
+      input.volatilityGate?.exitOnMismatch &&
+      position !== 0 &&
+      targetPosition !== 0 &&
+      !volatilityAllowed
+    ) {
       targetPosition = 0
     }
     if (input.regimeGate && !regimeAllowed && targetPosition !== 0) {
@@ -353,6 +435,7 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
       const closeExposure = closingTrade && activeTrade ? activeTrade.exposureFraction : 0
       const openExposure = openingTrade ? exposureFraction : 0
       const deltaExposure = closeExposure + openExposure
+      totalTurnoverUsd += equity * deltaExposure
       const feeCost = equity * deltaExposure * feeRate
       const slippageCost = equity * deltaExposure * slippageRate
       totalFeesPaid += feeCost
@@ -404,16 +487,32 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
       pendingSignals.delete(index)
     }
 
-    if (input.strategy === 'factorMeanReversion' && activeTrade && position !== 0) {
+    if (activeTrade && position !== 0) {
       const holdingBars = index - activeTrade.entryIndex
       const rawMove = ((barEnd.close - activeTrade.entryPrice) / activeTrade.entryPrice) * position
-      const shouldStop =
-        params.factorStopLossPct > 0 &&
-        rawMove <= -params.factorStopLossPct
-      const shouldTimeExit =
-        holdingBars >= params.factorMaxHoldingBars
+      let shouldStop = false
+      let shouldTimeExit = false
+
+      if (input.strategy === 'factorMeanReversion' || input.strategy === 'shockFade') {
+        shouldStop =
+          params.factorStopLossPct > 0 &&
+          rawMove <= -params.factorStopLossPct
+        shouldTimeExit = holdingBars >= params.factorMaxHoldingBars
+      } else if (input.strategy === 'enhancedCarry') {
+        shouldStop =
+          params.carryStopLossPct > 0 &&
+          rawMove <= -params.carryStopLossPct
+        shouldTimeExit = holdingBars >= params.carryMaxHoldingBars
+      } else if (input.strategy === 'liquidationAftermath') {
+        shouldStop =
+          params.cascadeStopLossPct > 0 &&
+          rawMove <= -params.cascadeStopLossPct
+        shouldTimeExit = holdingBars >= params.cascadeMaxHoldingBars
+      }
+
       if (shouldStop || shouldTimeExit) {
         const executionPrice = toExecutionPrice(barEnd.close, -position, slippageRate)
+        totalTurnoverUsd += equity * activeTrade.exposureFraction
         const feeCost = equity * activeTrade.exposureFraction * feeRate
         const slippageCost = equity * activeTrade.exposureFraction * slippageRate
         totalFeesPaid += feeCost
@@ -473,17 +572,33 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
   }
 
   if (activeTrade) {
+    const last = candles[candles.length - 1]
+    totalTurnoverUsd += equity * activeTrade.exposureFraction
+    const feeCost = equity * activeTrade.exposureFraction * feeRate
+    const slippageCost = equity * activeTrade.exposureFraction * slippageRate
+    totalFeesPaid += feeCost
+    totalSlippagePaid += slippageCost
+    equity = Math.max(0, equity - feeCost - slippageCost)
     trades.push(
       closeTrade(
-        activeTrade,
-        candles[candles.length - 1].time,
-        candles[candles.length - 1].close,
-        candles[candles.length - 1].close,
+        {
+          ...activeTrade,
+          feeCostRate: activeTrade.feeCostRate + activeTrade.exposureFraction * feeRate,
+          slippageCostRate:
+            activeTrade.slippageCostRate + activeTrade.exposureFraction * slippageRate,
+        },
+        last.time,
+        toExecutionPrice(last.close, -position, slippageRate),
+        last.close,
         candles.length - 1,
         barSeconds,
         position,
       ),
     )
+    equityCurve[equityCurve.length - 1] = {
+      ...equityCurve[equityCurve.length - 1],
+      equity,
+    }
   }
 
   const grossExpectancyPct =
@@ -543,7 +658,10 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
   const longTradeCount = trades.filter((trade) => trade.direction === 'long').length
   const shortTradeCount = trades.filter((trade) => trade.direction === 'short').length
   const totalCostsPaid = totalFeesPaid + totalSlippagePaid + totalFundingPaid
+  const turnoverPctOfInitialCapital =
+    initialCapital > 0 ? (totalTurnoverUsd / initialCapital) * 100 : 0
   const regimeSummary = buildRegimeSummary(trades)
+  const sideSummary = buildSideSummary(trades)
 
   return {
     strategy: input.strategy,
@@ -584,6 +702,11 @@ export function runStrategyBacktest(input: StrategyBacktestInput): BacktestResul
       totalCostsPaid,
       costDragPctOfInitialCapital:
         initialCapital > 0 ? (totalCostsPaid / initialCapital) * 100 : 0,
+      totalTurnoverUsd,
+      turnoverPctOfInitialCapital,
+      averageTurnoverPctPerTrade:
+        trades.length > 0 ? turnoverPctOfInitialCapital / trades.length : 0,
+      sideSummary,
       regimeSummary,
     },
     trades,
@@ -611,6 +734,44 @@ function percentileFromSorted(
   }
   const weight = pos - low
   return sorted[low] * (1 - weight) + sorted[high] * weight
+}
+
+function buildSideSummary(
+  trades: BacktestTrade[],
+): Record<'long' | 'short', BacktestSideSummary> {
+  return {
+    long: summarizeSideTrades(trades.filter((trade) => trade.direction === 'long')),
+    short: summarizeSideTrades(trades.filter((trade) => trade.direction === 'short')),
+  }
+}
+
+function summarizeSideTrades(trades: BacktestTrade[]): BacktestSideSummary {
+  const wins = trades.filter((trade) => trade.netReturnPct > 0).length
+  const totalGrossReturnPct = trades.reduce(
+    (sum, trade) => sum + trade.rawReturnPct,
+    0,
+  )
+  const totalNetReturnPct = trades.reduce(
+    (sum, trade) => sum + trade.netReturnPct,
+    0,
+  )
+  const totalHoldingHours = trades.reduce(
+    (sum, trade) => sum + trade.holdingHours,
+    0,
+  )
+
+  return {
+    tradeCount: trades.length,
+    winRatePct: trades.length > 0 ? (wins / trades.length) * 100 : 0,
+    grossExpectancyPct:
+      trades.length > 0 ? totalGrossReturnPct / trades.length : 0,
+    netExpectancyPct:
+      trades.length > 0 ? totalNetReturnPct / trades.length : 0,
+    totalGrossReturnPct,
+    totalNetReturnPct,
+    averageHoldingHours:
+      trades.length > 0 ? totalHoldingHours / trades.length : 0,
+  }
 }
 
 function buildRegimeSummary(

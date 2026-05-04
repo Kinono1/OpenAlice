@@ -6,6 +6,7 @@ export interface MarketData {
   low: number
   close: number
   volume: number
+  fundingRate?: number
 }
 
 export type StrategyName =
@@ -13,10 +14,23 @@ export type StrategyName =
   | 'regimeTrend'
   | 'meanReversion'
   | 'factorMeanReversion'
+  | 'shockFade'
   | 'breakout'
   | 'ensemble'
+  | 'enhancedCarry'
+  | 'liquidationAftermath'
 
 export type PositionSignal = -1 | 0 | 1
+
+export function normalizePositionSignal(value: unknown): PositionSignal {
+  if (value === 1 || value === '1' || value === 'long' || value === 'buy') {
+    return 1
+  }
+  if (value === -1 || value === '-1' || value === 'short' || value === 'sell') {
+    return -1
+  }
+  return 0
+}
 
 export type StrategyRegimeLabel =
   | 'HighVolTrend'
@@ -58,12 +72,26 @@ export interface StrategyParams {
   factorStopLossPct?: number
   factorKillSwitchVolPct?: number
   factorKillSwitchTrendStrengthPct?: number
+  shockMinVolumeRatio?: number
+  shockMinAbsReturnPct?: number
 
   breakoutPeriod?: number
   breakoutExitPeriod?: number
 
   ensembleThreshold?: number
   ensembleWeights?: StrategyEnsembleWeights
+
+  carryZEntry?: number
+  carryZExit?: number
+  carryMinFundingBars?: number
+  carryMaxHoldingBars?: number
+  carryStopLossPct?: number
+
+  cascadeMinVolSurge?: number
+  cascadeMinDropPct?: number
+  cascadeReboundPct?: number
+  cascadeMaxHoldingBars?: number
+  cascadeStopLossPct?: number
 }
 
 export interface StrategyDecision {
@@ -104,6 +132,8 @@ export interface ResolvedStrategyParams {
   factorStopLossPct: number
   factorKillSwitchVolPct: number
   factorKillSwitchTrendStrengthPct: number
+  shockMinVolumeRatio: number
+  shockMinAbsReturnPct: number
   breakoutPeriod: number
   breakoutExitPeriod: number
   ensembleThreshold: number
@@ -112,6 +142,16 @@ export interface ResolvedStrategyParams {
     meanReversion: number
     breakout: number
   }
+  carryZEntry: number
+  carryZExit: number
+  carryMinFundingBars: number
+  carryMaxHoldingBars: number
+  carryStopLossPct: number
+  cascadeMinVolSurge: number
+  cascadeMinDropPct: number
+  cascadeReboundPct: number
+  cascadeMaxHoldingBars: number
+  cascadeStopLossPct: number
 }
 
 export const DEFAULT_STRATEGY_PARAMS: ResolvedStrategyParams = {
@@ -138,6 +178,8 @@ export const DEFAULT_STRATEGY_PARAMS: ResolvedStrategyParams = {
   factorStopLossPct: 0.0125,
   factorKillSwitchVolPct: 3.0,
   factorKillSwitchTrendStrengthPct: 0.8,
+  shockMinVolumeRatio: 1.4,
+  shockMinAbsReturnPct: 1.2,
   breakoutPeriod: 20,
   breakoutExitPeriod: 10,
   ensembleThreshold: 0.34,
@@ -146,6 +188,16 @@ export const DEFAULT_STRATEGY_PARAMS: ResolvedStrategyParams = {
     meanReversion: 1,
     breakout: 1,
   },
+  carryZEntry: 2.0,
+  carryZExit: 0.5,
+  carryMinFundingBars: 48,
+  carryMaxHoldingBars: 168,
+  carryStopLossPct: 0.10,
+  cascadeMinVolSurge: 3.0,
+  cascadeMinDropPct: 2.5,
+  cascadeReboundPct: 1.0,
+  cascadeMaxHoldingBars: 24,
+  cascadeStopLossPct: 0.015,
 }
 
 export function isStrategyName(value: unknown): value is StrategyName {
@@ -154,8 +206,11 @@ export function isStrategyName(value: unknown): value is StrategyName {
     value === 'regimeTrend' ||
     value === 'meanReversion' ||
     value === 'factorMeanReversion' ||
+    value === 'shockFade' ||
     value === 'breakout' ||
-    value === 'ensemble'
+    value === 'ensemble' ||
+    value === 'enhancedCarry' ||
+    value === 'liquidationAftermath'
   )
 }
 
@@ -278,6 +333,14 @@ export function resolveStrategyParams(
       0,
       params?.factorKillSwitchTrendStrengthPct ?? DEFAULT_STRATEGY_PARAMS.factorKillSwitchTrendStrengthPct,
     ),
+    shockMinVolumeRatio: Math.max(
+      1,
+      params?.shockMinVolumeRatio ?? DEFAULT_STRATEGY_PARAMS.shockMinVolumeRatio,
+    ),
+    shockMinAbsReturnPct: Math.max(
+      0,
+      params?.shockMinAbsReturnPct ?? DEFAULT_STRATEGY_PARAMS.shockMinAbsReturnPct,
+    ),
     breakoutPeriod: Math.max(
       2,
       Math.floor(
@@ -306,5 +369,54 @@ export function resolveStrategyParams(
         DEFAULT_STRATEGY_PARAMS.ensembleWeights.breakout,
       ),
     },
+    carryZEntry: Math.max(
+      0.5,
+      params?.carryZEntry ?? DEFAULT_STRATEGY_PARAMS.carryZEntry,
+    ),
+    carryZExit: Math.max(
+      0,
+      Math.min(
+        params?.carryZExit ?? DEFAULT_STRATEGY_PARAMS.carryZExit,
+        (params?.carryZEntry ?? DEFAULT_STRATEGY_PARAMS.carryZEntry) - 0.1,
+      ),
+    ),
+    carryMinFundingBars: Math.max(
+      12,
+      Math.floor(
+        params?.carryMinFundingBars ?? DEFAULT_STRATEGY_PARAMS.carryMinFundingBars,
+      ),
+    ),
+    carryMaxHoldingBars: Math.max(
+      1,
+      Math.floor(
+        params?.carryMaxHoldingBars ?? DEFAULT_STRATEGY_PARAMS.carryMaxHoldingBars,
+      ),
+    ),
+    carryStopLossPct: Math.max(
+      0.01,
+      params?.carryStopLossPct ?? DEFAULT_STRATEGY_PARAMS.carryStopLossPct,
+    ),
+    cascadeMinVolSurge: Math.max(
+      1.5,
+      params?.cascadeMinVolSurge ?? DEFAULT_STRATEGY_PARAMS.cascadeMinVolSurge,
+    ),
+    cascadeMinDropPct: Math.max(
+      0.5,
+      params?.cascadeMinDropPct ?? DEFAULT_STRATEGY_PARAMS.cascadeMinDropPct,
+    ),
+    cascadeReboundPct: Math.max(
+      0.1,
+      params?.cascadeReboundPct ?? DEFAULT_STRATEGY_PARAMS.cascadeReboundPct,
+    ),
+    cascadeMaxHoldingBars: Math.max(
+      1,
+      Math.floor(
+        params?.cascadeMaxHoldingBars ?? DEFAULT_STRATEGY_PARAMS.cascadeMaxHoldingBars,
+      ),
+    ),
+    cascadeStopLossPct: Math.max(
+      0.001,
+      params?.cascadeStopLossPct ?? DEFAULT_STRATEGY_PARAMS.cascadeStopLossPct,
+    ),
   }
 }

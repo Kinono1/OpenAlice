@@ -68,6 +68,18 @@ function weightedMeanReversionSignal(series: number[]): number {
   return -normalizedMomentum
 }
 
+function averageVolume(
+  candles: MarketData[],
+  endInclusive: number,
+  lookback: number,
+): number {
+  const start = Math.max(0, endInclusive - lookback + 1)
+  const window = candles.slice(start, endInclusive + 1)
+  return window.length > 0
+    ? window.reduce((sum, candle) => sum + candle.volume, 0) / window.length
+    : 0
+}
+
 function evaluateTrend(
   candles: MarketData[],
   index: number,
@@ -379,6 +391,168 @@ function evaluateFactorMeanReversion(
   }
 }
 
+function evaluateShockFade(
+  candles: MarketData[],
+  index: number,
+  currentPosition: PositionSignal,
+  params: ResolvedStrategyParams,
+): StrategyDecision {
+  const series = closes(candles, index)
+  const requiredBars = Math.max(169, getRegimeClassificationMinimumBars(params))
+  if (series.length < requiredBars) {
+    return {
+      strategy: 'shockFade',
+      signal: 0,
+      reason: 'Not enough bars for shock-fade signal.',
+      indicators: { bars: series.length, requiredBars },
+    }
+  }
+
+  const regime = classifyStrategyRegimeSnapshot({
+    candles,
+    index,
+    params,
+  })
+  const meanReversionSignal = weightedMeanReversionSignal(series)
+  const last = series.length - 1
+  const latestClose = series[last]
+  const ret1h = last >= 1 ? ((latestClose - series[last - 1]) / series[last - 1]) * 100 : 0
+  const ret6h = last >= 6 ? ((latestClose - series[last - 6]) / series[last - 6]) * 100 : ret1h
+  const shockMagnitudePct = Math.max(Math.abs(ret1h), Math.abs(ret6h))
+  const averageVolume24 = averageVolume(candles, index, 24)
+  const volumeRatio = averageVolume24 > 0 ? candles[index].volume / averageVolume24 : 0
+  const shockDetected =
+    shockMagnitudePct >= params.shockMinAbsReturnPct &&
+    volumeRatio >= params.shockMinVolumeRatio
+  const rawShockScore =
+    ((shockMagnitudePct / Math.max(params.shockMinAbsReturnPct, 1e-6)) - 1) * 0.65 +
+    ((volumeRatio / Math.max(params.shockMinVolumeRatio, 1e-6)) - 1) * 0.35
+  const normalizedShockScore = Math.max(0, Math.min(1, rawShockScore))
+  const signedShockScore =
+    ret1h < 0 ? normalizedShockScore : ret1h > 0 ? -normalizedShockScore : 0
+
+  const killSwitchActive =
+    regime.volatilityPct >= params.factorKillSwitchVolPct &&
+    regime.trendStrengthPct >= params.factorKillSwitchTrendStrengthPct
+
+  if (killSwitchActive) {
+    return {
+      strategy: 'shockFade',
+      signal: 0,
+      reason: 'Shock-fade blocked by volatility/trend kill switch.',
+      indicators: {
+        signal: signedShockScore,
+        meanReversionSignal,
+        ret1hPct: ret1h,
+        ret6hPct: ret6h,
+        shockMagnitudePct,
+        volumeRatio,
+        volatilityPct: regime.volatilityPct,
+        trendStrengthPct: regime.trendStrengthPct,
+      },
+    }
+  }
+
+  if (!shockDetected) {
+    const shouldExit = currentPosition !== 0 && Math.abs(signedShockScore) <= params.factorExitThreshold
+    return {
+      strategy: 'shockFade',
+      signal: shouldExit ? 0 : currentPosition,
+      reason: shouldExit
+        ? 'Shock impulse has normalized back inside the exit band.'
+        : 'No price-volume shock detected.',
+      indicators: {
+        signal: signedShockScore,
+        meanReversionSignal,
+        ret1hPct: ret1h,
+        ret6hPct: ret6h,
+        shockMagnitudePct,
+        volumeRatio,
+        volatilityPct: regime.volatilityPct,
+        trendStrengthPct: regime.trendStrengthPct,
+      },
+    }
+  }
+
+  if (signedShockScore >= params.factorEntryThreshold && ret1h < 0) {
+    return {
+      strategy: 'shockFade',
+      signal: 1,
+      reason: 'Downside price-volume shock triggered a long fade entry.',
+      indicators: {
+        signal: signedShockScore,
+        meanReversionSignal,
+        entryThreshold: params.factorEntryThreshold,
+        exitThreshold: params.factorExitThreshold,
+        ret1hPct: ret1h,
+        ret6hPct: ret6h,
+        shockMagnitudePct,
+        volumeRatio,
+        volatilityPct: regime.volatilityPct,
+        trendStrengthPct: regime.trendStrengthPct,
+      },
+    }
+  }
+
+  if (signedShockScore <= -params.factorEntryThreshold && ret1h > 0 && params.allowShort) {
+    return {
+      strategy: 'shockFade',
+      signal: -1,
+      reason: 'Upside price-volume shock triggered a short fade entry.',
+      indicators: {
+        signal: signedShockScore,
+        meanReversionSignal,
+        entryThreshold: params.factorEntryThreshold,
+        exitThreshold: params.factorExitThreshold,
+        ret1hPct: ret1h,
+        ret6hPct: ret6h,
+        shockMagnitudePct,
+        volumeRatio,
+        volatilityPct: regime.volatilityPct,
+        trendStrengthPct: regime.trendStrengthPct,
+      },
+    }
+  }
+
+  if (Math.abs(signedShockScore) <= params.factorExitThreshold) {
+    return {
+      strategy: 'shockFade',
+      signal: 0,
+      reason: 'Shock-fade signal has reverted inside the exit band.',
+      indicators: {
+        signal: signedShockScore,
+        meanReversionSignal,
+        entryThreshold: params.factorEntryThreshold,
+        exitThreshold: params.factorExitThreshold,
+        ret1hPct: ret1h,
+        ret6hPct: ret6h,
+        shockMagnitudePct,
+        volumeRatio,
+        volatilityPct: regime.volatilityPct,
+        trendStrengthPct: regime.trendStrengthPct,
+      },
+    }
+  }
+
+  return {
+    strategy: 'shockFade',
+    signal: currentPosition,
+    reason: 'Shock-fade is holding the current position through the unwind.',
+    indicators: {
+      signal: signedShockScore,
+      meanReversionSignal,
+      entryThreshold: params.factorEntryThreshold,
+      exitThreshold: params.factorExitThreshold,
+      ret1hPct: ret1h,
+      ret6hPct: ret6h,
+      shockMagnitudePct,
+      volumeRatio,
+      volatilityPct: regime.volatilityPct,
+      trendStrengthPct: regime.trendStrengthPct,
+    },
+  }
+}
+
 function evaluateBreakout(
   candles: MarketData[],
   index: number,
@@ -426,6 +600,205 @@ function evaluateBreakout(
     signal: shouldExit ? 0 : currentPosition,
     reason: 'Breakout is inactive.',
     indicators: { breakoutHigh, breakoutLow, exitHigh, exitLow },
+  }
+}
+
+export function evaluateEnhancedCarry(
+  candles: MarketData[],
+  index: number,
+  currentPosition: PositionSignal,
+  params: ResolvedStrategyParams,
+): StrategyDecision {
+  const minBars = params.carryMinFundingBars + 2
+  if (index + 1 < minBars) {
+    return {
+      strategy: 'enhancedCarry',
+      signal: 0,
+      reason: `Need at least ${minBars} bars with funding rate data.`,
+      indicators: { bars: index + 1, requiredBars: minBars },
+    }
+  }
+
+  const fundingRates: number[] = []
+  for (let i = index - params.carryMinFundingBars + 1; i <= index; i++) {
+    const fr = candles[i]?.fundingRate
+    if (typeof fr !== 'number' || !Number.isFinite(fr)) {
+      return {
+        strategy: 'enhancedCarry',
+        signal: currentPosition,
+        reason: 'Funding rate data missing or invalid.',
+        indicators: { checkedBars: index - i },
+      }
+    }
+    fundingRates.push(fr)
+  }
+
+  const mean = fundingRates.reduce((s, r) => s + r, 0) / fundingRates.length
+  const variance =
+    fundingRates.reduce((s, r) => s + (r - mean) ** 2, 0) / fundingRates.length
+  const std = Math.sqrt(Math.max(variance, 1e-14))
+  const currentRate = fundingRates[fundingRates.length - 1]
+  const zScore = std > 0 ? (currentRate - mean) / std : 0
+
+  if (currentPosition === 0) {
+    if (zScore > params.carryZEntry) {
+      return {
+        strategy: 'enhancedCarry',
+        signal: -1,
+        reason: `Positive funding z=${zScore.toFixed(2)}: short perp + long spot to collect funding.`,
+        indicators: { zScore, currentRate, mean, std },
+      }
+    }
+    if (zScore < -params.carryZEntry && params.allowShort) {
+      return {
+        strategy: 'enhancedCarry',
+        signal: 1,
+        reason: `Negative funding z=${zScore.toFixed(2)}: long perp + short spot to collect funding.`,
+        indicators: { zScore, currentRate, mean, std },
+      }
+    }
+    return {
+      strategy: 'enhancedCarry',
+      signal: 0,
+      reason: `Funding z=${zScore.toFixed(2)} within entry threshold.`,
+      indicators: { zScore, currentRate, mean, std },
+    }
+  }
+
+  if (Math.abs(zScore) <= params.carryZExit) {
+    return {
+      strategy: 'enhancedCarry',
+      signal: 0,
+      reason: `Funding z=${zScore.toFixed(2)} mean-reverted below exit threshold.`,
+      indicators: { zScore, currentRate, mean, std },
+    }
+  }
+
+  const signCheck = currentPosition === -1 ? zScore > 0 : zScore < 0
+  if (!signCheck) {
+    return {
+      strategy: 'enhancedCarry',
+      signal: 0,
+      reason: `Funding sign flipped: closing position.`,
+      indicators: { zScore, currentRate, mean, std },
+    }
+  }
+
+  return {
+    strategy: 'enhancedCarry',
+    signal: currentPosition,
+    reason: `Holding carry position, z=${zScore.toFixed(2)}.`,
+    indicators: { zScore, currentRate, mean, std },
+  }
+}
+
+export function evaluateLiquidationAftermath(
+  candles: MarketData[],
+  index: number,
+  currentPosition: PositionSignal,
+  params: ResolvedStrategyParams,
+): StrategyDecision {
+  const lookback = 24
+  const minBars = lookback + 2
+  if (index + 1 < minBars) {
+    return {
+      strategy: 'liquidationAftermath',
+      signal: 0,
+      reason: `Need at least ${minBars} bars.`,
+      indicators: { bars: index + 1, requiredBars: minBars },
+    }
+  }
+
+  const avgVolume = averageVolume(candles, index - 1, lookback)
+  const currentVolume = candles[index].volume
+  const volumeSurge = avgVolume > 0 ? currentVolume / avgVolume : 1
+  const dropPct =
+    ((candles[index].open - candles[index].low) / candles[index].open) * 100
+  const risePct =
+    ((candles[index].high - candles[index].open) / candles[index].open) * 100
+  const barRange = ((candles[index].high - candles[index].low) / candles[index].open) * 100
+
+  // Volume normalizing = cascade ending → exit signal for open positions
+  const volNormalizing = volumeSurge < 1.5
+
+  if (currentPosition === 0) {
+    // Entry: volume surge + large directional move + reversal confirmation
+    // Confirmation: price recovered from extreme (close above midpoint for long)
+    const barMidpoint = (candles[index].high + candles[index].low) / 2
+    const longSignal =
+      volumeSurge >= params.cascadeMinVolSurge &&
+      dropPct >= params.cascadeMinDropPct &&
+      candles[index].close > barMidpoint // price recovered from lows
+
+    const shortSignal =
+      volumeSurge >= params.cascadeMinVolSurge &&
+      risePct >= params.cascadeMinDropPct &&
+      params.allowShort &&
+      candles[index].close < barMidpoint // price fell from highs
+
+    if (longSignal) {
+      return {
+        strategy: 'liquidationAftermath',
+        signal: 1,
+        reason: `Cascade long: vol=${volumeSurge.toFixed(1)}x, drop=${dropPct.toFixed(1)}%, range=${barRange.toFixed(1)}% (confirmed).`,
+        indicators: { volumeSurge, dropPct, barRange, avgVolume, currentVolume },
+      }
+    }
+    if (shortSignal) {
+      return {
+        strategy: 'liquidationAftermath',
+        signal: -1,
+        reason: `Cascade short: vol=${volumeSurge.toFixed(1)}x, rise=${risePct.toFixed(1)}% (confirmed).`,
+        indicators: { volumeSurge, risePct, barRange, avgVolume, currentVolume },
+      }
+    }
+    return {
+      strategy: 'liquidationAftermath',
+      signal: 0,
+      reason: `No cascade: vol=${volumeSurge.toFixed(1)}x, drop=${dropPct.toFixed(1)}%.`,
+      indicators: { volumeSurge, dropPct, avgVolume, currentVolume },
+    }
+  }
+
+  // Volume normalization exit: cascade is over
+  if (volNormalizing) {
+    return {
+      strategy: 'liquidationAftermath',
+      signal: 0,
+      reason: `Volume normalized (${volumeSurge.toFixed(1)}x). Cascade over.`,
+      indicators: { volumeSurge },
+    }
+  }
+
+  // Use the bar's close as proxy for current PnL reference
+  // The actual stop-loss is handled by the backtest engine via cascadeStopLossPct
+  // Here we provide a soft exit signal when momentum fades
+
+  // Check for reversal failure: price made new low after cascade
+  const newLow = candles[index].low < candles[index - 1].low
+  if (currentPosition === 1 && newLow) {
+    return {
+      strategy: 'liquidationAftermath',
+      signal: 0,
+      reason: `Reversal failed: new low made. Exiting.`,
+      indicators: { volumeSurge },
+    }
+  }
+  const newHigh = candles[index].high > candles[index - 1].high
+  if (currentPosition === -1 && newHigh) {
+    return {
+      strategy: 'liquidationAftermath',
+      signal: 0,
+      reason: `Reversal failed: new high made. Exiting.`,
+      indicators: { volumeSurge },
+    }
+  }
+
+  return {
+    strategy: 'liquidationAftermath',
+    signal: currentPosition,
+    reason: `Holding cascade: vol=${volumeSurge.toFixed(1)}x.`,
+    indicators: { volumeSurge, dropPct },
   }
 }
 
@@ -495,8 +868,14 @@ export function getStrategyMinimumBars(
       return meanReversionBars
     case 'factorMeanReversion':
       return Math.max(169, getRegimeClassificationMinimumBars(resolved))
+    case 'shockFade':
+      return Math.max(169, getRegimeClassificationMinimumBars(resolved))
     case 'breakout':
       return breakoutBars
+    case 'enhancedCarry':
+      return resolved.carryMinFundingBars + 2
+    case 'liquidationAftermath':
+      return 26
     case 'ensemble':
     default:
       return Math.max(trendBars, meanReversionBars, breakoutBars)
@@ -520,8 +899,14 @@ export function evaluateStrategy(
       return evaluateMeanReversion(input.candles, input.index, input.currentPosition, resolved)
     case 'factorMeanReversion':
       return evaluateFactorMeanReversion(input.candles, input.index, input.currentPosition, resolved)
+    case 'shockFade':
+      return evaluateShockFade(input.candles, input.index, input.currentPosition, resolved)
     case 'breakout':
       return evaluateBreakout(input.candles, input.index, input.currentPosition, resolved)
+    case 'enhancedCarry':
+      return evaluateEnhancedCarry(input.candles, input.index, input.currentPosition, resolved)
+    case 'liquidationAftermath':
+      return evaluateLiquidationAftermath(input.candles, input.index, input.currentPosition, resolved)
     case 'ensemble':
     default:
       return evaluateEnsemble(input.candles, input.index, input.currentPosition, resolved)
