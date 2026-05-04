@@ -1314,6 +1314,98 @@ describe('build_p1_trading_evidence', () => {
     expect(ledger.promotionEligible).toBe(false)
   })
 
+  it('excludes duplicate runtime trial reruns from raw_m inflation', () => {
+    const ledger = buildTrialLedgerReport({
+      acceptedTrades: [],
+      gateEffectiveness: buildGateEffectivenessReport({
+        acceptedTrades: [],
+        ledgerEntries: [],
+        lookbackHours: null,
+        generatedAt: '2026-05-02T00:00:00.000Z',
+      }),
+      alphaRegistry: emptyAlphaRegistry(),
+      visibleTrialSources: {
+        entries: [
+          makeTrialLedgerEntry({
+            trialId: 'runtime_trial_registry:trial-old',
+            policyId: 'candidate-1',
+            pValue: null,
+            source: 'runtime_trial_registry',
+            metrics: {
+              evidenceId: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              fdrFamily: '2026Q2_crypto_evidence_os_v4',
+              createdAt: '2026-05-03T00:00:00.000Z',
+              pValue: null,
+              fdrPValueBlockedReason: 'p_value=null',
+            },
+          }),
+          makeTrialLedgerEntry({
+            trialId: 'runtime_trial_registry:trial-new',
+            policyId: 'candidate-1',
+            pValue: null,
+            source: 'runtime_trial_registry',
+            metrics: {
+              evidenceId: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              fdrFamily: '2026Q2_crypto_evidence_os_v4',
+              createdAt: '2026-05-03T01:00:00.000Z',
+              pValue: null,
+              fdrPValueBlockedReason: 'p_value=null',
+            },
+          }),
+          makeTrialLedgerEntry({
+            trialId: 'runtime_trial_registry:trial-other',
+            policyId: 'candidate-2',
+            pValue: null,
+            source: 'runtime_trial_registry',
+            metrics: {
+              evidenceId: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+              fdrFamily: '2026Q2_crypto_evidence_os_v4',
+              createdAt: '2026-05-03T02:00:00.000Z',
+              pValue: null,
+              fdrPValueBlockedReason: 'p_value=null',
+            },
+          }),
+        ],
+        diagnostics: [{
+          source: 'runtime_trial_registry',
+          path: '/tmp/trial_registry.jsonl',
+          status: 'loaded',
+          recordsIn: 3,
+          entriesEmitted: 3,
+          notes: [],
+        }],
+      },
+      generatedAt: '2026-05-02T00:00:00.000Z',
+    })
+    const coverage = buildTrialSourceCoverageReport({ trialLedger: ledger })
+    const old = ledger.entries.find(entry => entry.trialId === 'runtime_trial_registry:trial-old')
+    const newest = ledger.entries.find(entry => entry.trialId === 'runtime_trial_registry:trial-new')
+
+    expect(ledger.raw_m).toBe(2)
+    expect(ledger.readinessGaps.includedRawMTrials).toBe(2)
+    expect(old).toMatchObject({
+      includedInRawM: false,
+      includedInEffectiveM: false,
+      metrics: {
+        rawMExclusionReason: 'duplicate_runtime_trial_registry_rerun',
+        duplicateCanonicalTrialId: 'runtime_trial_registry:trial-new',
+      },
+    })
+    expect(newest?.includedInRawM).toBe(true)
+    expect(coverage.runtimeRegistryDiagnostics).toMatchObject({
+      entries: 3,
+      includedRawMTrials: 2,
+      duplicateRerunGroups: 1,
+      duplicateRerunRowsExcludedFromRawM: 1,
+    })
+    expect(coverage.runtimeRegistryDiagnostics.repairBuckets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        bucket: 'duplicate_runtime_trial_registry_rerun',
+        count: 1,
+      }),
+    ]))
+  })
+
   it('computes accept-vs-skip gate report from closed trades and shadow outcomes', () => {
     const accepted = [
       makeTrade({ tradeId: 'a1', pnlPct: 1 }),

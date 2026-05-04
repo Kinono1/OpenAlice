@@ -285,6 +285,8 @@ export interface RuntimeTrialRegistryDiagnostics {
   entries: number
   includedRawMTrials: number
   quarantinedTestHarnessRows: number
+  duplicateRerunGroups: number
+  duplicateRerunRowsExcludedFromRawM: number
   rowsWithRegistryPValue: number
   rowsWithArtifactPValue: number
   rowsMissingPValueBecauseFdrArtifactMissing: number
@@ -3525,10 +3527,10 @@ export function buildTrialLedgerReport(input: {
       includedInEffectiveM: false,
     }
   })
-  const entries = dedupeTrialLedgerEntries([
+  const entries = excludeDuplicateRuntimeTrialRerunsFromRawM(dedupeTrialLedgerEntries([
     ...registryEntries,
     ...(input.visibleTrialSources?.entries ?? []),
-  ])
+  ]))
   const rawM = entries.filter(entry => entry.includedInRawM).length
   const effectiveM = new Set(entries
     .filter(entry => entry.includedInEffectiveM)
@@ -3915,6 +3917,13 @@ function buildRuntimeTrialRegistryDiagnostics(entries: TrialLedgerEntry[]): Runt
   const quarantinedTestHarnessRows = runtimeEntries.filter(entry =>
     entry.metrics.rawMExclusionReason === 'quarantined_test_harness_runtime_trial_registry_leak'
   ).length
+  const duplicateRerunRowsExcludedFromRawM = runtimeEntries.filter(entry =>
+    entry.metrics.rawMExclusionReason === 'duplicate_runtime_trial_registry_rerun',
+  ).length
+  const duplicateRerunGroups = new Set(runtimeEntries
+    .filter(entry => entry.metrics.rawMExclusionReason === 'duplicate_runtime_trial_registry_rerun')
+    .map(entry => entry.metrics.duplicateGroupKeyHash)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)).size
   const rowsWithFdrReportPath = included.filter(entry => typeof entry.metrics.fdrReportPath === 'string').length
   const rowsMissingFdrReportPath = included.length - rowsWithFdrReportPath
   const rowsWithExistingFdrReportPath = included.filter(entry =>
@@ -3981,6 +3990,11 @@ function buildRuntimeTrialRegistryDiagnostics(entries: TrialLedgerEntry[]): Runt
       ).length,
       action: 'treat explanatory p-values as diagnostics only; promotion requires complete raw_m and promotion-grade p-values',
     },
+    {
+      bucket: 'duplicate_runtime_trial_registry_rerun',
+      count: duplicateRerunRowsExcludedFromRawM,
+      action: 'keep duplicate reruns as provenance only; raw_m counts unique evidence_id/fdr_family/candidate_id rows',
+    },
   ].filter(bucket => bucket.count > 0)
   return {
     source: 'runtime_trial_registry',
@@ -3989,6 +4003,8 @@ function buildRuntimeTrialRegistryDiagnostics(entries: TrialLedgerEntry[]): Runt
     entries: runtimeEntries.length,
     includedRawMTrials: included.length,
     quarantinedTestHarnessRows,
+    duplicateRerunGroups,
+    duplicateRerunRowsExcludedFromRawM,
     rowsWithRegistryPValue,
     rowsWithArtifactPValue,
     rowsMissingPValueBecauseFdrArtifactMissing,
@@ -4035,6 +4051,7 @@ function buildRuntimeTrialRegistryDiagnostics(entries: TrialLedgerEntry[]): Runt
     notes: [
       'Read-only runtime registry diagnostics. Missing historical metadata remains missing unless an existing deterministic artifact can be linked.',
       'Rows from local validation test harness temp outputs are quarantined as provenance-only and excluded from raw_m; tests must pass an isolated trialRegistryPath.',
+      'Duplicate runtime registry reruns with the same evidence_id/fdr_family/candidate_id are retained as provenance but excluded from raw_m inflation.',
       'Existing fdr_report_path only proves an artifact link exists; fdr_report_status and p_value_is_promotion_grade still control evidence quality.',
       'PIT proxy or missing PIT audit metadata must remain promotion-blocking.',
     ],
@@ -4414,6 +4431,60 @@ function loadRuntimeTrialRegistryEntries(
       ],
     },
   }
+}
+
+function excludeDuplicateRuntimeTrialRerunsFromRawM(entries: TrialLedgerEntry[]): TrialLedgerEntry[] {
+  const candidates = entries
+    .map((entry, index) => ({ entry, index, key: runtimeTrialRerunKey(entry) }))
+    .filter(item => item.entry.includedInRawM && item.key != null)
+  const grouped = new Map<string, typeof candidates>()
+  for (const item of candidates) {
+    grouped.set(item.key, [...(grouped.get(item.key) ?? []), item])
+  }
+  const canonicalIndexByKey = new Map<string, number>()
+  for (const [key, items] of grouped.entries()) {
+    if (items.length <= 1) continue
+    const canonical = [...items].sort((left, right) => {
+      const leftTime = isoTimeMs(left.entry.metrics.createdAt)
+      const rightTime = isoTimeMs(right.entry.metrics.createdAt)
+      return rightTime - leftTime || right.index - left.index
+    })[0]
+    canonicalIndexByKey.set(key, canonical.index)
+  }
+  if (canonicalIndexByKey.size === 0) return entries
+  return entries.map((entry, index) => {
+    const key = runtimeTrialRerunKey(entry)
+    const canonicalIndex = key == null ? null : canonicalIndexByKey.get(key)
+    if (key == null || canonicalIndex == null || canonicalIndex === index) return entry
+    const canonical = entries[canonicalIndex]
+    return {
+      ...entry,
+      includedInRawM: false,
+      includedInEffectiveM: false,
+      metrics: {
+        ...entry.metrics,
+        provenanceOnly: true,
+        duplicateRuntimeTrialRegistryRerun: true,
+        duplicateCanonicalTrialId: canonical.trialId,
+        duplicateGroupKeyHash: hashString(key),
+        rawMExclusionReason: 'duplicate_runtime_trial_registry_rerun',
+      },
+    }
+  })
+}
+
+function runtimeTrialRerunKey(entry: TrialLedgerEntry): string | null {
+  if (entry.source !== 'runtime_trial_registry') return null
+  const evidenceId = stringOrNull(entry.metrics.evidenceId)
+  const fdrFamily = stringOrNull(entry.metrics.fdrFamily)
+  if (!evidenceId || !fdrFamily || !entry.policyId) return null
+  return `${evidenceId}|${fdrFamily}|${entry.policyId}`
+}
+
+function isoTimeMs(value: unknown): number {
+  if (typeof value !== 'string') return 0
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : 0
 }
 
 function runtimeTrialRegistryRowToEntry(
