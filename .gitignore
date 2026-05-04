@@ -41,3 +41,11 @@ scripts/**/__pycache__/
 task_plan.md
 findings.md
 progress.md
+
+# Generated monitoring / capture artifacts
+data/media/
+
+# Local secrets loaded by cron/launchd wrappers
+openalice.env
+.openalice.env
+data/runtime/secrets/

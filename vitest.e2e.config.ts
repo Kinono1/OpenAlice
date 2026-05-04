@@ -13,7 +13,7 @@ export default {
     },
   },
   test: {
-    include: ['src/**/*.e2e.spec.*'],
+    include: ['src/**/*.e2e.spec.*', 'packages/ibkr/tests/e2e/**/*.e2e.spec.*'],
     testTimeout: 60_000,
     fileParallelism: false,
     pool: 'forks',

@@ -6,8 +6,55 @@ on:
   workflow_dispatch:
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm typecheck
+
+      - run: pnpm test:release
+
+      - name: Hard release governance gate
+        run: |
+          pnpm decision:validate
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          verdict = json.loads(Path("decision_packet/verdict.json").read_text())
+          release_gate = json.loads(Path("decision_packet/release_gate_status.json").read_text())
+          replay = json.loads(Path("decision_packet/replay_report.json").read_text())
+
+          errors = []
+          if verdict.get("verdict") != "GO":
+              errors.append(f"decision_packet verdict is {verdict.get('verdict')!r}, expected 'GO'")
+          if release_gate.get("allowLiveTrading") is not True:
+              errors.append("release_gate_status.allowLiveTrading is not true")
+          if replay.get("valid") is not True:
+              errors.append("replay_report.valid is not true")
+
+          if errors:
+              for error in errors:
+                  print(f"::error::{error}")
+              raise SystemExit(1)
+          PY
+
   release:
     runs-on: ubuntu-latest
+    needs: preflight
     permissions:
       contents: write
       packages: write
