@@ -5,13 +5,14 @@
  */
 
 import type { LanguageModel } from 'ai'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { ResolvedProfile } from '../../core/config.js'
 
 /** Result includes the model plus a cache key for change detection. */
 export interface ModelFromConfig {
   model: LanguageModel
-  /** `provider:modelId:baseUrl` — use this to detect config changes. */
+  /** Stable fingerprint of provider/model/baseUrl/API-key presence and value. */
   key: string
 }
 
@@ -20,7 +21,7 @@ export async function createModelFromProfile(profile: ResolvedProfile): Promise<
   const m = profile.model
   const url = profile.baseUrl
   const apiKey = profile.apiKey
-  const key = `${p}:${m}:${url ?? ''}`
+  const key = modelConfigCacheKey({ provider: p, model: m, baseUrl: url, apiKey })
 
   switch (p) {
     case 'anthropic': {
@@ -41,6 +42,23 @@ export async function createModelFromProfile(profile: ResolvedProfile): Promise<
     default:
       throw new Error(`Unsupported model provider: "${p}". Supported: anthropic, openai, google`)
   }
+}
+
+export function modelConfigCacheKey(input: {
+  provider: string
+  model: string
+  baseUrl?: string
+  apiKey?: string
+}): string {
+  const apiKeyFingerprint = input.apiKey
+    ? createHash('sha256').update(input.apiKey, 'utf-8').digest('hex').slice(0, 16)
+    : 'none'
+  return [
+    input.provider,
+    input.model,
+    input.baseUrl ?? '',
+    `apiKey:${apiKeyFingerprint}`,
+  ].join(':')
 }
 
 export interface ConfiguredModelSpec {

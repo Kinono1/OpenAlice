@@ -152,6 +152,7 @@ export async function askAgentSdk(
   const isOAuthMode = loginMethod === 'claudeai'
 
   const env: Record<string, string | undefined> = { ...process.env }
+  delete env.ANTHROPIC_BASE_URL
   if (isOAuthMode) {
     // Force OAuth by removing any inherited API key
     delete env.ANTHROPIC_API_KEY

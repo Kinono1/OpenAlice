@@ -29,11 +29,83 @@ vi.mock('@ai-sdk/openai', () => ({
 }))
 
 import { readFile } from 'node:fs/promises'
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
-import { createConfiguredModel } from './model-factory.js'
+import {
+  createConfiguredModel,
+  createModelFromProfile,
+  modelConfigCacheKey,
+} from './model-factory.js'
 
 const mockReadFile = vi.mocked(readFile)
+const mockCreateAnthropic = vi.mocked(createAnthropic)
+const mockCreateGoogleGenerativeAI = vi.mocked(createGoogleGenerativeAI)
 const mockCreateOpenAI = vi.mocked(createOpenAI)
+
+describe('createModelFromProfile', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('keeps provider-specific base URLs and API keys isolated', async () => {
+    await createModelFromProfile({
+      backend: 'vercel-ai-sdk',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      apiKey: 'anthropic-secret',
+      baseUrl: 'https://anthropic.example.invalid',
+    })
+    await createModelFromProfile({
+      backend: 'vercel-ai-sdk',
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+      apiKey: 'google-secret',
+      baseUrl: 'https://google.example.invalid',
+    })
+    await createModelFromProfile({
+      backend: 'vercel-ai-sdk',
+      provider: 'openai',
+      model: 'gpt-4o',
+      apiKey: 'openai-secret',
+      baseUrl: 'https://openai.example.invalid/v1',
+    })
+
+    expect(mockCreateAnthropic).toHaveBeenCalledWith({
+      apiKey: 'anthropic-secret',
+      baseURL: 'https://anthropic.example.invalid',
+    })
+    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalledWith({
+      apiKey: 'google-secret',
+      baseURL: 'https://google.example.invalid',
+    })
+    expect(mockCreateOpenAI).toHaveBeenCalledWith({
+      apiKey: 'openai-secret',
+      baseURL: 'https://openai.example.invalid/v1',
+    })
+  })
+
+  it('uses a cache key that changes with provider, model, baseUrl, and apiKey', () => {
+    const base = {
+      provider: 'openai',
+      model: 'deepseek-v4-pro',
+      baseUrl: 'https://api.deepseek.example/v1',
+      apiKey: 'deepseek-secret-a',
+    }
+
+    const keys = new Set([
+      modelConfigCacheKey(base),
+      modelConfigCacheKey({ ...base, provider: 'anthropic' }),
+      modelConfigCacheKey({ ...base, model: 'deepseek-v4-flash' }),
+      modelConfigCacheKey({ ...base, baseUrl: 'https://api.deepseek.example/v2' }),
+      modelConfigCacheKey({ ...base, apiKey: 'deepseek-secret-b' }),
+      modelConfigCacheKey({ ...base, apiKey: undefined }),
+    ])
+
+    expect(keys.size).toBe(6)
+    expect(modelConfigCacheKey(base)).not.toContain('deepseek-secret-a')
+  })
+})
 
 describe('createConfiguredModel', () => {
   beforeEach(() => {
