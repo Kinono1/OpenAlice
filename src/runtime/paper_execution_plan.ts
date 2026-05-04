@@ -1,4 +1,4 @@
-import type { CryptoPosition } from "../extension/crypto-trading/interfaces.js";
+import type { CryptoPosition } from "../domain/trading/operation-dispatcher.types.js";
 import type { PortfolioRebalancePlan } from "../portfolio/rebalance.js";
 import { planPortfolioRebalance } from "../portfolio/rebalance.js";
 import {
@@ -6,6 +6,10 @@ import {
   type PortfolioTarget,
 } from "../portfolio/target.js";
 import type { PaperGateMode } from "./paper_gate.js";
+import {
+  evaluatePromotionReadinessForPaperOrders,
+  type PromotionReadinessV2,
+} from "./promotion_v2.js";
 
 export type PaperExecutionPlan =
   | BlockedPaperExecutionPlan
@@ -44,6 +48,8 @@ export interface PaperExecutionPlanInput {
   paperGateAllowsExecution?: boolean;
   paperGateBlockingReasons?: string[];
   paperGateFlatOnlyReasons?: string[];
+  promotionReadinessV2?: PromotionReadinessV2 | null;
+  requirePromotionV2?: boolean;
   championRegistryState: "valid" | "missing" | "invalid";
   championSetComplete?: boolean;
   regimeSeverity?: "stable" | "watch" | "high";
@@ -69,6 +75,14 @@ export function buildPaperExecutionPlan(
   const paperGateMode = input.paperGateMode;
   const paperGateAllowsExecution =
     input.paperGateAllowsExecution ?? paperGateMode !== "blocked";
+  const promotionV2Blocks = evaluatePromotionReadinessForPaperOrders(
+    input.promotionReadinessV2,
+    {
+      required: input.requirePromotionV2,
+      now: input.now,
+    },
+  );
+  blockingReasons.push(...promotionV2Blocks);
 
   if (useExplicitPaperGate) {
     if (!paperGateAllowsExecution || paperGateMode === "blocked") {

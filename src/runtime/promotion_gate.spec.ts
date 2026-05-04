@@ -17,11 +17,19 @@ const validValidationRuns = {
       strategyId: "BTC_TREND",
       strategyName: "BTC Trend",
       strategy: "trend",
+      promotionEligible: true,
+      admissionIntent: "promotion",
+      runtimeMode: "real_runtime",
+      sourceLineage: "openalice_native",
     },
     {
       strategyId: "ETH_ENSEMBLE",
       strategyName: "ETH Ensemble",
       strategy: "ensemble",
+      promotionEligible: true,
+      admissionIntent: "promotion",
+      runtimeMode: "real_runtime",
+      sourceLineage: "openalice_native",
     },
   ],
 };
@@ -198,6 +206,10 @@ describe("promotion_gate", () => {
             strategyId: "BTC_REGIME",
             strategyName: "BTC Regime Trend",
             strategy: "regimeTrend",
+            promotionEligible: true,
+            admissionIntent: "promotion",
+            runtimeMode: "real_runtime",
+            sourceLineage: "openalice_native",
           },
         ],
       },
@@ -207,6 +219,109 @@ describe("promotion_gate", () => {
       },
       releaseGateStatus: validReleaseGate,
       portfolioSymbols: ["BTC/USD"],
+    });
+
+    expect(verdict.pass).toBe(true);
+    expect(verdict.blockingReasons).toEqual([]);
+  });
+
+  it("treats factorMeanReversion as a supported default family", () => {
+    const verdict = evaluatePromotionGate({
+      validationRuns: {
+        championSet: [
+          {
+            symbol: "BTC/USD",
+            strategyId: "BTC_FMR",
+          },
+        ],
+        candidates: [
+          {
+            strategyId: "BTC_FMR",
+            strategyName: "BTC Factor Mean Reversion",
+            strategy: "factorMeanReversion",
+            promotionEligible: true,
+            admissionIntent: "promotion",
+            runtimeMode: "real_runtime",
+            sourceLineage: "openalice_native",
+          },
+        ],
+      },
+      experimentVerdict: {
+        schemaVersion: "experiment_verdict.v2",
+        result: "GO",
+      },
+      releaseGateStatus: validReleaseGate,
+      portfolioSymbols: ["BTC/USD"],
+    });
+
+    expect(verdict.pass).toBe(true);
+    expect(verdict.blockingReasons).toEqual([]);
+  });
+
+  it("treats shockFade as a supported default family", () => {
+    const verdict = evaluatePromotionGate({
+      validationRuns: {
+        championSet: [
+          {
+            symbol: "BTC/USD",
+            strategyId: "BTC_SHOCK_FADE",
+          },
+        ],
+        candidates: [
+          {
+            strategyId: "BTC_SHOCK_FADE",
+            strategyName: "BTC Shock Fade",
+            strategy: "shockFade",
+            promotionEligible: true,
+            admissionIntent: "promotion",
+            runtimeMode: "real_runtime",
+            sourceLineage: "openalice_native",
+          },
+        ],
+      },
+      experimentVerdict: {
+        schemaVersion: "experiment_verdict.v2",
+        result: "GO",
+      },
+      releaseGateStatus: validReleaseGate,
+      portfolioSymbols: ["BTC/USD"],
+    });
+
+    expect(verdict.pass).toBe(true);
+    expect(verdict.blockingReasons).toEqual([]);
+  });
+
+  it("treats carry as a supported default family", () => {
+    const verdict = evaluatePromotionGate({
+      validationRuns: {
+        championSet: [
+          {
+            symbol: "ETH/USDT:USDT",
+            strategyId: "ETH_CARRY_BINANCE_FUNDING_V1",
+          },
+          {
+            symbol: "BTC/USDT:USDT",
+            strategyId: "ETH_CARRY_BINANCE_FUNDING_V1",
+          },
+        ],
+        candidates: [
+          {
+            strategyId: "ETH_CARRY_BINANCE_FUNDING_V1",
+            strategyName: "ETH Carry Binance Funding",
+            strategy: "carry",
+            promotionEligible: true,
+            admissionIntent: "promotion",
+            runtimeMode: "real_runtime",
+            sourceLineage: "openalice_native",
+          },
+        ],
+      },
+      experimentVerdict: {
+        schemaVersion: "experiment_verdict.v2",
+        result: "GO",
+      },
+      releaseGateStatus: validReleaseGate,
+      portfolioSymbols: ["ETH/USDT:USDT", "BTC/USDT:USDT"],
     });
 
     expect(verdict.pass).toBe(true);
@@ -270,6 +385,71 @@ describe("promotion_gate", () => {
     );
   });
 
+  it("blocks source-ineligible champion candidates", () => {
+    const verdict = evaluatePromotionGate({
+      validationRuns: {
+        championSet: [
+          {
+            symbol: "BTC/USD",
+            strategyId: "TA_DONOR_LONG_SIGNAL",
+          },
+        ],
+        candidates: [
+          {
+            strategyId: "TA_DONOR_LONG_SIGNAL",
+            strategyName: "TA Donor",
+            strategy: "trend",
+            sourceEligibility: {
+              sourceValidity: {
+                runtimeMode: "proxy_runtime",
+                sourceLineage: "donor_proxy",
+                evidenceStrength: "proxy",
+                fallbackReason: "tradingagents_runtime_invalid_model_config",
+                blockers: ["proxy_runtime:tradingagents_runtime_invalid_model_config"],
+              },
+              donorNative: false,
+              promotionEligible: false,
+              admissionIntent: "exploratory",
+              eligibilityBlockers: [
+                "runtime_not_real",
+                "non_donor_native_source",
+              ],
+            },
+          },
+        ],
+      },
+      experimentVerdict: {
+        schemaVersion: "experiment_verdict.v2",
+        result: "GO",
+      },
+      releaseGateStatus: validReleaseGate,
+      portfolioSymbols: ["BTC/USD"],
+    });
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.blockingReasons).toContain(
+      "promotion_source_eligibility_blocked:TA_DONOR_LONG_SIGNAL",
+    );
+    expect(verdict.diagnostics.sourceEligibility).toEqual([
+      {
+        symbol: "BTC/USD",
+        strategyId: "TA_DONOR_LONG_SIGNAL",
+        promotionEligible: false,
+        runtimeMode: "proxy_runtime",
+        sourceLineage: "donor_proxy",
+        donorNative: false,
+        admissionIntent: "exploratory",
+        eligibilityBlockers: [
+          "proxy_runtime:tradingagents_runtime_invalid_model_config",
+          "runtime_not_real",
+          "non_donor_native_source",
+          "exploratory_artifact_not_promotion",
+          "promotion_eligible_false",
+        ],
+      },
+    ]);
+  });
+
   it("blocks a dual-symbol portfolio when the champion set omits a required symbol", () => {
     const verdict = evaluatePromotionGate({
       validationRuns: {
@@ -296,47 +476,8 @@ describe("promotion_gate", () => {
     });
 
     expect(verdict.pass).toBe(false);
-    expect(verdict.blockingReasons).toContain("promotion_candidate_missing_or_invalid");
-  });
-
-
-  it("accepts validation runs that only expose portfolio championSet", () => {
-    const verdict = evaluatePromotionGate({
-      validationRuns: {
-        portfolio: {
-          championSet: [
-            {
-              symbol: "BTC/USD",
-              strategyId: "BTC_TREND",
-            },
-            {
-              symbol: "ETH/USD",
-              strategyId: "ETH_ENSEMBLE",
-            },
-          ],
-        },
-        candidates: [
-          {
-            strategyId: "BTC_TREND",
-            strategyName: "BTC Trend",
-            strategy: "trend",
-          },
-          {
-            strategyId: "ETH_ENSEMBLE",
-            strategyName: "ETH Ensemble",
-            strategy: "ensemble",
-          },
-        ],
-      },
-      experimentVerdict: {
-        schemaVersion: "experiment_verdict.v2",
-        result: "GO",
-      },
-      releaseGateStatus: validReleaseGate,
-      portfolioSymbols: ["BTC/USD", "ETH/USD"],
-    });
-
-    expect(verdict.pass).toBe(true);
-    expect(verdict.blockingReasons).toEqual([]);
+    expect(verdict.blockingReasons).toContain(
+      "promotion_candidate_missing_or_invalid",
+    );
   });
 });

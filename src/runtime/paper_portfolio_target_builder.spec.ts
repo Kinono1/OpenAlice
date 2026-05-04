@@ -7,7 +7,7 @@ import type { KlineStore } from "../extension/analysis-kit/kline/KlineStore.js";
 import type {
   CryptoAccountInfo,
   ICryptoTradingEngine,
-} from "../extension/crypto-trading/interfaces.js";
+} from "../domain/trading/operation-dispatcher.types.js";
 import { buildPaperPortfolioTarget } from "./paper_portfolio_target_builder.js";
 
 describe("paper_portfolio_target_builder", () => {

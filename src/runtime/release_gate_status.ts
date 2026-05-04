@@ -1,12 +1,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { ReleaseGateCheck, ReleaseGateResult } from '../backtest/release_gate.js'
+import { writeEvidenceManifestForArtifact } from './evidence_manifest.js'
 
 export interface PersistedReleaseGateStatus {
   version: 1
   generatedAt: string
   allowPaperTrading: boolean
   allowLiveTrading: boolean
+  allowTinyCapLiveTrading?: boolean
   failedChecks: ReleaseGateCheck['name'][]
   warningChecks: ReleaseGateCheck['name'][]
   result?: 'GO' | 'NO_GO'
@@ -36,6 +38,7 @@ export async function writeReleaseGateStatus(
     filePath?: string
     sourceReportPath?: string
     expiresAt?: string
+    allowTinyCapLiveTrading?: boolean
     result?: 'GO' | 'NO_GO'
     reasonCodes?: string[]
     checks?: ReleaseGateCheck[]
@@ -46,6 +49,7 @@ export async function writeReleaseGateStatus(
     generatedAt: new Date().toISOString(),
     allowPaperTrading: gate.allowPaperTrading,
     allowLiveTrading: gate.allowLiveTrading,
+    allowTinyCapLiveTrading: opts?.allowTinyCapLiveTrading,
     failedChecks: [...gate.failedChecks],
     warningChecks: [...gate.warningChecks],
     result: opts?.result,
@@ -58,10 +62,42 @@ export async function writeReleaseGateStatus(
   const filePath = opts?.filePath ?? 'data/runtime/release_gate_status.json'
   await mkdir(dirname(filePath), { recursive: true })
   await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8')
+  await writeEvidenceManifestForArtifact({
+    job: 'release_gate_status',
+    artifactPath: filePath,
+    startedAt: payload.generatedAt,
+    finishedAt: new Date(),
+    exitCode: 0,
+    businessStatus: payload.allowPaperTrading || payload.allowLiveTrading ? 'pass' : 'warn',
+    recordsIn: payload.checks?.length ?? 0,
+    recordsOut: payload.failedChecks.length + payload.warningChecks.length,
+    errorClass: payload.failedChecks[0] ? `release_gate_failed:${payload.failedChecks[0]}` : null,
+  })
   return payload
 }
 
 export type ReleaseGateMode = 'paper' | 'live'
+
+const REQUIRED_LIVE_CHECK_NAMES: ReleaseGateCheck['name'][] = [
+  'execution_quality',
+  'ramp_up',
+  'regime_shift',
+]
+
+export function getSkippedRequiredLiveChecks(
+  status: PersistedReleaseGateStatus | null,
+): ReleaseGateCheck['name'][] {
+  if (!status?.checks) {
+    return []
+  }
+
+  return status.checks
+    .filter(
+      (check): check is ReleaseGateCheck =>
+        REQUIRED_LIVE_CHECK_NAMES.includes(check.name) && check.status === 'skipped',
+    )
+    .map((check) => check.name)
+}
 
 export function isReleaseGateStatusBlocking(
   status: PersistedReleaseGateStatus | null,
@@ -77,6 +113,15 @@ export function isReleaseGateStatusBlocking(
       return {
         blocking: true,
         reason: `release_gate_status_expired:${status.expiresAt}`,
+      }
+    }
+  }
+  if (mode === 'live') {
+    const skippedRequiredLiveChecks = getSkippedRequiredLiveChecks(status)
+    if (skippedRequiredLiveChecks.length > 0) {
+      return {
+        blocking: true,
+        reason: `live_release_gate_required_checks_skipped:${skippedRequiredLiveChecks.join(',')}`,
       }
     }
   }
@@ -102,6 +147,10 @@ export function normalizeReleaseGateStatus(raw: unknown): PersistedReleaseGateSt
     typeof value.generatedAt !== 'string' ||
     typeof value.allowPaperTrading !== 'boolean' ||
     typeof value.allowLiveTrading !== 'boolean' ||
+    (
+      value.allowTinyCapLiveTrading !== undefined &&
+      typeof value.allowTinyCapLiveTrading !== 'boolean'
+    ) ||
     !Array.isArray(value.failedChecks) ||
     !Array.isArray(value.warningChecks)
   ) {
@@ -117,6 +166,7 @@ export function normalizeReleaseGateStatus(raw: unknown): PersistedReleaseGateSt
     generatedAt: value.generatedAt,
     allowPaperTrading: value.allowPaperTrading,
     allowLiveTrading: value.allowLiveTrading,
+    allowTinyCapLiveTrading: value.allowTinyCapLiveTrading,
     failedChecks: value.failedChecks,
     warningChecks: value.warningChecks,
     result,
@@ -207,6 +257,7 @@ function isReleaseGateCheckName(value: unknown): value is ReleaseGateCheck['name
     value === 'significance' ||
     value === 'risk_simulation' ||
     value === 'economics' ||
+    value === 'strategy_plan_evidence' ||
     value === 'execution_quality' ||
     value === 'ramp_up' ||
     value === 'regime_shift'

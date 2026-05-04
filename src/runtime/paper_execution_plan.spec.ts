@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { CryptoPosition } from "../extension/crypto-trading/interfaces.js";
+import type { CryptoPosition } from "../domain/trading/operation-dispatcher.types.js";
 import { buildPortfolioTargetFromWeights } from "../portfolio/target.js";
 import { buildPaperExecutionPlan } from "./paper_execution_plan.js";
+import {
+  PROMOTION_V2_SCHEMA_VERSION,
+  buildPromotionReadinessV2,
+  makeGateResult,
+  type PromotionReadinessV2,
+} from "./promotion_v2.js";
 
 const pricesBySymbol = {
   "BTC/USD": 100,
@@ -9,6 +15,8 @@ const pricesBySymbol = {
 };
 
 const emptyPositions: CryptoPosition[] = [];
+const now = new Date("2026-04-30T12:00:00.000Z");
+const future = "2026-04-30T13:00:00.000Z";
 
 function createTarget() {
   return buildPortfolioTargetFromWeights({
@@ -19,6 +27,66 @@ function createTarget() {
     },
     maxTurnoverPct: 1,
   });
+}
+
+function createPromotionReadiness(
+  overrides: Partial<PromotionReadinessV2> = {},
+): PromotionReadinessV2 {
+  const readiness = buildPromotionReadinessV2({
+    schemaMeta: {
+      schemaName: "strategy_promotion",
+      schemaVersion: PROMOTION_V2_SCHEMA_VERSION,
+      createdBy: "vitest",
+      createdAt: now.toISOString(),
+      codeCommit: "test",
+    },
+    strategyId: "cross-sectional-v2",
+    experimentId: "experiment-1",
+    generatedAt: now.toISOString(),
+    globalReleaseGate: makeGateResult({ gateName: "global_release", expiresAt: future }),
+    researchGate: makeGateResult({ gateName: "research", expiresAt: future }),
+    monetizationGate: makeGateResult({ gateName: "monetization", expiresAt: future }),
+    paperGate: makeGateResult({ gateName: "paper", expiresAt: future }),
+    liveGate: makeGateResult({
+      gateName: "live",
+      hardBlocks: ["tiny_cap_not_reviewed"],
+      expiresAt: future,
+    }),
+    monetization: {
+      netExpectancyBpsPerTrade: 30,
+      netExpectancyUsdPerTrade: 3,
+      netExpectancyUsdPerDay: 6,
+      netExpectancyUsdPerMonth: 180,
+      validSignalsPerMonth: 30,
+      executableCapacityUsd: 5_000,
+      turnoverPerDay: 0.2,
+      routeAdjustedBreakEvenBps: 14,
+      benchmarkExcessReturnBps: 18,
+    },
+    execution: {
+      recentOrderCount: 20,
+      slippageViolationCount: 0,
+      actualToSimulatedCostRatio: 1.1,
+      missedFillRate: 0.2,
+      decayCircuitBreakerTriggered: false,
+    },
+    dataFreshness: {
+      latestDecisionStatus: "fresh",
+      staleBlockCount: 0,
+      maxDataLatencyMinutes: 3,
+    },
+    evidence: {
+      supportingEvidenceIds: ["evidence-1"],
+      blockingEvidenceIds: [],
+      missingRequiredEvidence: [],
+    },
+    now,
+  });
+
+  return {
+    ...readiness,
+    ...overrides,
+  };
 }
 
 describe("paper_execution_plan", () => {
@@ -70,6 +138,47 @@ describe("paper_execution_plan", () => {
     expect(plan.kind).toBe("blocked");
     if (plan.kind === "blocked") {
       expect(plan.blockingReasons).toContain("paper_champion_registry_missing");
+    }
+  });
+
+  it("blocks when v2.6 promotion readiness is required but missing", () => {
+    const plan = buildPaperExecutionPlan({
+      promotionPass: true,
+      paperGateAllowsPaperTrading: true,
+      requirePromotionV2: true,
+      championRegistryState: "valid",
+      regimeSeverity: "stable",
+      portfolioTarget: createTarget(),
+      currentPositions: emptyPositions,
+      pricesBySymbol,
+      now,
+    });
+
+    expect(plan.kind).toBe("blocked");
+    if (plan.kind === "blocked") {
+      expect(plan.blockingReasons).toContain("promotion_v2_readiness_missing");
+    }
+  });
+
+  it("blocks when v2.6 promotion readiness is not paper-allowed", () => {
+    const plan = buildPaperExecutionPlan({
+      promotionPass: true,
+      paperGateAllowsPaperTrading: true,
+      promotionReadinessV2: createPromotionReadiness({
+        finalVerdict: "research_only",
+        humanReadableReason: "monetization:gross_to_cost_ratio_below_threshold",
+      }),
+      championRegistryState: "valid",
+      regimeSeverity: "stable",
+      portfolioTarget: createTarget(),
+      currentPositions: emptyPositions,
+      pricesBySymbol,
+      now,
+    });
+
+    expect(plan.kind).toBe("blocked");
+    if (plan.kind === "blocked") {
+      expect(plan.blockingReasons).toContain("promotion_v2_blocks_paper_orders:research_only");
     }
   });
 
@@ -235,10 +344,12 @@ describe("paper_execution_plan", () => {
           side: "long",
           size: 4,
           entryPrice: 100,
-          markPrice: 100,
-          unrealizedPnl: 0,
           leverage: 1,
-          liquidationPrice: null,
+          margin: 400,
+          liquidationPrice: 0,
+          markPrice: 100,
+          unrealizedPnL: 0,
+          positionValue: 400,
         },
       ],
       pricesBySymbol,

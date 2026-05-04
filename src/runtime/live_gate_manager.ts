@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { EventLog } from "../core/event-log.js";
 import { RampUpStore } from "../deployment/ramp_up_store.js";
 import type { RampUpEvaluation } from "../deployment/ramp_up.js";
@@ -7,12 +7,10 @@ import type {
   CryptoOrderResult,
   CryptoPlaceOrderRequest,
   ICryptoTradingEngine,
-} from "../extension/crypto-trading/interfaces.js";
-import type {
   RiskConfig,
   RiskCheckContext,
   RiskCheckResult,
-} from "../extension/crypto-trading/risk.js";
+} from "../domain/trading/operation-dispatcher.types.js";
 import { ExecutionQualityStore } from "../live/execution_quality_store.js";
 import type {
   SlippageDriftGateConfig,
@@ -31,10 +29,20 @@ import {
   type IdempotencyGovernanceSummary,
 } from "./idempotency_event_summary.js";
 import {
+  getSkippedRequiredLiveChecks,
   isReleaseGateStatusBlocking,
   loadReleaseGateStatus,
   type PersistedReleaseGateStatus,
-} from "./release_gate_status.js";
+} from "./release_gate_status.js"
+import {
+  evaluatePromotionReadinessForLiveOrders,
+} from "./promotion_v2.js";
+import {
+  DEFAULT_PROMOTION_READINESS_V2_PATH,
+  tryLoadPromotionReadinessV2,
+  tryLoadValidatedPromotionReadinessV2,
+} from "./promotion_v2_artifacts.js";
+import type { ToxicFlowAlert } from "../domain/strategy/microstructure/types.js";
 
 export interface LiveGateManagerConfig {
   executionGate: SlippageDriftGateConfig;
@@ -44,6 +52,9 @@ export interface LiveGateManagerConfig {
   requireReleaseGatePass: boolean;
   releaseGateStatusPath: string;
   releaseGateStatusCacheTtlMs: number;
+  requirePromotionV2ForLiveOrders: boolean;
+  promotionReadinessV2Path: string;
+  validatePromotionV2Artifacts: boolean;
   regimeShift: {
     enabled: boolean;
     symbol?: string;
@@ -64,6 +75,15 @@ export interface LiveGateManagerConfig {
   };
 }
 
+export type LiveGateManagerConfigOverride = Omit<
+  Partial<LiveGateManagerConfig>,
+  "executionGate" | "regimeShift" | "deploymentRamp"
+> & {
+  executionGate?: Partial<LiveGateManagerConfig["executionGate"]>;
+  regimeShift?: Partial<LiveGateManagerConfig["regimeShift"]>;
+  deploymentRamp?: Partial<LiveGateManagerConfig["deploymentRamp"]>;
+};
+
 export interface LiveGateManagerOptions {
   engine: ICryptoTradingEngine;
   klineStore: KlineStore;
@@ -71,7 +91,7 @@ export interface LiveGateManagerOptions {
   eventLog?: EventLog;
   baseDir?: string;
   manualOverridePath?: string;
-  config?: Partial<LiveGateManagerConfig>;
+  config?: LiveGateManagerConfigOverride;
 }
 
 export interface RuntimePlanningState {
@@ -106,6 +126,9 @@ const DEFAULT_CONFIG: LiveGateManagerConfig = {
   requireReleaseGatePass: true,
   releaseGateStatusPath: "data/runtime/release_gate_status.json",
   releaseGateStatusCacheTtlMs: 60_000,
+  requirePromotionV2ForLiveOrders: false,
+  promotionReadinessV2Path: DEFAULT_PROMOTION_READINESS_V2_PATH,
+  validatePromotionV2Artifacts: true,
   regimeShift: {
     enabled: true,
     checkIntervalMs: 60_000,
@@ -151,8 +174,9 @@ export class LiveGateManager {
     atMs: number;
     result: RegimeShiftResult | null;
   } | null = null;
+  private toxicFlowAlert: ToxicFlowAlert | null = null;
 
-  private constructor(
+  constructor(
     private readonly opts: LiveGateManagerOptions,
     private readonly executionStore: ExecutionQualityStore,
     private readonly rampStore: RampUpStore,
@@ -184,6 +208,26 @@ export class LiveGateManager {
     return this.rampStore.getCurrentStageLabel();
   }
 
+  /**
+   * Update the toxic-flow alert state from the microstructure layer.
+   * Only accepts alerts with a timestamp >= the current alert to prevent
+   * stale updates from overwriting fresher alerts when multiple producers
+   * or delayed callbacks are in flight.
+   */
+  setToxicFlowAlert(alert: ToxicFlowAlert): void {
+    if (
+      this.toxicFlowAlert &&
+      this.toxicFlowAlert.timestamp > alert.timestamp
+    ) {
+      return
+    }
+    this.toxicFlowAlert = alert
+  }
+
+  clearToxicFlowAlert(): void {
+    this.toxicFlowAlert = null
+  }
+
   async beforePlaceOrder(
     req: CryptoPlaceOrderRequest
   ): Promise<RiskCheckResult | undefined> {
@@ -202,11 +246,10 @@ export class LiveGateManager {
     ) {
       const gateStatus = await this.loadReleaseGateStatus();
       const deployment = this.resolveLiveDeploymentMode(gateStatus);
-      const blocked = isReleaseGateStatusBlocking(gateStatus);
-      if (blocked.blocking && deployment.mode !== "tiny_cap_only") {
+      if (deployment.mode === "not_ready") {
         return {
           approved: false,
-          reason: `Release gate blocking new opens: ${blocked.reason ?? "unknown"}`,
+          reason: `Release gate blocking new opens: ${deployment.reason ?? "unknown"}`,
         };
       }
 
@@ -237,6 +280,13 @@ export class LiveGateManager {
       }
     }
 
+    if (!req.reduceOnly && this.config.requirePromotionV2ForLiveOrders) {
+      const promotionV2Decision = await this.evaluatePromotionV2LiveOrderGate();
+      if (promotionV2Decision) {
+        return promotionV2Decision;
+      }
+    }
+
     if (!req.reduceOnly && !manualOverride.ignoreRegimeShift) {
       const regime = await this.refreshRegimeShiftSignal();
       if (regime && regime.triggered && regime.severity === "high") {
@@ -253,6 +303,45 @@ export class LiveGateManager {
         reason:
           this.riskBreakerStore.getExecutionBreakerReason() ??
           "Execution-quality breaker is active.",
+      };
+    }
+
+    if (!req.reduceOnly && this.toxicFlowAlert?.severity === 'critical') {
+      return {
+        approved: false,
+        reason: `Toxic flow critical: ${this.toxicFlowAlert.reason}. New opens blocked.`,
+      }
+    }
+
+    return undefined;
+  }
+
+  private async evaluatePromotionV2LiveOrderGate(): Promise<RiskCheckResult | undefined> {
+    const loaded = this.config.validatePromotionV2Artifacts
+      ? await tryLoadValidatedPromotionReadinessV2(
+          dirname(this.config.promotionReadinessV2Path),
+        )
+      : await tryLoadPromotionReadinessV2(
+          this.config.promotionReadinessV2Path,
+        );
+    if (loaded.kind !== "loaded" && !(loaded.kind === "invalid" && loaded.readiness)) {
+      return {
+        approved: false,
+        reason: `Promotion v2 readiness ${loaded.kind}: ${loaded.error}`,
+      };
+    }
+
+    const hardBlocks = evaluatePromotionReadinessForLiveOrders(
+      loaded.readiness,
+      {
+        required: true,
+        now: new Date(),
+      },
+    );
+    if (hardBlocks.length > 0) {
+      return {
+        approved: false,
+        reason: `Promotion v2 blocking live order generation: ${hardBlocks.join(",")}`,
       };
     }
 
@@ -338,7 +427,7 @@ export class LiveGateManager {
     const now = new Date();
     const releaseGateDecision =
       this.config.requireReleaseGatePass && !manualOverride.ignoreReleaseGate
-        ? isReleaseGateStatusBlocking(gateStatus, now)
+        ? isReleaseGateStatusBlocking(gateStatus, "live", now)
         : { blocking: false as const };
     const paperGateDecision =
       this.config.requireReleaseGatePass && !manualOverride.ignoreReleaseGate
@@ -697,6 +786,24 @@ export class LiveGateManager {
       };
     }
 
+    if (gateStatus.expiresAt) {
+      const expiresAt = Date.parse(gateStatus.expiresAt);
+      if (Number.isFinite(expiresAt) && Date.now() > expiresAt) {
+        return {
+          mode: "not_ready",
+          reason: `release_gate_status_expired:${gateStatus.expiresAt}`,
+        };
+      }
+    }
+
+    const skippedRequiredLiveChecks = getSkippedRequiredLiveChecks(gateStatus);
+    if (skippedRequiredLiveChecks.length > 0) {
+      return {
+        mode: "not_ready",
+        reason: `live_release_gate_required_checks_skipped:${skippedRequiredLiveChecks.join(",")}`,
+      };
+    }
+
     if (gateStatus.allowLiveTrading) {
       return {
         mode: "normal_cap",
@@ -704,9 +811,18 @@ export class LiveGateManager {
       };
     }
 
+    if (gateStatus.failedChecks.length > 0) {
+      return {
+        mode: "not_ready",
+        reason: `live_release_gate_failed:${gateStatus.failedChecks.join(",")}`,
+      };
+    }
+
     if (
       this.config.deploymentRamp.enabled &&
-      gateStatus.allowPaperTrading
+      gateStatus.allowTinyCapLiveTrading === true &&
+      gateStatus.allowPaperTrading &&
+      getSkippedRequiredLiveChecks(gateStatus).length === 0
     ) {
       return {
         mode: "tiny_cap_only",
