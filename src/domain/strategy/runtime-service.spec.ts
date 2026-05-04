@@ -26,6 +26,42 @@ function makeCandles(count: number) {
   }))
 }
 
+function makePosition(input: {
+  symbol: string
+  side: 'long' | 'short'
+  quantity: number
+  marketValue: number
+}) {
+  return {
+    contract: {
+      symbol: input.symbol,
+      localSymbol: input.symbol,
+      aliceId: input.symbol,
+    },
+    side: input.side,
+    quantity: {
+      toNumber: () => input.quantity,
+    },
+    avgCost: input.marketValue / input.quantity,
+    marketPrice: input.marketValue / input.quantity,
+    marketValue: input.marketValue,
+    unrealizedPnL: 0,
+    realizedPnL: 0,
+  } as any
+}
+
+function makeAccountManager(positions: any[]) {
+  return {
+    resolve: vi.fn(() => [
+      {
+        id: 'uta-1',
+        getAccount: vi.fn(async () => ({ netLiquidation: 10000 })),
+        getPositions: vi.fn(async () => positions),
+      },
+    ]),
+  } as any
+}
+
 const baseConfig: StrategyConfig = {
   enabled: true,
   governance: {
@@ -97,5 +133,87 @@ describe('runtime service', () => {
       liquidation: expect.objectContaining({ status: 'missing' }),
       completeness: 'minimal',
     })
+  })
+
+  it('routes same-direction orders through the new-open sizing path even when reduceOnly is set', async () => {
+    const snapshot = await evaluateRuntimeStrategySnapshotFromSources({
+      cryptoClient: {
+        getHistorical: vi.fn(async () => makeCandles(48)),
+      } as any,
+      accountManager: makeAccountManager([
+        makePosition({
+          symbol: 'BTC/USDT:USDT',
+          side: 'long',
+          quantity: 1,
+          marketValue: 50000,
+        }),
+      ]),
+      request: {
+        symbol: 'BTC/USDT:USDT',
+        source: 'uta-1',
+        side: 'buy',
+        requestedUsdSize: 6000,
+        reduceOnly: true,
+      },
+    })
+
+    expect(snapshot.executionPreview?.mode).toBe('applied')
+    expect(snapshot.executionPreview?.effectiveUsdSize).toBeLessThan(6000)
+  })
+
+  it('passes genuine reductions through without forcing the new-open sizing path', async () => {
+    const snapshot = await evaluateRuntimeStrategySnapshotFromSources({
+      cryptoClient: {
+        getHistorical: vi.fn(async () => makeCandles(48)),
+      } as any,
+      accountManager: makeAccountManager([
+        makePosition({
+          symbol: 'BTC/USDT:USDT',
+          side: 'long',
+          quantity: 1,
+          marketValue: 50000,
+        }),
+      ]),
+      request: {
+        symbol: 'BTC/USDT:USDT',
+        source: 'uta-1',
+        side: 'sell',
+        requestedUsdSize: 1000,
+      },
+    })
+
+    expect(snapshot.executionPreview?.mode).toBe('pass-through')
+    expect(snapshot.executionPreview?.effectiveUsdSize).toBe(1000)
+  })
+
+  it('passes request history fields through to runtime factor evaluation', async () => {
+    const now = Date.now()
+    const hourMs = 60 * 60 * 1000
+    const liquidationHistory = [
+      ...Array.from({ length: 9 }, (_, index) => ({
+        value: 100,
+        timestampMs: now - (index + 1) * hourMs,
+      })),
+      {
+        value: 1000,
+        timestampMs: now - 6 * hourMs,
+      },
+    ]
+
+    const snapshot = await evaluateRuntimeStrategySnapshotFromSources({
+      cryptoClient: {
+        getHistorical: vi.fn(async () => makeCandles(48)),
+      } as any,
+      accountManager: {
+        resolve: vi.fn(() => []),
+      } as any,
+      request: {
+        symbol: 'BTC/USD',
+        liquidationHistory,
+      },
+    })
+
+    expect(snapshot.factorSignals.some((signal) => signal.name === 'liquidation-aftermath')).toBe(true)
+    expect(snapshot.derivedMetrics.liquidationNotional24h).toBeNull()
   })
 })

@@ -7,6 +7,8 @@ export interface MomentumCompositeInput {
   return24hPct: number
   return7dPct: number
   realizedVolPct?: number
+  /** Fallback vol (annualized %) when realizedVolPct is missing. Default 8. */
+  fallbackVolPct?: number
 }
 
 export function evaluateMomentumComposite(
@@ -17,12 +19,19 @@ export function evaluateMomentumComposite(
     input.return6hPct * 0.2 +
     input.return24hPct * 0.3 +
     input.return7dPct * 0.35
-  const normalized = clamp(weightedScore / 8, -1, 1)
-  const volPenalty =
-    typeof input.realizedVolPct === 'number'
-      ? clamp(1 - input.realizedVolPct / 20, 0.2, 1)
-      : 1
-  const confidence = clamp(Math.abs(normalized) * volPenalty, 0, 1)
+  const weightedHorizonHours = 1 * 0.15 + 6 * 0.2 + 24 * 0.3 + 168 * 0.35
+  const fallbackVol =
+    typeof input.fallbackVolPct === 'number' && Number.isFinite(input.fallbackVolPct) && input.fallbackVolPct > 0
+      ? input.fallbackVolPct
+      : 8
+  const horizonVolPct =
+    typeof input.realizedVolPct === 'number' && Number.isFinite(input.realizedVolPct) && input.realizedVolPct > 0
+      ? input.realizedVolPct / Math.sqrt((24 * 365) / weightedHorizonHours)
+      : fallbackVol
+  const standardErrorPct = Math.max(horizonVolPct, 0.25)
+  const tStat = weightedScore / standardErrorPct
+  const normalized = Math.tanh(tStat / 3)
+  const confidence = clamp(Math.abs(normalized), 0, 1)
 
   return buildFactorSignal({
     name: 'momentum-composite',
@@ -35,7 +44,9 @@ export function evaluateMomentumComposite(
       return7dPct: input.return7dPct,
       realizedVolPct: input.realizedVolPct ?? 0,
       weightedScore,
-      volPenalty,
+      weightedHorizonHours,
+      standardErrorPct,
+      tStat,
     },
   })
 }

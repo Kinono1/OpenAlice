@@ -24,7 +24,22 @@ export function combineFactorSignals(
     }
   }
 
-  const weightedSignals = signals.map((signal) => {
+  const alphaSignals = signals.filter((signal) => (signal.role ?? 'alpha') === 'alpha')
+  if (alphaSignals.length === 0) {
+    return {
+      signals,
+      weights: Object.fromEntries(signals.map((signal) => [
+        signal.name,
+        0,
+      ])),
+      aggregateValue: 0,
+      aggregateConfidence: 0,
+      consensusScore: 0,
+      decisionStrength: 'D5',
+    }
+  }
+
+  const weightedSignals = alphaSignals.map((signal) => {
     const multiplier = conditioning?.multiplierBySignal[signal.name] ?? 1
     const configWeight = (weights[signal.name] ?? 1) * Math.max(multiplier, 0)
     const weight = decisionStrengthWeight(signal.decisionStrength) * Math.max(configWeight, 0)
@@ -42,13 +57,13 @@ export function combineFactorSignals(
         ) / totalWeight
       : 0
   const meanConfidence =
-    signals.reduce((sum, signal) => sum + signal.confidence, 0) / signals.length
-  const positiveCount = signals.filter((signal) => signal.value > 0.1).length
-  const negativeCount = signals.filter((signal) => signal.value < -0.1).length
+    alphaSignals.reduce((sum, signal) => sum + signal.confidence, 0) / alphaSignals.length
+  const positiveCount = alphaSignals.filter((signal) => signal.value > 0.1).length
+  const negativeCount = alphaSignals.filter((signal) => signal.value < -0.1).length
   const consensusScore =
-    signals.length <= 1
+    alphaSignals.length <= 1
       ? 1
-      : clamp(1 - Math.min(positiveCount, negativeCount) / signals.length, 0, 1)
+      : clamp(1 - Math.min(positiveCount, negativeCount) / alphaSignals.length, 0, 1)
   const aggregateConfidence = clamp(meanConfidence * consensusScore, 0, 1)
   const decisionStrength = decisionStrengthFromMagnitude(
     Math.abs(aggregateValue) * aggregateConfidence,
@@ -58,7 +73,9 @@ export function combineFactorSignals(
     signals,
     weights: Object.fromEntries(signals.map((signal) => [
       signal.name,
-      (weights[signal.name] ?? 1) * (conditioning?.multiplierBySignal[signal.name] ?? 1),
+      (signal.role ?? 'alpha') === 'alpha'
+        ? (weights[signal.name] ?? 1) * (conditioning?.multiplierBySignal[signal.name] ?? 1)
+        : 0,
     ])),
     aggregateValue,
     aggregateConfidence,

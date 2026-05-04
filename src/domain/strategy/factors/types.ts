@@ -8,11 +8,12 @@ import type {
 
 export interface FactorSignal {
   name: string
+  role?: 'alpha' | 'conditioning_filter' | 'diagnostic'
   value: number
   confidence: number
   sourceTier: SourceTier
   decisionStrength: DecisionStrength
-  metadata: Record<string, number>
+  metadata: Record<string, number | string | boolean | null>
 }
 
 export interface FactorEnsembleResult {

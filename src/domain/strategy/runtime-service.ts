@@ -5,12 +5,14 @@ import type { OhlcvData } from '../analysis/indicator/types.js'
 import type { CryptoClientLike } from '../market-data/client/types.js'
 import type { AccountManager } from '../trading/account-manager.js'
 import { CcxtBroker } from '../trading/brokers/ccxt/CcxtBroker.js'
+import type { Position } from '../trading/brokers/types.js'
 import {
+  normalizeLiquidationRows,
   normalizeOpenInterestPayload,
   summarizeLiquidationRows,
 } from '../trading/brokers/ccxt/ccxt-normalizers.js'
 import { readStrategyConfig } from '../../core/config.js'
-import { buildStrategyExecutionDecision } from './execution.js'
+import { buildStrategyExecutionDecision, estimateRequestedNotionalUsd, type ExposureClassification } from './execution.js'
 import { evaluateRuntimeFactorSnapshot } from './runtime-evaluator.js'
 import {
   createUnavailableStrategyDataProvenance,
@@ -23,6 +25,12 @@ import type {
   SourceTier,
   UseType,
 } from './governance/index.js'
+import type { IcMonitorSnapshot } from './factors/index.js'
+
+interface TimestampedValueInput {
+  value: number
+  timestampMs: number
+}
 
 export interface RuntimeStrategySnapshotRequest {
   symbol: string
@@ -33,15 +41,20 @@ export interface RuntimeStrategySnapshotRequest {
   useType?: UseType
   sentiment?: SentimentCrowding
   fundingRatePct?: number
+  fundingRateHistoryPct?: number[]
+  fundingRateHistory8h?: { ratePct: number; timestampMs: number }[]
   openInterest?: number
   openInterestValue?: number
+  openInterestHistory?: TimestampedValueInput[]
   liquidationCount24h?: number
   liquidationNotional24h?: number
+  liquidationHistory?: TimestampedValueInput[]
   basisInput?: {
     futuresPrice: number
     spotPrice: number
     daysToExpiry?: number
   }
+  icMonitorSnapshot?: IcMonitorSnapshot
   equity?: number
   assetLayer?: 'core' | 'extended' | 'watch-only'
   winRate?: number
@@ -60,10 +73,13 @@ export interface RuntimeStrategySnapshotResponse
 
 interface ResolvedDerivativesData {
   fundingRatePct?: number
+  fundingRateHistory8h?: { ratePct: number; timestampMs: number }[]
   openInterest?: number
   openInterestValue?: number
+  openInterestHistory?: TimestampedValueInput[]
   liquidationCount24h?: number
   liquidationNotional24h?: number
+  liquidationHistory?: TimestampedValueInput[]
   basisInput?: {
     futuresPrice: number
     spotPrice: number
@@ -73,6 +89,7 @@ interface ResolvedDerivativesData {
 }
 
 const publicExchangeCache = new Map<string, Promise<Exchange>>()
+const runtimeIcMonitorSnapshots = new Map<string, IcMonitorSnapshot>()
 
 function normalizeOhlcv(data: Record<string, unknown>[]): OhlcvData[] {
   return data
@@ -148,6 +165,41 @@ function parseTimestampMs(value: unknown): number | null {
   return null
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readFirstFiniteNumber(
+  payload: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const direct = Number(payload[key])
+    if (Number.isFinite(direct)) {
+      return direct
+    }
+
+    const nested = asRecord(payload.info)
+    const nestedValue = Number(nested[key])
+    if (Number.isFinite(nestedValue)) {
+      return nestedValue
+    }
+  }
+  return undefined
+}
+
+function resolvePayloadTimestampMs(payload: Record<string, unknown>): number | null {
+  const nested = asRecord(payload.info)
+  return (
+    parseTimestampMs(payload.timestamp) ??
+    parseTimestampMs(payload.datetime) ??
+    parseTimestampMs(nested.timestamp) ??
+    parseTimestampMs(nested.datetime)
+  )
+}
+
 function resolveCandleTimestampMs(candles: OhlcvData[]): number | null {
   for (let index = candles.length - 1; index >= 0; index -= 1) {
     const timestamp = parseTimestampMs(candles[index]?.timestamp ?? candles[index]?.date)
@@ -185,14 +237,27 @@ function detectStaleRuntimeInputs(input: {
   const candleStale = candleAgeMs > expectedIntervalMs * 2.5
   const derivativesMissing = (
     input.request.fundingRatePct == null
+    && input.request.fundingRateHistory8h == null
     && input.request.openInterest == null
     && input.request.openInterestValue == null
+    && input.request.openInterestHistory == null
     && input.request.liquidationCount24h == null
     && input.request.liquidationNotional24h == null
+    && input.request.liquidationHistory == null
     && input.request.basisInput == null
   )
   return candleStale || derivativesMissing
 }
+
+function runtimeIcMonitorCacheKey(request: RuntimeStrategySnapshotRequest): string {
+  return [
+    request.source ?? '',
+    request.exchangeId ?? '',
+    request.symbol,
+    request.interval ?? '1h',
+  ].join('|')
+}
+
 function resolveSingleCcxtTarget(
   manager: AccountManager,
   source?: string,
@@ -213,6 +278,138 @@ function countLayerPositions(
   symbol: string,
 ): number {
   return positions.filter((position) => position.contract.symbol === symbol).length
+}
+
+function toFinitePositiveNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed
+    }
+    return null
+  }
+  if (
+    value != null
+    && typeof value === 'object'
+    && typeof (value as { toNumber?: () => unknown }).toNumber === 'function'
+  ) {
+    const parsed = Number((value as { toNumber: () => unknown }).toNumber())
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }
+  return null
+}
+
+function matchesRequestedSymbol(position: Position, symbol: string): boolean {
+  const contract = position.contract as {
+    aliceId?: string
+    localSymbol?: string
+    symbol?: string
+  }
+  return [contract.symbol, contract.localSymbol, contract.aliceId]
+    .some((candidate) => candidate === symbol)
+}
+
+function resolveExposurePosition(
+  positions: Position[],
+  symbol: string,
+): { side: 'long' | 'short'; quantity: number; marketValue: number } | null {
+  const matches = positions.filter((position) => matchesRequestedSymbol(position, symbol))
+  if (matches.length === 0) {
+    return null
+  }
+
+  const resolved = matches
+    .map((position) => ({
+      side: position.side,
+      quantity: toFinitePositiveNumber(position.quantity),
+      marketValue: toFinitePositiveNumber(position.marketValue),
+    }))
+    .filter((position) => position.quantity !== null)
+
+  if (resolved.length === 0) {
+    return null
+  }
+
+  const uniqueSides = new Set(resolved.map((position) => position.side))
+  if (uniqueSides.size !== 1) {
+    return null
+  }
+
+  const side = resolved[0]?.side ?? null
+  if (side !== 'long' && side !== 'short') {
+    return null
+  }
+
+  const quantity = resolved.reduce((sum, position) => sum + (position.quantity ?? 0), 0)
+  const marketValue = resolved.reduce((sum, position) => sum + (position.marketValue ?? 0), 0)
+  if (!(quantity > 0)) {
+    return null
+  }
+
+  return {
+    side,
+    quantity,
+    marketValue,
+  }
+}
+
+function classifyExposureClassification(input: {
+  positions: Position[]
+  request: RuntimeStrategySnapshotRequest
+  referencePrice?: number | null
+}): ExposureClassification {
+  if (input.request.side == null) {
+    return 'unresolved'
+  }
+
+  const exposure = resolveExposurePosition(input.positions, input.request.symbol)
+  if (exposure == null) {
+    return 'open'
+  }
+
+  const requestedDirection = input.request.side === 'buy' ? 'long' : 'short'
+  if (requestedDirection === exposure.side) {
+    return 'add'
+  }
+
+  const requestedNotionalUsd = estimateRequestedNotionalUsd(
+    {
+      size: input.request.requestedSize,
+      usd_size: input.request.requestedUsdSize,
+      price: input.request.price,
+    },
+    input.referencePrice ?? undefined,
+  )
+  if (!(typeof requestedNotionalUsd === 'number' && Number.isFinite(requestedNotionalUsd) && requestedNotionalUsd > 0)) {
+    return 'unresolved'
+  }
+
+  const currentNotionalUsd =
+    exposure.marketValue > 0
+      ? exposure.marketValue
+      : (input.referencePrice != null && Number.isFinite(input.referencePrice) && input.referencePrice > 0
+        ? exposure.quantity * input.referencePrice
+        : null)
+
+  if (!(typeof currentNotionalUsd === 'number' && Number.isFinite(currentNotionalUsd) && currentNotionalUsd > 0)) {
+    return 'unresolved'
+  }
+
+  const tolerance = Math.max(1e-8, currentNotionalUsd * 1e-6)
+  const delta = requestedNotionalUsd - currentNotionalUsd
+
+  if (Math.abs(delta) <= tolerance) {
+    return 'close'
+  }
+
+  if (delta < 0) {
+    return 'reduce'
+  }
+
+  return 'flip'
 }
 
 function parseExchangeSymbolCandidates(symbol: string): string[] {
@@ -341,6 +538,90 @@ async function fetchPublicOpenInterest(
   return null
 }
 
+async function fetchPublicFundingRateHistory(
+  exchangeId: string,
+  symbol: string,
+  sinceMs: number,
+  limit: number,
+): Promise<{ ratePct: number; timestampMs: number }[] | null> {
+  const exchange = await getPublicCcxtExchange(exchangeId)
+  const exchangeAny = exchange as Exchange & {
+    fetchFundingRateHistory?: (
+      symbol: string,
+      since?: number,
+      limit?: number,
+      params?: Record<string, unknown>,
+    ) => Promise<unknown[]>
+  }
+  if (typeof exchangeAny.fetchFundingRateHistory !== 'function') {
+    return null
+  }
+
+  for (const candidate of parseExchangeSymbolCandidates(symbol)) {
+    try {
+      const rows = await exchangeAny.fetchFundingRateHistory(candidate, sinceMs, limit, {})
+      const history = (rows ?? [])
+        .map((row) => {
+          const record = asRecord(row)
+          const fundingRate = readFirstFiniteNumber(record, ['fundingRate'])
+          const timestampMs = resolvePayloadTimestampMs(record)
+          return fundingRate != null && timestampMs != null
+            ? { ratePct: fundingRate * 100, timestampMs }
+            : null
+        })
+        .filter((row): row is { ratePct: number; timestampMs: number } => row != null)
+        .sort((left, right) => left.timestampMs - right.timestampMs)
+      return history.length > 0 ? history : null
+    } catch {
+      // Try next symbol candidate.
+    }
+  }
+  return null
+}
+
+async function fetchPublicOpenInterestHistory(
+  exchangeId: string,
+  symbol: string,
+  timeframe: string,
+  sinceMs: number,
+  limit: number,
+): Promise<TimestampedValueInput[] | null> {
+  const exchange = await getPublicCcxtExchange(exchangeId)
+  const exchangeAny = exchange as Exchange & {
+    fetchOpenInterestHistory?: (
+      symbol: string,
+      timeframe?: string,
+      since?: number,
+      limit?: number,
+      params?: Record<string, unknown>,
+    ) => Promise<unknown[]>
+  }
+  if (typeof exchangeAny.fetchOpenInterestHistory !== 'function') {
+    return null
+  }
+
+  for (const candidate of parseExchangeSymbolCandidates(symbol)) {
+    try {
+      const rows = await exchangeAny.fetchOpenInterestHistory(candidate, timeframe, sinceMs, limit, {})
+      const history = (rows ?? [])
+        .map((row) => {
+          const payload = normalizeOpenInterestPayload(row)
+          const timestampMs = payload.timestamp
+          const value = payload.openInterestValue ?? payload.openInterest
+          return timestampMs != null && Number.isFinite(value)
+            ? { value, timestampMs }
+            : null
+        })
+        .filter((row): row is TimestampedValueInput => row != null)
+        .sort((left, right) => left.timestampMs - right.timestampMs)
+      return history.length > 0 ? history : null
+    } catch {
+      // Try next symbol candidate.
+    }
+  }
+  return null
+}
+
 async function fetchPublicLiquidationSummary(
   exchangeId: string,
   symbol: string,
@@ -349,6 +630,7 @@ async function fetchPublicLiquidationSummary(
 ): Promise<{
   count: number
   totalNotional?: number
+  history: TimestampedValueInput[]
   symbol: string
 } | null> {
   const exchange = await getPublicCcxtExchange(exchangeId)
@@ -366,12 +648,21 @@ async function fetchPublicLiquidationSummary(
 
   for (const candidate of parseExchangeSymbolCandidates(symbol)) {
     try {
-      const summary = summarizeLiquidationRows(
-        await exchangeAny.fetchLiquidations(candidate, sinceMs, limit, {}),
-      )
+      const rows = await exchangeAny.fetchLiquidations(candidate, sinceMs, limit, {})
+      const summary = summarizeLiquidationRows(rows)
+      const history = normalizeLiquidationRows(rows)
+        .map((row) => {
+          const value = row.notional ?? row.contracts
+          return row.timestamp != null && Number.isFinite(value)
+            ? { value, timestampMs: row.timestamp }
+            : null
+        })
+        .filter((row): row is TimestampedValueInput => row != null)
+        .sort((left, right) => left.timestampMs - right.timestampMs)
       return {
         count: summary.count,
         totalNotional: summary.totalNotional,
+        history,
         symbol: candidate,
       }
     } catch {
@@ -393,13 +684,16 @@ async function resolveDerivativesData(input: {
   const exchangeId = request.exchangeId ?? accountTarget?.broker.meta.exchange
 
   let fundingRatePct = request.fundingRatePct
+  let fundingRateHistory8h = request.fundingRateHistory8h
   let openInterest = request.openInterest
   let openInterestValue = request.openInterestValue
+  let openInterestHistory = request.openInterestHistory
   let liquidationCount24h = request.liquidationCount24h
   let liquidationNotional24h = request.liquidationNotional24h
+  let liquidationHistory = request.liquidationHistory
   let basisInput = request.basisInput
 
-  provenance.fundingRate = fundingRatePct != null
+  provenance.fundingRate = fundingRatePct != null || fundingRateHistory8h != null
     ? makeSourceStatus('input', 'resolved', 'request override')
     : makeSourceStatus('unavailable', 'missing', 'funding rate not resolved', {
         accountId: accountTarget?.accountId,
@@ -413,14 +707,14 @@ async function resolveDerivativesData(input: {
         exchangeId,
       })
 
-  provenance.openInterest = openInterest != null
+  provenance.openInterest = openInterest != null || openInterestHistory != null
     ? makeSourceStatus('input', 'resolved', 'request override')
     : makeSourceStatus('unavailable', 'missing', 'open interest not resolved', {
         accountId: accountTarget?.accountId,
         exchangeId,
       })
 
-  provenance.liquidation = liquidationCount24h != null || liquidationNotional24h != null
+  provenance.liquidation = liquidationCount24h != null || liquidationNotional24h != null || liquidationHistory != null
     ? makeSourceStatus('input', 'resolved', 'request override')
     : makeSourceStatus('unavailable', 'missing', 'liquidation summary not resolved', {
         accountId: accountTarget?.accountId,
@@ -433,6 +727,7 @@ async function resolveDerivativesData(input: {
     contract.aliceId = request.symbol
     contract.localSymbol = request.symbol
     contract.symbol = request.symbol
+    const historySinceMs = Date.now() - 8 * 24 * 3600_000
 
     if (fundingRatePct == null) {
       const funding = await broker.getFundingRate(contract).catch(() => null)
@@ -450,6 +745,29 @@ async function resolveDerivativesData(input: {
       }
     }
 
+    if (fundingRateHistory8h == null) {
+      const history = await broker.getFundingRateHistory(
+        contract,
+        historySinceMs,
+        200,
+      ).catch(() => null)
+      if (history && history.length > 0) {
+        fundingRateHistory8h = history.map((point) => ({
+          ratePct: point.fundingRate * 100,
+          timestampMs: point.timestamp.getTime(),
+        }))
+        provenance.fundingRate = makeSourceStatus(
+          'account-broker',
+          'resolved',
+          'resolved via broker funding-rate history',
+          {
+            accountId,
+            exchangeId: broker.meta.exchange,
+          },
+        )
+      }
+    }
+
     if (openInterest == null) {
       const snapshot = await broker.getOpenInterest(contract).catch(() => null)
       if (snapshot?.openInterest != null) {
@@ -459,6 +777,30 @@ async function resolveDerivativesData(input: {
           'account-broker',
           'resolved',
           'resolved via broker open interest',
+          {
+            accountId,
+            exchangeId: broker.meta.exchange,
+          },
+        )
+      }
+    }
+
+    if (openInterestHistory == null) {
+      const history = await broker.getOpenInterestHistory(
+        contract,
+        request.interval ?? '1h',
+        historySinceMs,
+        200,
+      ).catch(() => null)
+      if (history && history.length > 0) {
+        openInterestHistory = history.map((point) => ({
+          value: point.openInterestValue ?? point.openInterest,
+          timestampMs: point.timestamp.getTime(),
+        }))
+        provenance.openInterest = makeSourceStatus(
+          'account-broker',
+          'resolved',
+          'resolved via broker open-interest history',
           {
             accountId,
             exchangeId: broker.meta.exchange,
@@ -488,6 +830,17 @@ async function resolveDerivativesData(input: {
       }
     }
 
+    if (
+      liquidationHistory == null &&
+      liquidationNotional24h != null &&
+      liquidationNotional24h > 0
+    ) {
+      liquidationHistory = [{
+        value: liquidationNotional24h,
+        timestampMs: Date.now(),
+      }]
+    }
+
     if (!basisInput && request.symbol.includes(':')) {
       const futuresQuote = await broker.getQuote(contract).catch(() => null)
       const spotSymbol = request.symbol.replace(/:.+$/, '')
@@ -514,6 +867,8 @@ async function resolveDerivativesData(input: {
   }
 
   if (exchangeId) {
+    const historySinceMs = Date.now() - 8 * 24 * 3600_000
+
     if (fundingRatePct == null) {
       const funding = await fetchPublicFundingRate(exchangeId, request.symbol).catch(() => null)
       if (funding) {
@@ -522,6 +877,24 @@ async function resolveDerivativesData(input: {
           'public-ccxt',
           'fallback',
           `resolved via public CCXT funding rate (${funding.symbol})`,
+          { exchangeId },
+        )
+      }
+    }
+
+    if (fundingRateHistory8h == null) {
+      const history = await fetchPublicFundingRateHistory(
+        exchangeId,
+        request.symbol,
+        historySinceMs,
+        200,
+      ).catch(() => null)
+      if (history) {
+        fundingRateHistory8h = history
+        provenance.fundingRate = makeSourceStatus(
+          'public-ccxt',
+          'fallback',
+          'resolved via public CCXT funding-rate history',
           { exchangeId },
         )
       }
@@ -541,7 +914,26 @@ async function resolveDerivativesData(input: {
       }
     }
 
-    if (liquidationCount24h == null || liquidationNotional24h == null) {
+    if (openInterestHistory == null) {
+      const history = await fetchPublicOpenInterestHistory(
+        exchangeId,
+        request.symbol,
+        request.interval ?? '1h',
+        historySinceMs,
+        200,
+      ).catch(() => null)
+      if (history) {
+        openInterestHistory = history
+        provenance.openInterest = makeSourceStatus(
+          'public-ccxt',
+          'fallback',
+          'resolved via public CCXT open-interest history',
+          { exchangeId },
+        )
+      }
+    }
+
+    if (liquidationCount24h == null || liquidationNotional24h == null || liquidationHistory == null) {
       const summary = await fetchPublicLiquidationSummary(
         exchangeId,
         request.symbol,
@@ -551,6 +943,9 @@ async function resolveDerivativesData(input: {
       if (summary) {
         liquidationCount24h = summary.count
         liquidationNotional24h = summary.totalNotional
+        liquidationHistory = summary.history.length > 0
+          ? summary.history
+          : liquidationHistory
         provenance.liquidation = makeSourceStatus(
           'public-ccxt',
           'fallback',
@@ -583,10 +978,13 @@ async function resolveDerivativesData(input: {
 
   return {
     fundingRatePct,
+    fundingRateHistory8h,
     openInterest,
     openInterestValue,
+    openInterestHistory,
     liquidationCount24h,
     liquidationNotional24h,
+    liquidationHistory,
     basisInput,
     dataProvenance: finalizeProvenance(provenance),
   }
@@ -618,7 +1016,7 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
   let resolvedEquity = request.equity
   let currentOpenPositions = 0
   let currentLayerOpenPositions = 0
-  let isNewOpen = !request.reduceOnly
+  let exposureClassification: ExposureClassification = 'open'
   const nowUtcMs = Date.now()
 
   if (resolvedEquity != null) {
@@ -645,9 +1043,14 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
       }
       currentOpenPositions = positions.length
       currentLayerOpenPositions = countLayerPositions(positions, request.symbol)
-      if (!request.reduceOnly) {
-        isNewOpen = !positions.some((position) => position.contract.symbol === request.symbol)
-      }
+      exposureClassification = classifyExposureClassification({
+        positions,
+        request,
+        referencePrice:
+          typeof request.price === 'number' && request.price > 0
+            ? request.price
+            : candles[candles.length - 1]?.close,
+      })
     }
   }
 
@@ -666,15 +1069,21 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
     request: {
       ...request,
       fundingRatePct: derivatives.fundingRatePct,
+      fundingRateHistory8h: derivatives.fundingRateHistory8h,
       openInterest: derivatives.openInterest,
       openInterestValue: derivatives.openInterestValue,
+      openInterestHistory: derivatives.openInterestHistory,
       liquidationCount24h: derivatives.liquidationCount24h,
       liquidationNotional24h: derivatives.liquidationNotional24h,
+      liquidationHistory: derivatives.liquidationHistory,
       basisInput: derivatives.basisInput,
     },
   })
 
   const strategyConfig = await readStrategyConfig()
+  const icMonitorCacheKey = runtimeIcMonitorCacheKey(request)
+  const icMonitorSnapshot =
+    request.icMonitorSnapshot ?? runtimeIcMonitorSnapshots.get(icMonitorCacheKey)
   const snapshot = evaluateRuntimeFactorSnapshot({
     symbol: request.symbol,
     candles,
@@ -683,10 +1092,14 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
     useType: request.useType ?? 'U1',
     sentiment: request.sentiment ?? 'S0',
     fundingRatePct: derivatives.fundingRatePct,
+    fundingRateHistoryPct: request.fundingRateHistoryPct,
+    fundingRateHistory8h: derivatives.fundingRateHistory8h,
     openInterest: derivatives.openInterest,
     openInterestValue: derivatives.openInterestValue,
+    openInterestHistory: derivatives.openInterestHistory,
     liquidationCount24h: derivatives.liquidationCount24h,
     liquidationNotional24h: derivatives.liquidationNotional24h,
+    liquidationHistory: derivatives.liquidationHistory,
     basisInput: derivatives.basisInput,
     dataProvenance: {
       ...derivatives.dataProvenance,
@@ -702,7 +1115,12 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
     staleData,
     winRate: request.winRate,
     avgWinLossRatio: request.avgWinLossRatio,
+    nowUtcMs,
+    icMonitorSnapshot,
   })
+  if (snapshot.icMonitorSnapshot) {
+    runtimeIcMonitorSnapshots.set(icMonitorCacheKey, snapshot.icMonitorSnapshot)
+  }
 
   if (request.side && (request.requestedSize != null || request.requestedUsdSize != null)) {
     const referencePrice =
@@ -727,7 +1145,7 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
         price: request.price,
         reduceOnly: request.reduceOnly,
       },
-      isNewOpen,
+      exposureClassification,
       referencePrice,
     })
     return {
