@@ -2,7 +2,11 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
+import { z } from "zod";
 import { safePathComponent } from "../src/core/path-safety.js";
+import { RuntimeCheckpointStore } from "../src/runtime/runtime_checkpoint.js";
 import {
   appendExecutionJournal,
   extractSummaryMetrics,
@@ -80,26 +84,118 @@ interface RouteMatrixResult {
 
 interface CliArgs {
   matrixConfig: string;
+  resume: boolean;
+  fresh: boolean;
+  runId?: string;
+  checkpointRoot?: string;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const spec = await readJson<RouteMatrixSpec>(args.matrixConfig);
+type RouteMatrixStep =
+  | "started"
+  | "loaded_inputs"
+  | "profile_completed"
+  | "wrote_outputs";
+
+const ROUTE_MATRIX_STEPS = new Set<RouteMatrixStep>([
+  "started",
+  "loaded_inputs",
+  "profile_completed",
+  "wrote_outputs",
+]);
+
+interface RouteMatrixCheckpointState {
+  matrixId: string;
+  matrixConfig: string;
+  matrixConfigHash: string;
+  manifest: string;
+  manifestHash: string;
+  summaryOutput: string;
+  markdownOutput: string;
+  completedProfiles: string[];
+  results: RouteMatrixResult[];
+}
+
+interface RouteMatrixRunnerDeps {
+  execNode?: (args: string[]) => Promise<void>;
+  appendExecutionJournal?: typeof appendExecutionJournal;
+  now?: () => Date;
+}
+
+const RouteMatrixCheckpointStateSchema: z.ZodType<RouteMatrixCheckpointState> = z.object({
+  matrixId: z.string(),
+  matrixConfig: z.string(),
+  matrixConfigHash: z.string(),
+  manifest: z.string(),
+  manifestHash: z.string(),
+  summaryOutput: z.string(),
+  markdownOutput: z.string(),
+  completedProfiles: z.array(z.string()),
+  results: z.array(z.custom<RouteMatrixResult>((value) => isPlainObject(value))),
+});
+
+export async function runRouteMatrix(
+  args: CliArgs,
+  deps: RouteMatrixRunnerDeps = {},
+): Promise<{
+  summaryOutput: string;
+  markdownOutput: string;
+  recommendedProfile: string | null;
+}> {
+  const now = deps.now ?? (() => new Date());
+  const executeNode = deps.execNode ?? execNode;
+  const appendJournal = deps.appendExecutionJournal ?? appendExecutionJournal;
+  const matrixConfigPath = resolve(args.matrixConfig);
+  const matrixConfigRaw = await readFile(matrixConfigPath, "utf-8");
+  const matrixConfigHash = hashString(matrixConfigRaw);
+  const spec = JSON.parse(matrixConfigRaw) as RouteMatrixSpec;
   if (!spec.matrixId) {
     throw new Error("matrix config must include matrixId.");
   }
   if (!Array.isArray(spec.profiles) || spec.profiles.length === 0) {
     throw new Error("matrix config must include non-empty profiles.");
   }
-  const runId = `${sanitizeTag(spec.matrixId)}.${new Date().toISOString().replace(/[:.]/g, "")}`;
+  if (args.resume && args.fresh) {
+    throw new Error("--resume and --fresh are mutually exclusive.");
+  }
+  const runId = args.runId
+    ? safePathComponent(args.runId, { kind: "route matrix runId", maxLength: 128 })
+    : buildDefaultRunId(spec, matrixConfigRaw);
   const summaryOutput =
     spec.summaryOutput ??
     `data/research/strategy/analysis/${sanitizeTag(spec.matrixId)}.json`;
   const markdownOutput =
     spec.markdownOutput ??
     `data/research/strategy/analysis/${sanitizeTag(spec.matrixId)}.md`;
+  const checkpointStore = new RuntimeCheckpointStore({
+    rootDir: args.checkpointRoot,
+    namespace: "route_matrix",
+  });
+  if (args.fresh) {
+    checkpointStore.clear(runId);
+  }
+  const checkpoint = checkpointStore.load(runId, RouteMatrixCheckpointStateSchema);
+  if (checkpoint.ok) {
+    if (!args.resume && !args.fresh) {
+      throw new Error(
+        [
+          `Checkpoint exists for route matrix runId=${runId}.`,
+          "Use --resume to continue or --fresh to discard it.",
+        ].join(" ")
+      );
+    }
+    if (!ROUTE_MATRIX_STEPS.has(checkpoint.checkpoint.step as RouteMatrixStep)) {
+      throw new Error(
+        `Cannot resume route matrix runId=${runId}: unknown checkpoint step ${checkpoint.checkpoint.step}.`
+      );
+    }
+  } else if (args.resume) {
+    const reason = checkpoint.diagnostic.kind === "missing"
+      ? "checkpoint missing"
+      : `checkpoint ${checkpoint.diagnostic.kind}`;
+    throw new Error(`Cannot resume route matrix runId=${runId}: ${reason}.`);
+  }
   const journalInputs = {
-    matrixConfig: resolve(args.matrixConfig),
+    matrixConfig: matrixConfigPath,
     matrixId: spec.matrixId,
     sourceId: spec.sourceId ?? null,
     manifest: resolve(spec.manifest),
@@ -109,7 +205,7 @@ async function main(): Promise<void> {
     summary: resolve(summaryOutput),
     markdown: resolve(markdownOutput),
   };
-  await appendExecutionJournal({
+  await appendJournal({
     runId,
     batchId: spec.matrixId,
     stage: "matrix",
@@ -122,11 +218,47 @@ async function main(): Promise<void> {
   });
 
   try {
-    const baseManifest = await readJson<RouteManifest>(spec.manifest);
+    const manifestPath = resolve(spec.manifest);
+    const baseManifestRaw = await readFile(manifestPath, "utf-8");
+    const manifestHash = hashString(baseManifestRaw);
+    const baseManifest = JSON.parse(baseManifestRaw) as RouteManifest;
     const tmpRoot = await mkdtemp(join(tmpdir(), "openalice-route-matrix-"));
+    const resumeState = checkpoint.ok ? checkpoint.checkpoint.state : null;
+    if (resumeState) {
+      validateResumeState({
+        runId,
+        state: resumeState,
+        matrixId: spec.matrixId,
+        matrixConfigHash,
+        manifest: manifestPath,
+        manifestHash,
+        summaryOutput: resolve(summaryOutput),
+        markdownOutput: resolve(markdownOutput),
+      });
+    }
+    const results: RouteMatrixResult[] = resumeState?.results ?? [];
+    const completedProfiles = new Set(resumeState?.completedProfiles ?? []);
+    checkpointStore.save<RouteMatrixCheckpointState>({
+      runId,
+      step: "loaded_inputs",
+      now: now(),
+      state: {
+        matrixId: spec.matrixId,
+        matrixConfig: matrixConfigPath,
+        matrixConfigHash,
+        manifest: manifestPath,
+        manifestHash,
+        summaryOutput: resolve(summaryOutput),
+        markdownOutput: resolve(markdownOutput),
+        completedProfiles: Array.from(completedProfiles),
+        results,
+      },
+    });
 
-  const results: RouteMatrixResult[] = [];
   for (const profile of spec.profiles) {
+    if (completedProfiles.has(profile.id)) {
+      continue;
+    }
     const tag = sanitizeTag(`${spec.matrixId}.${profile.id}`);
     const multipleTestingUnit =
       profile.multipleTestingUnit ??
@@ -135,7 +267,7 @@ async function main(): Promise<void> {
         "candidate");
 
     const manifest = deepMerge(baseManifest, profile.overrides ?? {});
-    manifest.generatedAt = new Date().toISOString();
+    manifest.generatedAt = now().toISOString();
     manifest.batchId = tag;
     manifest.notes = [
       ...(Array.isArray(baseManifest.notes) ? baseManifest.notes : []),
@@ -162,7 +294,7 @@ async function main(): Promise<void> {
       phaseReadiness: resolve(`data/runtime/phase_readiness.${tag}.latest.json`),
     };
 
-    await execNode([
+    await executeNode([
       "--import",
       "tsx",
       "./scripts/run_route_af.ts",
@@ -194,25 +326,41 @@ async function main(): Promise<void> {
       readJson<Record<string, unknown>>(outputs.verdict),
       readJson<Record<string, unknown>>(outputs.validationRuns),
     ]);
-    results.push(
-      buildResult({
-        profile,
-        sourceId: profile.sourceId ?? spec.sourceId ?? null,
-        multipleTestingUnit,
-        fdrMethod: profile.fdrMethod ?? null,
-        wfoProfile: profile.wfoProfile ?? null,
-        verdict,
-        runs,
-        outputs,
-      })
-    );
+    const result = buildResult({
+      profile,
+      sourceId: profile.sourceId ?? spec.sourceId ?? null,
+      multipleTestingUnit,
+      fdrMethod: profile.fdrMethod ?? null,
+      wfoProfile: profile.wfoProfile ?? null,
+      verdict,
+      runs,
+      outputs,
+    });
+    results.push(result);
+    completedProfiles.add(profile.id);
+    checkpointStore.save<RouteMatrixCheckpointState>({
+      runId,
+      step: "profile_completed",
+      now: now(),
+      state: {
+        matrixId: spec.matrixId,
+        matrixConfig: matrixConfigPath,
+        matrixConfigHash,
+        manifest: manifestPath,
+        manifestHash,
+        summaryOutput: resolve(summaryOutput),
+        markdownOutput: resolve(markdownOutput),
+        completedProfiles: Array.from(completedProfiles),
+        results,
+      },
+    });
   }
 
   const recommendedProfile = rankProfiles(results)[0]?.profile ?? null;
   const payload = {
     schemaVersion: "route_matrix_result.v1",
     matrixId: spec.matrixId,
-    generatedAt: new Date().toISOString(),
+    generatedAt: now().toISOString(),
     sourceId: spec.sourceId ?? null,
     baseManifest: resolve(spec.manifest),
     rankingObjective:
@@ -234,7 +382,25 @@ async function main(): Promise<void> {
       writeFile(resolve(markdownOutput), renderMarkdown(payload), "utf-8"),
     ]);
 
-    await appendExecutionJournal({
+    checkpointStore.save<RouteMatrixCheckpointState>({
+      runId,
+      step: "wrote_outputs",
+      now: now(),
+      state: {
+        matrixId: spec.matrixId,
+        matrixConfig: matrixConfigPath,
+        matrixConfigHash,
+        manifest: manifestPath,
+        manifestHash,
+        summaryOutput: resolve(summaryOutput),
+        markdownOutput: resolve(markdownOutput),
+        completedProfiles: Array.from(completedProfiles),
+        results,
+      },
+    });
+    checkpointStore.clear(runId);
+
+    await appendJournal({
       runId,
       batchId: spec.matrixId,
       stage: "matrix",
@@ -254,8 +420,13 @@ async function main(): Promise<void> {
         `recommendedProfile=${recommendedProfile ?? "none"}`,
       ].join(" | ")
     );
+    return {
+      summaryOutput: resolve(summaryOutput),
+      markdownOutput: resolve(markdownOutput),
+      recommendedProfile,
+    };
   } catch (error) {
-    await appendExecutionJournal({
+    await appendJournal({
       runId,
       batchId: spec.matrixId,
       stage: "matrix",
@@ -271,13 +442,28 @@ async function main(): Promise<void> {
   }
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export async function main(): Promise<void> {
+  await runRouteMatrix(parseArgs(process.argv.slice(2)));
+}
+
+export function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv);
   const matrixConfig = raw.get("matrix-config");
   if (!matrixConfig) {
     throw new Error("--matrix-config is required.");
   }
-  return { matrixConfig };
+  const resume = raw.get("resume") === "true";
+  const fresh = raw.get("fresh") === "true";
+  if (resume && fresh) {
+    throw new Error("--resume and --fresh are mutually exclusive.");
+  }
+  return {
+    matrixConfig,
+    resume,
+    fresh,
+    runId: normalizeOptionalString(raw.get("run-id") ?? raw.get("runId")),
+    checkpointRoot: normalizeOptionalString(raw.get("checkpoint-root") ?? raw.get("checkpointRoot")),
+  };
 }
 
 function parseRawArgs(argv: string[]): Map<string, string> {
@@ -506,6 +692,49 @@ function sanitizeTag(value: string): string {
   });
 }
 
+function buildDefaultRunId(spec: RouteMatrixSpec, matrixConfigRaw: string): string {
+  const configHash = hashString(matrixConfigRaw).slice(0, 12);
+  return sanitizeTag([
+    spec.matrixId,
+    spec.sourceId ?? "source",
+    String(spec.profiles.length),
+    configHash,
+  ].join("."));
+}
+
+function hashString(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function validateResumeState(input: {
+  runId: string;
+  state: RouteMatrixCheckpointState;
+  matrixId: string;
+  matrixConfigHash: string;
+  manifest: string;
+  manifestHash: string;
+  summaryOutput: string;
+  markdownOutput: string;
+}): void {
+  const mismatches = [
+    input.state.matrixId === input.matrixId ? null : "matrixId",
+    input.state.matrixConfigHash === input.matrixConfigHash ? null : "matrixConfigHash",
+    input.state.manifest === input.manifest ? null : "manifest",
+    input.state.manifestHash === input.manifestHash ? null : "manifestHash",
+    input.state.summaryOutput === input.summaryOutput ? null : "summaryOutput",
+    input.state.markdownOutput === input.markdownOutput ? null : "markdownOutput",
+  ].filter((item): item is string => item !== null);
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Cannot resume route matrix runId=${input.runId}: checkpoint does not match current config (${mismatches.join(", ")}).`
+    );
+  }
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function renderMarkdown(payload: {
   matrixId: string;
   generatedAt: string;
@@ -534,7 +763,9 @@ function renderMarkdown(payload: {
   return `${lines.join("\n")}\n`;
 }
 
-main().catch((error) => {
-  console.error("run_route_matrix failed:", error);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((error) => {
+    console.error("run_route_matrix failed:", error);
+    process.exit(1);
+  });
+}
