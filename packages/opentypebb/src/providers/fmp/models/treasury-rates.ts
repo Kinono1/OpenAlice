@@ -46,7 +46,7 @@ function generateUrls(startDate: string, endDate: string, apiKey: string): strin
     const fromStr = current.toISOString().split('T')[0]
     const toStr = to.toISOString().split('T')[0]
     urls.push(
-      `https://financialmodelingprep.com/stable/treasury-rates?from=${fromStr}&to=${toStr}&apikey=${apiKey}`,
+      `https://financialmodelingprep.com/stable/treasury-rates?from=${fromStr}&to=${toStr}`,
     )
     current = next
   }

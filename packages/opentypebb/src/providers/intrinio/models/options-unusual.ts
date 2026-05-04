@@ -16,6 +16,17 @@ export const IntrinioOptionsUnusualQueryParamsSchema = z.object({
 export type IntrinioOptionsUnusualQueryParams = z.infer<typeof IntrinioOptionsUnusualQueryParamsSchema>
 export type IntrinioOptionsUnusualData = z.infer<typeof OptionsUnusualDataSchema>
 
+function createIntrinioUrl(path: string, apiKey: string, query?: Record<string, string | null>): string {
+  const url = new URL(path, 'https://api-v2.intrinio.com')
+  url.searchParams.set('api_key', apiKey)
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      if (value) url.searchParams.set(key, value)
+    }
+  }
+  return url.toString()
+}
+
 export class IntrinioOptionsUnusualFetcher extends Fetcher {
   static override requireCredentials = true
 
@@ -30,8 +41,9 @@ export class IntrinioOptionsUnusualFetcher extends Fetcher {
     const apiKey = credentials?.intrinio_api_key ?? ''
     if (!apiKey) throw new EmptyDataError('Intrinio API key required.')
 
-    let url = `https://api-v2.intrinio.com/options/unusual_activity?api_key=${apiKey}`
-    if (query.symbol) url += `&symbol=${query.symbol}`
+    const url = createIntrinioUrl('/options/unusual_activity', apiKey, {
+      symbol: query.symbol,
+    })
 
     try {
       const data = await amakeRequest<Record<string, unknown>>(url)

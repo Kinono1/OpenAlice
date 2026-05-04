@@ -52,10 +52,10 @@ export class FMPEtfSearchFetcher extends Fetcher {
     credentials: Record<string, string> | null,
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
-    let url = `https://financialmodelingprep.com/stable/company-screener?isEtf=true&isFund=false&isActivelyTrading=${query.is_active}&apikey=${apiKey}`
+    let url = `https://financialmodelingprep.com/stable/company-screener?isEtf=true&isFund=false&isActivelyTrading=${query.is_active}`
     if (query.query) url += `&query=${encodeURIComponent(query.query)}`
     if (query.exchange) url += `&exchange=${encodeURIComponent(query.exchange)}`
-    return getDataMany(url)
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

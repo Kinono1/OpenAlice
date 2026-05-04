@@ -35,8 +35,7 @@ export class FMPEarningsCallTranscriptFetcher extends Fetcher {
     let transcriptDates: Record<string, unknown>[]
     try {
       transcriptDates = await getDataMany(
-        `https://financialmodelingprep.com/stable/earning-call-transcript-dates?symbol=${symbol}&apikey=${apiKey}`,
-      )
+        `https://financialmodelingprep.com/stable/earning-call-transcript-dates?symbol=${symbol}`, undefined, { apiKey })
     } catch {
       throw new OpenBBError(`No transcripts found for symbol ${symbol}.`)
     }
@@ -65,10 +64,10 @@ export class FMPEarningsCallTranscriptFetcher extends Fetcher {
       quarter = yearTranscripts[0]?.quarter as number ?? 1
     }
 
-    const url = `https://financialmodelingprep.com/stable/earning-call-transcript?symbol=${symbol}&year=${year}&quarter=${quarter}&apikey=${apiKey}`
+    const url = `https://financialmodelingprep.com/stable/earning-call-transcript?symbol=${symbol}&year=${year}&quarter=${quarter}`
 
     try {
-      const result = await getDataOne(url)
+      const result = await getDataOne(url, { apiKey })
       return [result]
     } catch {
       throw new OpenBBError(`No transcript found for ${symbol} in ${year} Q${quarter}`)

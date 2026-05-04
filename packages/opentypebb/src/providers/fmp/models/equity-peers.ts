@@ -37,8 +37,7 @@ export class FMPEquityPeersFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/stock-peers?symbol=${query.symbol}&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/stock-peers?symbol=${query.symbol}`, undefined, { apiKey })
   }
 
   static override transformData(

@@ -6,6 +6,39 @@
 import { OpenBBError, EmptyDataError, UnauthorizedError } from '../../../core/provider/utils/errors.js'
 import { amakeRequest } from '../../../core/provider/utils/helpers.js'
 
+type FmpAuthMode = 'query' | 'header'
+
+type FmpRequestOptions = {
+  apiKey?: string | null
+  authMode?: FmpAuthMode
+}
+
+function resolveFmpAuthMode(mode?: string | null): FmpAuthMode {
+  return mode === 'header' ? 'header' : 'query'
+}
+
+function normalizeFmpRequestOptions(options: FmpRequestOptions = {}) {
+  return {
+    apiKey: options.apiKey ?? null,
+    authMode: resolveFmpAuthMode(options.authMode),
+  }
+}
+
+function buildFmpRequest(url: string, options: FmpRequestOptions = {}) {
+  const normalized = normalizeFmpRequestOptions(options)
+  const headers: Record<string, string> = {}
+  if (!normalized.apiKey) {
+    return { url, headers }
+  }
+  if (normalized.authMode === 'header') {
+    headers['x-api-key'] = normalized.apiKey
+    return { url, headers }
+  }
+  const parsed = new URL(url)
+  parsed.searchParams.set('apikey', normalized.apiKey)
+  return { url: parsed.toString(), headers }
+}
+
 /**
  * Response callback for FMP API requests.
  * Maps to: response_callback() in helpers.py
@@ -43,7 +76,6 @@ export async function responseCallback(response: Response): Promise<Response> {
     }
   }
 
-  // Return a new Response with the already-parsed body
   return new Response(JSON.stringify(data), {
     status: response.status,
     statusText: response.statusText,
@@ -55,17 +87,27 @@ export async function responseCallback(response: Response): Promise<Response> {
  * Get data from FMP endpoint.
  * Maps to: get_data() in helpers.py
  */
-export async function getData<T = unknown>(url: string): Promise<T> {
-  return amakeRequest<T>(url, { responseCallback })
+export async function getData<T = unknown>(
+  url: string,
+  options: FmpRequestOptions = {},
+): Promise<T> {
+  const request = buildFmpRequest(url, options)
+  return amakeRequest<T>(request.url, { responseCallback, headers: request.headers })
 }
 
 /**
  * Get data from FMP for several urls.
  * Maps to: get_data_urls() in helpers.py
  */
-export async function getDataUrls<T = unknown>(urls: string[]): Promise<T[]> {
+export async function getDataUrls<T = unknown>(
+  urls: string[],
+  options: FmpRequestOptions = {},
+): Promise<T[]> {
   const results = await Promise.all(
-    urls.map((url) => amakeRequest<T>(url, { responseCallback })),
+    urls.map((url) => {
+      const request = buildFmpRequest(url, options)
+      return amakeRequest<T>(request.url, { responseCallback, headers: request.headers })
+    }),
   )
   return results
 }
@@ -74,8 +116,12 @@ export async function getDataUrls<T = unknown>(urls: string[]): Promise<T[]> {
  * Get data from FMP endpoint and convert to list of dicts.
  * Maps to: get_data_many() in helpers.py
  */
-export async function getDataMany(url: string, subDict?: string): Promise<Record<string, unknown>[]> {
-  let data = await getData<unknown>(url)
+export async function getDataMany(
+  url: string,
+  subDict?: string,
+  options: FmpRequestOptions = {},
+): Promise<Record<string, unknown>[]> {
+  let data = await getData<unknown>(url, options)
 
   if (subDict && data && typeof data === 'object' && !Array.isArray(data)) {
     data = (data as Record<string, unknown>)[subDict] ?? []
@@ -97,8 +143,11 @@ export async function getDataMany(url: string, subDict?: string): Promise<Record
  * Get data from FMP endpoint and convert to a single dict.
  * Maps to: get_data_one() in helpers.py
  */
-export async function getDataOne(url: string): Promise<Record<string, unknown>> {
-  let data = await getData<unknown>(url)
+export async function getDataOne(
+  url: string,
+  options: FmpRequestOptions = {},
+): Promise<Record<string, unknown>> {
+  let data = await getData<unknown>(url, options)
 
   if (Array.isArray(data)) {
     if (data.length === 0) {
@@ -122,6 +171,7 @@ export function createUrl(
   apiKey: string | null,
   query?: Record<string, unknown>,
   exclude?: string[],
+  options: { authMode?: FmpAuthMode } = {},
 ): string {
   const params: Record<string, unknown> = { ...(query ?? {}) }
   const excludeSet = new Set(exclude ?? [])
@@ -134,8 +184,9 @@ export function createUrl(
   }
 
   const queryString = searchParams.toString()
-  const baseUrl = `https://financialmodelingprep.com/api/v${version}/`
-  return `${baseUrl}${endpoint}?${queryString}&apikey=${apiKey ?? ''}`
+  const baseUrl = `https://financialmodelingprep.com/api/v${version}/${endpoint}`
+  const url = queryString ? `${baseUrl}?${queryString}` : baseUrl
+  return buildFmpRequest(url, { apiKey, authMode: options.authMode }).url
 }
 
 /**
@@ -161,10 +212,9 @@ export function mostRecentQuarter(base?: Date): Date {
   const now = new Date()
   let d = base ? new Date(Math.min(base.getTime(), now.getTime())) : new Date(now)
 
-  const month = d.getMonth() + 1 // 1-indexed
+  const month = d.getMonth() + 1
   const day = d.getDate()
 
-  // Check exact quarter end dates
   const exacts: [number, number][] = [[3, 31], [6, 30], [9, 30], [12, 31]]
   for (const [m, dd] of exacts) {
     if (month === m && day === dd) return d
@@ -237,10 +287,10 @@ export async function getHistoricalOhlc(
   const messages: string[] = []
 
   const getOne = async (symbol: string) => {
-    const url = `${baseUrl}symbol=${symbol}&${queryStr}&apikey=${apiKey}`
+    const base = `${baseUrl}symbol=${symbol}${queryStr ? `&${queryStr}` : ''}`
 
     try {
-      const response = await amakeRequest<unknown>(url, { responseCallback })
+      const response = await getData<unknown>(base, { apiKey })
 
       if (typeof response === 'object' && response !== null && !Array.isArray(response)) {
         const dict = response as Record<string, unknown>

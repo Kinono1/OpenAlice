@@ -55,8 +55,8 @@ export class FMPInsiderTradingFetcher extends Fetcher {
     const apiKey = credentials?.fmp_api_key ?? ''
 
     if (query.statistics) {
-      const url = `https://financialmodelingprep.com/stable/insider-trading/statistics?symbol=${query.symbol}&apikey=${apiKey}`
-      return getDataMany(url)
+      const url = `https://financialmodelingprep.com/stable/insider-trading/statistics?symbol=${query.symbol}`
+      return getDataMany(url, undefined, { apiKey })
     }
 
     const transactionType = query.transaction_type
@@ -74,7 +74,7 @@ export class FMPInsiderTradingFetcher extends Fetcher {
 
     const pages = Math.ceil(limit / 1000)
     const urls = Array.from({ length: pages }, (_, page) =>
-      `${baseUrl}?${queryStr}&page=${page}&limit=${limit}&apikey=${apiKey}`,
+      `${baseUrl}?${queryStr}&page=${page}&limit=${limit}`,
     )
 
     const results = await getDataUrls<Record<string, unknown>[]>(urls)

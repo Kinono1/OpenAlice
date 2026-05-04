@@ -8,7 +8,7 @@ import { Fetcher } from '../../../core/provider/abstract/fetcher.js'
 import { GovernmentTradesQueryParamsSchema, GovernmentTradesDataSchema } from '../../../standard-models/government-trades.js'
 import { applyAliases } from '../../../core/provider/utils/helpers.js'
 import { EmptyDataError } from '../../../core/provider/utils/errors.js'
-import { amakeRequest } from '../../../core/provider/utils/helpers.js'
+import { getDataMany } from '../utils/helpers.js'
 
 const ALIAS_DICT: Record<string, string> = {
   symbol: 'ticker',
@@ -47,7 +47,6 @@ export const FMPGovernmentTradesDataSchema = GovernmentTradesDataSchema.extend({
 }).strip()
 export type FMPGovernmentTradesData = z.infer<typeof FMPGovernmentTradesDataSchema>
 
-/** Determine asset_type from description if missing */
 function inferAssetType(d: Record<string, unknown>): string | null {
   const desc = String(d.assetDescription ?? d.asset_description ?? '').toLowerCase()
   const hasTicker = !!(d.ticker || d.symbol)
@@ -82,13 +81,12 @@ export class FMPGovernmentTradesFetcher extends Fetcher {
     const results: Record<string, unknown>[] = []
 
     if (query.symbol) {
-      // Symbol-based: fetch for each symbol × each chamber
       const symbols = query.symbol.split(',').map(s => s.trim()).filter(Boolean)
       const urls: { url: string; chamber: string }[] = []
       for (const symbol of symbols) {
         for (const ep of endpoints) {
           urls.push({
-            url: `${baseUrl}${ep}?symbol=${symbol}&apikey=${apiKey}`,
+            url: `${baseUrl}${ep}?symbol=${symbol}`,
             chamber: ep.includes('senate') ? 'Senate' : 'House',
           })
         }
@@ -96,8 +94,8 @@ export class FMPGovernmentTradesFetcher extends Fetcher {
 
       const settled = await Promise.allSettled(
         urls.map(async ({ url, chamber }) => {
-          const data = await amakeRequest(url) as any[]
-          return (data ?? []).map((d: any) => ({ ...d, chamber }))
+          const data = await getDataMany(url, undefined, { apiKey })
+          return data.map((d) => ({ ...d, chamber }))
         }),
       )
 
@@ -107,20 +105,20 @@ export class FMPGovernmentTradesFetcher extends Fetcher {
         }
       }
     } else {
-      // No symbol: fetch latest trades (up to limit)
       const limit = query.limit ?? 1000
       for (const ep of endpoints) {
         const chamber = ep.includes('senate') ? 'Senate' : 'House'
         try {
           const latestEp = ep.replace('trades', 'latest')
-          const data = await amakeRequest(
-            `${baseUrl}${latestEp}?page=0&limit=${Math.min(limit, 250)}&apikey=${apiKey}`,
-          ) as any[]
-          if (data?.length) {
-            results.push(...data.map((d: any) => ({ ...d, chamber })))
+          const data = await getDataMany(
+            `${baseUrl}${latestEp}?page=0&limit=${Math.min(limit, 250)}`,
+            undefined,
+            { apiKey },
+          )
+          if (data.length) {
+            results.push(...data.map((d) => ({ ...d, chamber })))
           }
         } catch {
-          // Ignore errors for individual chambers
         }
       }
     }
@@ -129,7 +127,6 @@ export class FMPGovernmentTradesFetcher extends Fetcher {
       throw new EmptyDataError('No government trades data returned.')
     }
 
-    // Process: rename keys, remove unwanted keys, add chamber
     return results.map(entry => {
       const processed: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(entry)) {
@@ -147,18 +144,14 @@ export class FMPGovernmentTradesFetcher extends Fetcher {
   ): FMPGovernmentTradesData[] {
     const results = data
       .filter(d => {
-        // Skip entries where all values are "--" or empty
         const vals = Object.values(d)
         return vals.some(v => v && v !== '--')
       })
       .map(d => {
-        // Fill missing owner
         if (!d.owner) d.owner = 'Self'
-        // Fill missing asset_type
         if (!d.assetType && !d.asset_type) {
           d.asset_type = inferAssetType(d)
         }
-        // Clean "--" values to null
         for (const [k, v] of Object.entries(d)) {
           if (v === '--') d[k] = null
         }
@@ -166,10 +159,8 @@ export class FMPGovernmentTradesFetcher extends Fetcher {
         return FMPGovernmentTradesDataSchema.parse(aliased)
       })
 
-    // Sort by date descending
     results.sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0))
 
-    // Apply limit
     const limit = query.limit ?? results.length
     return results.slice(0, limit)
   }

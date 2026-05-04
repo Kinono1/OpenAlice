@@ -5,6 +5,35 @@
 
 import { OpenBBError } from './errors.js'
 
+const SENSITIVE_QUERY_PARAMS = new Set([
+  'api_key',
+  'apikey',
+  'access_token',
+  'token',
+  'secret',
+  'secret_key',
+  'client_secret',
+  'key',
+])
+
+export function redactUrlForLogs(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const keys = [...new Set(parsed.searchParams.keys())]
+    for (const key of keys) {
+      if (SENSITIVE_QUERY_PARAMS.has(key.toLowerCase())) {
+        parsed.searchParams.set(key, '***REDACTED***')
+      }
+    }
+    return parsed.toString()
+  } catch {
+    return url.replace(
+      /([?&](?:api_key|apikey|access_token|token|secret|secret_key|client_secret|key)=)[^&]*/gi,
+      '$1***REDACTED***',
+    )
+  }
+}
+
 /**
  * Make an async HTTP request and return the parsed JSON response.
  * Maps to: amake_request() in helpers.py
@@ -26,6 +55,7 @@ export async function amakeRequest<T = unknown>(
   } = {},
 ): Promise<T> {
   const { method = 'GET', headers, body, timeoutMs = 30_000, responseCallback } = options
+  const safeUrl = redactUrlForLogs(url)
 
   let response: Response
   try {
@@ -37,9 +67,9 @@ export async function amakeRequest<T = unknown>(
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'TimeoutError') {
-      throw new OpenBBError(`Request timed out after ${timeoutMs}ms: ${url}`)
+      throw new OpenBBError(`Request timed out after ${timeoutMs}ms: ${safeUrl}`)
     }
-    throw new OpenBBError(`Request failed: ${url}`, error)
+    throw new OpenBBError(`Request failed: ${safeUrl}`, error)
   }
 
   if (responseCallback) {
@@ -49,14 +79,14 @@ export async function amakeRequest<T = unknown>(
   if (!response.ok) {
     const text = await response.text().catch(() => '')
     throw new OpenBBError(
-      `HTTP ${response.status} ${response.statusText}: ${url}${text ? ` - ${text}` : ''}`,
+      `HTTP ${response.status} ${response.statusText}: ${safeUrl}${text ? ` - ${text}` : ''}`,
     )
   }
 
   try {
     return (await response.json()) as T
   } catch (error) {
-    throw new OpenBBError(`Failed to parse JSON response from: ${url}`, error)
+    throw new OpenBBError(`Failed to parse JSON response from: ${safeUrl}`, error)
   }
 }
 
@@ -117,6 +147,7 @@ export async function nativeFetch(
   options: { headers?: Record<string, string>; timeoutMs?: number } = {},
 ): Promise<{ status: number; text: string }> {
   const { headers, timeoutMs = 30_000 } = options
+  const safeUrl = redactUrlForLogs(url)
   const mod = url.startsWith('https') ? await import('https') : await import('http')
 
   return new Promise((resolve, reject) => {
@@ -126,7 +157,7 @@ export async function nativeFetch(
       res.on('end', () => resolve({ status: res.statusCode ?? 0, text: body }))
     })
     req.on('error', reject)
-    req.on('timeout', () => { req.destroy(); reject(new OpenBBError(`Request timed out: ${url}`)) })
+    req.on('timeout', () => { req.destroy(); reject(new OpenBBError(`Request timed out: ${safeUrl}`)) })
   })
 }
 

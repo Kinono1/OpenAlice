@@ -28,8 +28,7 @@ export class FMPRevenueBusinessLineFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/revenue-product-segmentation?symbol=${query.symbol}&period=${query.period}&structure=flat&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/revenue-product-segmentation?symbol=${query.symbol}&period=${query.period}&structure=flat`, undefined, { apiKey })
   }
 
   static override transformData(

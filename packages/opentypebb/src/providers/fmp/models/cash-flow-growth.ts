@@ -105,8 +105,8 @@ export class FMPCashFlowStatementGrowthFetcher extends Fetcher {
       + `?symbol=${query.symbol}`
       + `&period=${query.period}`
       + `&limit=${query.limit ?? 5}`
-      + `&apikey=${apiKey}`
-    return getDataMany(url)
+      + ``
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

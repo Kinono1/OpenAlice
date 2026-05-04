@@ -55,8 +55,7 @@ export class FMPCurrencySnapshotsFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/batch-forex-quotes?short=false&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/batch-forex-quotes?short=false`, undefined, { apiKey })
   }
 
   static override transformData(

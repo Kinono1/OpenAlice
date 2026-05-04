@@ -18,7 +18,6 @@ export type FMPCryptoSearchData = z.infer<typeof FMPCryptoSearchDataSchema>
 
 export class FMPCryptoSearchFetcher extends Fetcher {
   static override transformQuery(params: Record<string, unknown>): FMPCryptoSearchQueryParams {
-    // Remove dashes from query
     if (typeof params.query === 'string') {
       params.query = params.query.replace(/-/g, '')
     }
@@ -30,7 +29,7 @@ export class FMPCryptoSearchFetcher extends Fetcher {
     credentials: Record<string, string> | null,
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
-    return getDataMany(`https://financialmodelingprep.com/stable/cryptocurrency-list?apikey=${apiKey}`)
+    return getDataMany('https://financialmodelingprep.com/stable/cryptocurrency-list', undefined, { apiKey })
   }
 
   static override transformData(

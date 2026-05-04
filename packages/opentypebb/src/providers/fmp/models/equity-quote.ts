@@ -55,7 +55,7 @@ export class FMPEquityQuoteFetcher extends Fetcher {
     const results: Record<string, unknown>[] = []
 
     const getOne = async (symbol: string) => {
-      const url = `${baseUrl}symbol=${symbol}&apikey=${apiKey}`
+      const url = `${baseUrl}symbol=${symbol}`
       try {
         const result = await amakeRequest<Record<string, unknown>[]>(url, { responseCallback })
         if (result && result.length > 0) {

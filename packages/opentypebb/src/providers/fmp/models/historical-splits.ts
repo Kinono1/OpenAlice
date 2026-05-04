@@ -25,8 +25,7 @@ export class FMPHistoricalSplitsFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/splits?symbol=${query.symbol}&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/splits?symbol=${query.symbol}`, undefined, { apiKey })
   }
 
   static override transformData(

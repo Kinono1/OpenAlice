@@ -47,8 +47,8 @@ export class FMPForwardEbitdaEstimatesFetcher extends Fetcher {
       + `?symbol=${query.symbol}`
       + (query.fiscal_period ? `&period=${query.fiscal_period}` : '')
       + (query.limit ? `&limit=${query.limit}` : '')
-      + `&apikey=${apiKey}`
-    return getDataMany(url)
+      + ``
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

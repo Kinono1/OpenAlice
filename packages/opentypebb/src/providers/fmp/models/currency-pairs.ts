@@ -30,7 +30,7 @@ export class FMPCurrencyPairsFetcher extends Fetcher {
     credentials: Record<string, string> | null,
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
-    return getDataMany(`https://financialmodelingprep.com/stable/forex-list?apikey=${apiKey}`)
+    return getDataMany(`https://financialmodelingprep.com/stable/forex-list`, undefined, { apiKey })
   }
 
   static override transformData(

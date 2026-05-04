@@ -50,8 +50,7 @@ export class FMPIndexConstituentsFetcher extends Fetcher {
     const apiKey = credentials?.fmp_api_key ?? ''
     const prefix = query.historical ? 'historical-' : ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/${prefix}${query.symbol}-constituent/?apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/${prefix}${query.symbol}-constituent/`, undefined, { apiKey })
   }
 
   static override transformData(

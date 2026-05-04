@@ -29,7 +29,7 @@ export class FMPEquityActiveFetcher extends Fetcher {
     credentials: Record<string, string> | null,
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
-    return getDataMany(`https://financialmodelingprep.com/stable/most-actives?apikey=${apiKey}`)
+    return getDataMany(`https://financialmodelingprep.com/stable/most-actives`, undefined, { apiKey })
   }
 
   static override transformData(

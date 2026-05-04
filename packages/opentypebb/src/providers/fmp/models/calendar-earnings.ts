@@ -72,7 +72,7 @@ export class FMPCalendarEarningsFetcher extends Fetcher {
 
       const from = currentStart.toISOString().split('T')[0]
       const to = actualEnd.toISOString().split('T')[0]
-      urls.push(`${baseUrl}from=${from}&to=${to}&apikey=${apiKey}`)
+      urls.push(`${baseUrl}from=${from}&to=${to}`)
 
       currentStart = new Date(actualEnd)
       currentStart.setDate(currentStart.getDate() + 1)

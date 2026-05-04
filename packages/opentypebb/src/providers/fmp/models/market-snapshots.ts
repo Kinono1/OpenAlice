@@ -56,22 +56,22 @@ export class FMPMarketSnapshotsFetcher extends Fetcher {
 
     let url: string
     if (market === 'ETF') {
-      url = `${baseUrl}etf-quotes?short=false&apikey=${apiKey}`
+      url = `${baseUrl}etf-quotes?short=false`
     } else if (market === 'MUTUAL_FUND') {
-      url = `${baseUrl}mutualfund-quotes?short=false&apikey=${apiKey}`
+      url = `${baseUrl}mutualfund-quotes?short=false`
     } else if (market === 'FOREX') {
-      url = `${baseUrl}forex-quotes?short=false&apikey=${apiKey}`
+      url = `${baseUrl}forex-quotes?short=false`
     } else if (market === 'CRYPTO') {
-      url = `${baseUrl}crypto-quotes?short=false&apikey=${apiKey}`
+      url = `${baseUrl}crypto-quotes?short=false`
     } else if (market === 'INDEX') {
-      url = `${baseUrl}index-quotes?short=false&apikey=${apiKey}`
+      url = `${baseUrl}index-quotes?short=false`
     } else if (market === 'COMMODITY') {
-      url = `${baseUrl}commodity-quotes?short=false&apikey=${apiKey}`
+      url = `${baseUrl}commodity-quotes?short=false`
     } else {
-      url = `${baseUrl}exchange-quote?exchange=${market}&short=false&apikey=${apiKey}`
+      url = `${baseUrl}exchange-quote?exchange=${market}&short=false`
     }
 
-    return getDataMany(url)
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

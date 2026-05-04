@@ -73,7 +73,7 @@ export class FMPEquityProfileFetcher extends Fetcher {
     const results: Record<string, unknown>[] = []
 
     const getOne = async (symbol: string) => {
-      const url = `${baseUrl}profile?symbol=${symbol}&apikey=${apiKey}`
+      const url = `${baseUrl}profile?symbol=${symbol}`
       try {
         const result = await amakeRequest<Record<string, unknown>[]>(url, { responseCallback })
         if (result && result.length > 0) {

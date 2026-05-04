@@ -53,8 +53,7 @@ export class FMPDiscoveryFilingsFetcher extends Fetcher {
     for (let page = 0; page < pages; page++) {
       try {
         const data = await getDataMany(
-          `${baseUrl}?${qs.toString()}&page=${page}&limit=1000`,
-        )
+          `${baseUrl}?${qs.toString()}&page=${page}&limit=1000`, undefined, { apiKey })
         allResults.push(...data)
         // If we got fewer than 1000, no more pages
         if (data.length < 1000) break

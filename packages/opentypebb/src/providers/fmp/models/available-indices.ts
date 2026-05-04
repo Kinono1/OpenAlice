@@ -25,8 +25,7 @@ export class FMPAvailableIndicesFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/index-list?apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/index-list`, undefined, { apiKey })
   }
 
   static override transformData(

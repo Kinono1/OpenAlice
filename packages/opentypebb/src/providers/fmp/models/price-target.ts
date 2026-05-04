@@ -46,8 +46,8 @@ export class FMPPriceTargetFetcher extends Fetcher {
     const url = 'https://financialmodelingprep.com/stable/price-target'
       + `?symbol=${query.symbol}`
       + (query.limit ? `&limit=${query.limit}` : '')
-      + `&apikey=${apiKey}`
-    return getDataMany(url)
+      + ``
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

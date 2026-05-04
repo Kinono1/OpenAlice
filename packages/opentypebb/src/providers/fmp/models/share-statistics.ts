@@ -32,8 +32,7 @@ export class FMPShareStatisticsFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/shares-float?symbol=${query.symbol}&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/shares-float?symbol=${query.symbol}`, undefined, { apiKey })
   }
 
   static override transformData(

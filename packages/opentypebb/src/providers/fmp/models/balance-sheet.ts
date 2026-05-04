@@ -155,9 +155,9 @@ export class FMPBalanceSheetFetcher extends Fetcher {
       + `?symbol=${query.symbol}`
       + (query.period !== 'ttm' ? `&period=${query.period}` : '')
       + `&limit=${query.limit ?? 5}`
-      + `&apikey=${apiKey}`
+      + ``
 
-    return getDataMany(url)
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

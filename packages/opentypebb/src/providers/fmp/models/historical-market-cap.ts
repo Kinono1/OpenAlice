@@ -38,8 +38,7 @@ export class FMPHistoricalMarketCapFetcher extends Fetcher {
     if (query.start_date) qs.set('from', query.start_date)
     if (query.end_date) qs.set('to', query.end_date)
     return getDataMany(
-      `https://financialmodelingprep.com/stable/historical-market-capitalization?${qs.toString()}`,
-    )
+      `https://financialmodelingprep.com/stable/historical-market-capitalization?${qs.toString()}`, undefined, { apiKey })
   }
 
   static override transformData(

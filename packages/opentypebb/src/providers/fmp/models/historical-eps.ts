@@ -41,9 +41,9 @@ export class FMPHistoricalEpsFetcher extends Fetcher {
     credentials: Record<string, string> | null,
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
-    let url = `https://financialmodelingprep.com/stable/earnings?symbol=${query.symbol}&apikey=${apiKey}`
+    let url = `https://financialmodelingprep.com/stable/earnings?symbol=${query.symbol}`
     if (query.limit) url += `&limit=${query.limit}`
-    return getDataMany(url)
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

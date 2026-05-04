@@ -26,8 +26,7 @@ export class FMPEtfCountriesFetcher extends Fetcher {
     const apiKey = credentials?.fmp_api_key ?? ''
     const symbol = query.symbol
     return getDataMany(
-      `https://financialmodelingprep.com/stable/etf/country-weightings?symbol=${symbol}&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/etf/country-weightings?symbol=${symbol}`, undefined, { apiKey })
   }
 
   static override transformData(

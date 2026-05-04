@@ -43,9 +43,9 @@ export class FMPPricePerformanceFetcher extends Fetcher {
     const allResults: Record<string, unknown>[] = []
     for (let i = 0; i < symbols.length; i += chunkSize) {
       const chunk = symbols.slice(i, i + chunkSize)
-      const url = `https://financialmodelingprep.com/stable/stock-price-change?symbol=${chunk.join(',')}&apikey=${apiKey}`
+      const url = `https://financialmodelingprep.com/stable/stock-price-change?symbol=${chunk.join(',')}`
       try {
-        const data = await getDataMany(url)
+        const data = await getDataMany(url, undefined, { apiKey })
         allResults.push(...data)
       } catch {
         // If a chunk fails, continue with others
@@ -53,8 +53,7 @@ export class FMPPricePerformanceFetcher extends Fetcher {
     }
     if (allResults.length === 0) {
       return getDataMany(
-        `https://financialmodelingprep.com/stable/stock-price-change?symbol=${query.symbol.toUpperCase()}&apikey=${apiKey}`,
-      )
+        `https://financialmodelingprep.com/stable/stock-price-change?symbol=${query.symbol.toUpperCase()}`, undefined, { apiKey })
     }
     return allResults
   }

@@ -104,8 +104,7 @@ export class FMPInstitutionalOwnershipFetcher extends Fetcher {
     const settled = await Promise.allSettled(
       symbols.map(symbol =>
         getDataMany(
-          `https://financialmodelingprep.com/stable/institutional-ownership/symbol-positions-summary?symbol=${symbol}&year=${year}&quarter=${quarter}&apikey=${apiKey}`,
-        ),
+          `https://financialmodelingprep.com/stable/institutional-ownership/symbol-positions-summary?symbol=${symbol}&year=${year}&quarter=${quarter}`, undefined, { apiKey }),
       ),
     )
 

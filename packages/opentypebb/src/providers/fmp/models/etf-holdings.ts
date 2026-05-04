@@ -50,10 +50,10 @@ export class FMPEtfHoldingsFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     const symbol = query.symbol
-    let url = `https://financialmodelingprep.com/stable/etf/holdings?symbol=${symbol}&apikey=${apiKey}`
+    let url = `https://financialmodelingprep.com/stable/etf/holdings?symbol=${symbol}`
     if (query.date) url += `&date=${query.date}`
     if (query.cik) url += `&cik=${query.cik}`
-    return getDataMany(url)
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

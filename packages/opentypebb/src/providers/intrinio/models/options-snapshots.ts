@@ -13,6 +13,12 @@ export const IntrinioOptionsSnapshotsQueryParamsSchema = z.object({}).passthroug
 export type IntrinioOptionsSnapshotsQueryParams = z.infer<typeof IntrinioOptionsSnapshotsQueryParamsSchema>
 export type IntrinioOptionsSnapshotsData = z.infer<typeof OptionsSnapshotsDataSchema>
 
+function createIntrinioUrl(path: string, apiKey: string): string {
+  const url = new URL(path, 'https://api-v2.intrinio.com')
+  url.searchParams.set('api_key', apiKey)
+  return url.toString()
+}
+
 export class IntrinioOptionsSnapshotsFetcher extends Fetcher {
   static override requireCredentials = true
 
@@ -27,7 +33,7 @@ export class IntrinioOptionsSnapshotsFetcher extends Fetcher {
     const apiKey = credentials?.intrinio_api_key ?? ''
     if (!apiKey) throw new EmptyDataError('Intrinio API key required.')
 
-    const url = `https://api-v2.intrinio.com/options/snapshots?api_key=${apiKey}`
+    const url = createIntrinioUrl('/options/snapshots', apiKey)
 
     try {
       const data = await amakeRequest<Record<string, unknown>>(url)

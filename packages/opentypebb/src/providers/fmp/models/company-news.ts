@@ -66,9 +66,9 @@ export class FMPCompanyNewsFetcher extends Fetcher {
     if (query.start_date) url += `&from=${query.start_date}`
     if (query.end_date) url += `&to=${query.end_date}`
 
-    url += `&limit=${limit}&page=${page}&apikey=${apiKey}`
+    url += `&limit=${limit}&page=${page}`
 
-    const response = await getDataMany(url)
+    const response = await getDataMany(url, undefined, { apiKey })
 
     if (!response || response.length === 0) {
       throw new EmptyDataError()

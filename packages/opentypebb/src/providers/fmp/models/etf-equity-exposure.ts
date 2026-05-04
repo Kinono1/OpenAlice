@@ -37,8 +37,7 @@ export class FMPEtfEquityExposureFetcher extends Fetcher {
     const apiKey = credentials?.fmp_api_key ?? ''
     const symbol = query.symbol
     return getDataMany(
-      `https://financialmodelingprep.com/stable/etf/asset-exposure?symbol=${symbol}&apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/etf/asset-exposure?symbol=${symbol}`, undefined, { apiKey })
   }
 
   static override transformData(

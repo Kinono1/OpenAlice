@@ -62,8 +62,8 @@ export class FMPAnalystEstimatesFetcher extends Fetcher {
       + `?symbol=${query.symbol}`
       + `&period=${query.period}`
       + (query.limit ? `&limit=${query.limit}` : '')
-      + `&apikey=${apiKey}`
-    return getDataMany(url)
+      + ``
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

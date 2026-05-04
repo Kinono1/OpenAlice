@@ -52,13 +52,13 @@ export class FMPWorldNewsFetcher extends Fetcher {
     let url: string
 
     if (query.topic === 'fmp_articles') {
-      url = `${baseUrl}news/fmp-articles?page=${query.page ?? 0}&limit=${query.limit ?? 20}&apikey=${apiKey}`
+      url = `${baseUrl}news/fmp-articles?page=${query.page ?? 0}&limit=${query.limit ?? 20}`
     } else {
       const topicPath = query.topic.replace(/_/g, '-')
-      url = `${baseUrl}news/${topicPath}-latest?from=${query.start_date ?? ''}&to=${query.end_date ?? ''}&limit=${query.limit ?? 250}&page=${query.page ?? 0}&apikey=${apiKey}`
+      url = `${baseUrl}news/${topicPath}-latest?from=${query.start_date ?? ''}&to=${query.end_date ?? ''}&limit=${query.limit ?? 250}&page=${query.page ?? 0}`
     }
 
-    const results = await getDataMany(url)
+    const results = await getDataMany(url, undefined, { apiKey })
 
     return results.sort((a, b) =>
       String(b.publishedDate ?? '').localeCompare(String(a.publishedDate ?? '')),

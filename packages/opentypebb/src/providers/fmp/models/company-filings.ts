@@ -63,8 +63,7 @@ export class FMPCompanyFilingsFetcher extends Fetcher {
     }
 
     return getDataMany(
-      `https://financialmodelingprep.com/stable/${endpoint}?${qs.toString()}`,
-    )
+      `https://financialmodelingprep.com/stable/${endpoint}?${qs.toString()}`, undefined, { apiKey })
   }
 
   static override transformData(

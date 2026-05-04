@@ -72,12 +72,12 @@ export class FMPKeyMetricsFetcher extends Fetcher {
 
     const getOne = async (symbol: string) => {
       try {
-        const ttmUrl = `${baseUrl}-ttm?symbol=${symbol}&apikey=${apiKey}`
-        const metricsUrl = `${baseUrl}?symbol=${symbol}&period=${query.period}&limit=${limit}&apikey=${apiKey}`
+        const ttmUrl = `${baseUrl}-ttm?symbol=${symbol}`
+        const metricsUrl = `${baseUrl}?symbol=${symbol}&period=${query.period}&limit=${limit}`
 
         const [ttmData, metricsData] = await Promise.all([
-          getDataMany(ttmUrl).catch(() => []),
-          getDataMany(metricsUrl).catch(() => []),
+          getDataMany(ttmUrl, undefined, { apiKey }).catch(() => []),
+          getDataMany(metricsUrl, undefined, { apiKey }).catch(() => []),
         ])
 
         const result: Record<string, unknown>[] = []

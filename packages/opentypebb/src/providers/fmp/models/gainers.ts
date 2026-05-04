@@ -29,7 +29,7 @@ export class FMPGainersFetcher extends Fetcher {
     credentials: Record<string, string> | null,
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
-    return getDataMany(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${apiKey}`)
+    return getDataMany(`https://financialmodelingprep.com/stable/biggest-gainers`, undefined, { apiKey })
   }
 
   static override transformData(

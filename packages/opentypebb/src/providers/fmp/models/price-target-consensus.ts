@@ -41,7 +41,7 @@ export class FMPPriceTargetConsensusFetcher extends Fetcher {
     const results: Record<string, unknown>[] = []
 
     const getOne = async (symbol: string) => {
-      const url = `https://financialmodelingprep.com/stable/price-target-consensus?symbol=${symbol}&apikey=${apiKey}`
+      const url = `https://financialmodelingprep.com/stable/price-target-consensus?symbol=${symbol}`
       try {
         const result = await amakeRequest<Record<string, unknown>[]>(url, { responseCallback })
         if (result && result.length > 0) {

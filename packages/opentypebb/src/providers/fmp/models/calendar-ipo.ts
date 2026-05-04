@@ -49,8 +49,8 @@ export class FMPCalendarIpoFetcher extends Fetcher {
     const endDate = query.end_date ?? new Date(now.getTime() + 3 * 86400000).toISOString().slice(0, 10)
 
     const url = 'https://financialmodelingprep.com/stable/ipos-calendar'
-      + `?from=${startDate}&to=${endDate}&apikey=${apiKey}`
-    return getDataMany(url)
+      + `?from=${startDate}&to=${endDate}`
+    return getDataMany(url, undefined, { apiKey })
   }
 
   static override transformData(

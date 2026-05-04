@@ -45,8 +45,7 @@ export class FMPExecutiveCompensationFetcher extends Fetcher {
     const settled = await Promise.allSettled(
       symbols.map(symbol =>
         getDataMany(
-          `https://financialmodelingprep.com/stable/governance-executive-compensation?symbol=${symbol}&apikey=${apiKey}`,
-        ),
+          `https://financialmodelingprep.com/stable/governance-executive-compensation?symbol=${symbol}`, undefined, { apiKey }),
       ),
     )
 

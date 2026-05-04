@@ -25,8 +25,7 @@ export class FMPRiskPremiumFetcher extends Fetcher {
   ): Promise<Record<string, unknown>[]> {
     const apiKey = credentials?.fmp_api_key ?? ''
     return getDataMany(
-      `https://financialmodelingprep.com/stable/market-risk-premium?apikey=${apiKey}`,
-    )
+      `https://financialmodelingprep.com/stable/market-risk-premium`, undefined, { apiKey })
   }
 
   static override transformData(

@@ -118,8 +118,7 @@ export class FMPEquityScreenerFetcher extends Fetcher {
     if (query.limit) qs.set('limit', String(query.limit))
 
     return getDataMany(
-      `https://financialmodelingprep.com/stable/company-screener?${qs.toString()}`,
-    )
+      `https://financialmodelingprep.com/stable/company-screener?${qs.toString()}`, undefined, { apiKey })
   }
 
   static override transformData(
