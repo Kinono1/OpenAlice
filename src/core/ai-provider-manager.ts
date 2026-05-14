@@ -45,11 +45,14 @@ export class StreamableResult implements PromiseLike<ProviderResult>, AsyncItera
     } catch (err) {
       this._error = err instanceof Error ? err : new Error(String(err))
       this._notify()
-      throw this._error
+      // Error is stored in this._error for the asyncIterator path.
+      // Do NOT re-throw — there is no guaranteed .catch() on _promise,
+      // and Node.js would emit unhandledRejection, crashing the process.
     } finally {
       this._done = true
       this._notify()
     }
+    if (this._error) throw this._error
     if (!this._result) throw new Error('StreamableResult: stream ended without done event')
     return this._result
   }

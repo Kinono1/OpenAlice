@@ -34,6 +34,7 @@ import {
   assertCompletePredictedOpenEvidenceRecord,
   buildPaperTradeMfeMaeEvidence,
   buildPaperTradeCostEvidence,
+  buildPaperTradePredictedOpenEvidence,
   withPaperTradeContextCoverage,
   type PaperTradeResult,
   type PaperTradeCloseReason,
@@ -48,10 +49,8 @@ import {
   paperOpenContextAcceptRejectReasons,
   type PaperOpenContextStatus,
 } from '../src/runtime/paper_open_context.js'
-import {
-  DEFAULT_PAPER_MARK_MATCH_FALLBACK_PENALTY_BPS,
-  resolvePaperMarkMatchOpenFields,
-} from './lib/paper_mark_match.js'
+import { estimatePaperRoundTripCostPct, roundSignalQualityNumber, PAPER_STALE_MARK_MATCH_PENALTY_BPS } from '../src/runtime/paper_cost_helpers.js'
+import { buildOpenCostSnapshot } from '../src/runtime/paper_open_cost_builder.js'
 
 interface Candle {
   timestamp: number
@@ -65,7 +64,7 @@ interface Candle {
 export interface MicroProfile {
   id: string
   label: string
-  mode: 'paper_trade'
+  mode: 'paper_trade' | 'stress_only'
   cadence: 'second'
   timeframe: '1s'
   strategyLane: 'microstructure_stress'
@@ -254,15 +253,15 @@ export const MICRO_PROFILES: MicroProfile[] = [
     marginFraction: 0.01,
     maxPositions: 2,
     maxHoldingSeconds: 120,
-    minAbsReturnPct: 0.04,
-    minVolumeRatio: 1.5,
-    stopLossPct: 0.25,
-    takeProfitPct: 0.35,
+    minAbsReturnPct: 0.20,
+    minVolumeRatio: 3.0,
+    stopLossPct: 0.50,
+    takeProfitPct: 0.50,
   },
   {
     id: 'liquidation_probe_100x',
     label: 'Liquidation probe 100x',
-    mode: 'paper_trade',
+    mode: 'stress_only',
     cadence: 'second',
     timeframe: '1s',
     strategyLane: 'microstructure_stress',
@@ -270,17 +269,14 @@ export const MICRO_PROFILES: MicroProfile[] = [
     marginFraction: 0.001,
     maxPositions: 1,
     maxHoldingSeconds: 30,
-    minAbsReturnPct: 0.035,
-    minVolumeRatio: 1.8,
+    minAbsReturnPct: 0.15,
+    minVolumeRatio: 4.0,
     stopLossPct: 0.08,
     takeProfitPct: 0.12,
   },
 ]
 
 const CSV_HEADER = 'timestamp,datetime,open,high,low,close,volume,symbol,timeframe,exchange'
-const PAPER_FEE_RATE = 0.0006
-const PAPER_SLIPPAGE_BPS = 8
-const PAPER_STALE_MARK_MATCH_PENALTY_BPS = DEFAULT_PAPER_MARK_MATCH_FALLBACK_PENALTY_BPS
 
 function accountPath(profile: MicroProfile): string {
   return join(import.meta.dirname ?? '.', '..', 'data', 'paper_trading', `account_ms_${profile.id}.json`)
@@ -304,6 +300,9 @@ function normalizeAccount(value: unknown): MicroAccount {
 }
 
 function loadAccount(profile: MicroProfile): MicroAccount {
+  if (profile.mode === 'stress_only') {
+    return createEmptyAccount()
+  }
   try {
     return normalizeAccount(JSON.parse(readFileSync(accountPath(profile), 'utf-8')))
   } catch {
@@ -316,6 +315,7 @@ function profileLane(profile: MicroProfile): 'microstructure_10x' | 'microstruct
 }
 
 async function saveAccount(profile: MicroProfile, account: MicroAccount): Promise<void> {
+  if (profile.mode === 'stress_only') return
   const dir = join(import.meta.dirname ?? '.', '..', 'data', 'paper_trading')
   await mkdir(dir, { recursive: true })
   await writeFile(accountPath(profile), `${JSON.stringify(account, null, 2)}\n`, 'utf-8')
@@ -449,7 +449,7 @@ function recordRejectedMicroSignalShadowOpen(
 ): AppendPaperPolicyShadowResult | null {
   if (!isFiniteMicroSignalForOpenEvidence(signal)) return null
   const lane = profileLane(profile)
-  const openContext = buildPaperOpenContextSnapshot(gate.context, lane)
+  const openContext = buildPaperOpenContextSnapshot(gate.context, lane, new Date(), signal.symbol)
   const stopLossPrice = signal.direction === 'long'
     ? signal.price * (1 - profile.stopLossPct / 100)
     : signal.price * (1 + profile.stopLossPct / 100)
@@ -529,13 +529,6 @@ function liquidationMovePctApprox(leverage: number): number {
   return leverage > 0 ? 100 / leverage : 100
 }
 
-function estimatePaperRoundTripCostPct(markMatchPenaltyBps = PAPER_STALE_MARK_MATCH_PENALTY_BPS): number {
-  const feeCost = PAPER_FEE_RATE * 2
-  const slippageCost = (PAPER_SLIPPAGE_BPS / 10_000) * 2
-  const markMatchPenalty = Math.max(0, markMatchPenaltyBps) / 10_000
-  return roundSignalQualityNumber((feeCost + slippageCost + markMatchPenalty) * 100)
-}
-
 function buildMicroCostSnapshot(
   leverage: number,
   matchPrice: number,
@@ -554,28 +547,7 @@ function buildMicroCostSnapshot(
   | 'markMatchPenaltyBpsAtOpen'
   | 'markMatchStatusAtOpen'
 > {
-  const markMatch = symbol
-    ? resolvePaperMarkMatchOpenFields({
-        symbol,
-        decisionTime,
-        matchPrice,
-        fallbackPenaltyBps: PAPER_STALE_MARK_MATCH_PENALTY_BPS,
-      })
-    : resolvePaperMarkMatchOpenFields({
-        symbol: '',
-        decisionTime: null,
-        matchPrice,
-        fallbackPenaltyBps: PAPER_STALE_MARK_MATCH_PENALTY_BPS,
-      })
-  const estimatedRoundTripCostPctAtOpen = estimatePaperRoundTripCostPct(markMatch.markMatchPenaltyBpsAtOpen)
-  const roundTripCostBpsAtOpen = roundSignalQualityNumber(estimatedRoundTripCostPctAtOpen * 100)
-  return {
-    estimatedRoundTripCostPctAtOpen,
-    estimatedRoundTripCostPctOfMarginAtOpen: roundSignalQualityNumber(estimatedRoundTripCostPctAtOpen * Math.max(leverage, 1)),
-    routeCostBpsAtOpen: roundTripCostBpsAtOpen,
-    roundTripCostBpsAtOpen,
-    ...markMatch,
-  }
+  return buildOpenCostSnapshot(leverage, matchPrice, symbol, decisionTime)
 }
 
 function buildMicroExpectedEdgeSnapshot(
@@ -688,10 +660,6 @@ function copyMicroOpenContextFromPosition(pos: MicroPosition): Pick<
     proEpochAtOpen: pos.proEpochAtOpen ?? null,
     marketIntelTriggerAtOpen: pos.marketIntelTriggerAtOpen ?? null,
   }
-}
-
-function roundSignalQualityNumber(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000
 }
 
 function closePositions(
@@ -896,6 +864,19 @@ function openPositions(
   const proposedOrders = signals.filter(signal => signalPassesProfile(signal, profile)
     && !isMarketIntelSymbolBanned(gate.context, signal.symbol)
     && signal.confidence >= minConfidence)
+  if (profile.mode === 'stress_only') {
+    const rejectedSignals = signals
+      .filter(signal => !proposedOrders.includes(signal))
+      .map(signal => {
+        const reasons = rejectedMicroSignalReasons(signal, profile, gate, minConfidence)
+        recordRejectedMicroSignalShadowOpen(profile, signal, reasons.join('; '), gate)
+        return buildRejectedMicroSignalReport(signal, {
+          ...gate,
+          reasons: [...gate.reasons, ...reasons],
+        })
+      })
+    return { proposedOrders, executedTrades: [], rejectedSignals }
+  }
   const executedTrades: MicroTrade[] = []
   const rejectedSignals = signals
     .filter(signal => !proposedOrders.includes(signal))
@@ -923,7 +904,7 @@ function openPositions(
       : signal.price * (1 - profile.takeProfitPct / 100)
     const liquidationMove = liquidationMovePctApprox(profile.leverage)
     const lane = profileLane(profile)
-    const openContext = buildPaperOpenContextSnapshot(gate.context, lane)
+    const openContext = buildPaperOpenContextSnapshot(gate.context, lane, new Date(), signal.symbol)
     const contextRejectReasons = paperOpenContextAcceptRejectReasons(openContext)
     if (contextRejectReasons.length > 0) {
       recordRejectedMicroSignalShadowOpen(
@@ -1167,6 +1148,10 @@ export function buildClosedPaperTradeResult(input: {
 }): PaperTradeResult {
   const { profile, position, trade, closeReason, priceSource, priceStale } = input
   const costAtOpen = copyMicroCostSnapshotFromPosition(position)
+  const predictedOpenEvidenceInput: Partial<PaperTradeResult> = {
+    openTs: trade.entryTime,
+    ...costAtOpen,
+  }
   return withPaperTradeContextCoverage({
     tradeId: trade.id,
     lane: profileLane(profile),
@@ -1204,6 +1189,7 @@ export function buildClosedPaperTradeResult(input: {
     liquidityUsdAtOpen: position.liquidityUsdAtOpen ?? null,
     spreadStatusAtOpen: position.spreadStatusAtOpen ?? 'unknown',
     ...costAtOpen,
+    ...buildPaperTradePredictedOpenEvidence(predictedOpenEvidenceInput),
     ...buildPaperTradeCostEvidence(costAtOpen),
     ...buildPaperTradeMfeMaeEvidence({
       side: trade.direction,

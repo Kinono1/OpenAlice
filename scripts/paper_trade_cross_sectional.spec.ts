@@ -79,10 +79,11 @@ describe('paper_trade_cross_sectional live shadow gates', () => {
 
   it('parses optional promotion v2 pre-trade gate flags', () => {
     expect(parsePaperTraderArgs([])).toMatchObject({
-      requirePromotionV2: false,
-      validatePromotionV2Artifacts: false,
+      requirePromotionV2: true,
+      validatePromotionV2Artifacts: true,
       promotionReadinessV2Path: null,
       skipSecondLevel: false,
+      dryRun: true,
     })
 
     expect(parsePaperTraderArgs([
@@ -961,6 +962,48 @@ describe('paper_trade_cross_sectional live shadow gates', () => {
     expect(account.positions).toEqual([])
     expect(account.tradeHistory).toEqual([])
     expect(account.dailyPnL).toEqual([])
+  })
+
+  it('closes a cross-sectional position early when the ATR trailing stop is hit', () => {
+    const profile = defaultPaperAccountProfiles({ includeSecondLevel: false }).find(item => item.id === 'spot_1x')!
+    const account = makeAccount(0, 0)
+    account.positions.push({
+      symbol: 'BTC-USDT',
+      direction: 'long',
+      entryPrice: 100,
+      quantity: 1,
+      entryTime: '2026-04-30T00:00:00.000Z',
+      signalConfidence: 0.8,
+      accountId: profile.id,
+      leverage: 1,
+      marginUsd: 100,
+      notionalUsd: 100,
+      liquidationMovePctApprox: 100,
+    })
+
+    const result = applySignalsToPaperAccount({
+      profile,
+      account,
+      ranks: [],
+      csAssets: [makeCsAsset('BTC-USDT', 86)],
+      exposureMultiplier: 0,
+      fwdHours: 48,
+      now: new Date('2026-04-30T02:00:00.000Z'),
+      today: '2026-04-30',
+      assetCandlesBySymbol: new Map([
+        ['BTC-USDT', [
+          { timestamp: Date.parse('2026-04-30T00:00:00.000Z'), high: 101, low: 99, close: 100 },
+          { timestamp: Date.parse('2026-04-30T00:05:00.000Z'), high: 103, low: 100, close: 102 },
+          { timestamp: Date.parse('2026-04-30T00:10:00.000Z'), high: 104, low: 101, close: 103 },
+          { timestamp: Date.parse('2026-04-30T00:15:00.000Z'), high: 102, low: 99, close: 100 },
+          { timestamp: Date.parse('2026-04-30T00:20:00.000Z'), high: 100, low: 84, close: 86 },
+        ]],
+      ]),
+    })
+
+    expect(result.closedTrades).toHaveLength(1)
+    expect(result.closedTrades[0]?.reason).toContain('ATR trailing stop hit')
+    expect(result.account?.positions).toEqual([])
   })
 })
 

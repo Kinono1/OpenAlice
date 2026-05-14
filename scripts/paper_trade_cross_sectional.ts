@@ -16,11 +16,12 @@
  */
 
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { evaluateCrossSectionalMomentum } from '../src/domain/strategy/cross-sectional-momentum.js'
 import type { CrossSectionalAsset, CrossSectionalConfig } from '../src/domain/strategy/cross-sectional-momentum.js'
+import { computeAtrTrailingStop } from '../src/domain/strategy/risk/atr-trailing-stop.js'
 import { fetchLiveFundingRate } from '../src/domain/market-data/live-fetcher.js'
 import { runGovernanceContextAgent } from '../src/runtime/governance-context-agent.js'
 import { analyzeNewsImpact } from '../src/runtime/news_impact.js'
@@ -37,6 +38,8 @@ import {
   paperOpenContextAcceptRejectReasons,
 } from '../src/runtime/paper_open_context.js'
 import { readSystemFuse, type SystemFuseState } from '../src/runtime/system_fuse.js'
+import { readKillSwitch } from '../src/risk/kill-switch.js'
+import { writeJsonAtomic } from '../src/runtime/atomic_write.js'
 import {
   evaluateCandleDataQuality,
   type CandleDataQualityReport,
@@ -45,6 +48,7 @@ import {
   defaultPaperUniverseSymbols,
   paperSymbolToCsvFile,
 } from './lib/paper_universe.js'
+import { applyCrossSectionalExecutionShape } from './lib/cross_sectional_execution_shape.js'
 import {
   evaluatePromotionReadinessForPaperOrders,
   type PromotionReadinessV2,
@@ -56,6 +60,7 @@ import {
   type PromotionReadinessV2LoadResult,
   type PromotionReadinessV2ValidatedLoadResult,
 } from '../src/runtime/promotion_v2_artifacts.js'
+import { formatBlockReason } from '../src/runtime/block_reason.js'
 import {
   appendPaperTradeResult,
   assertCompletePredictedOpenEvidenceRecord,
@@ -72,10 +77,25 @@ import {
   type AppendPaperPolicyShadowResult,
 } from '../src/runtime/paper_policy_shadow_ledger.js'
 import {
-  DEFAULT_PAPER_MARK_MATCH_FALLBACK_PENALTY_BPS,
   resolvePaperMarkMatchOpenFields,
   type PaperMarkMatchOpenFields,
 } from './lib/paper_mark_match.js'
+import {
+  cryptoDlSidecarEnvelopeV1Schema,
+  type CryptoDlSignalV1,
+  type CryptoDlSidecarEnvelopeV1,
+  computeCurrentSlotId,
+  validateSidecarEnvelope,
+} from '../src/runtime/sidecar_signal.js'
+import { DEFAULT_LIVE_DATA_FRESHNESS_PATH } from './audit_live_data_freshness.js'
+import { recordIntentEvidence, recordFillEvidence } from '../src/runtime/implementation_shortfall.js'
+import { roundSignalQualityNumber, PAPER_STALE_MARK_MATCH_PENALTY_BPS } from '../src/runtime/paper_cost_helpers.js'
+
+function runtimePath(relativePath: string): string {
+  return join(import.meta.dirname ?? '.', '..', relativePath)
+}
+
+const CRYPTO_DL_SIDECAR_STATUS_PATH = 'data/runtime/crypto_dl_sidecar_status.latest.json'
 
 const PAPER_TRADER_LOCK_DIR = 'data/runtime/locks/paper_trade_cross_sectional.shared.lock'
 
@@ -115,6 +135,55 @@ function computeVol(candles: Candle[], index: number, lookback: number): number 
   const mean = returns.reduce((s, r) => s + r, 0) / returns.length
   const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length
   return Math.sqrt(variance * 365 * 24) * 100
+}
+
+function computeDailyVolumeUsd(candles: Candle[], index: number, lookbackBars: number): number {
+  const start = Math.max(0, index - lookbackBars + 1)
+  let total = 0
+  for (let i = start; i <= index; i++) {
+    const candle = candles[i]
+    if (!candle || candle.close <= 0 || candle.volume <= 0) continue
+    total += candle.close * candle.volume
+  }
+  return total
+}
+
+function computeAtrFromPathCandles(candles: PaperTradePathCandle[], lookbackBars: number): number | null {
+  if (candles.length < 2) return null
+  const start = Math.max(1, candles.length - Math.max(1, lookbackBars))
+  const ranges: number[] = []
+  for (let i = start; i < candles.length; i++) {
+    const current = candles[i]
+    const previous = candles[i - 1]
+    const prevClose = previous?.close ?? previous?.high ?? previous?.low
+    if (!current || !previous || !Number.isFinite(current.high) || !Number.isFinite(current.low) || !Number.isFinite(prevClose)) {
+      continue
+    }
+    const trueRange = Math.max(
+      current.high - current.low,
+      Math.abs(current.high - prevClose),
+      Math.abs(current.low - prevClose),
+    )
+    if (Number.isFinite(trueRange) && trueRange > 0) ranges.push(trueRange)
+  }
+  if (ranges.length === 0) return null
+  return ranges.reduce((sum, value) => sum + value, 0) / ranges.length
+}
+
+function trailingAnchorPrice(
+  candles: PaperTradePathCandle[],
+  entryTimeMs: number,
+  side: 'long' | 'short',
+  fallback: number,
+): number {
+  const relevant = candles.filter(candle => candle.timestamp >= entryTimeMs)
+  if (relevant.length === 0) return fallback
+  if (side === 'long') {
+    return relevant.reduce((maxPrice, candle) =>
+      Number.isFinite(candle.high) ? Math.max(maxPrice, candle.high) : maxPrice, fallback)
+  }
+  return relevant.reduce((minPrice, candle) =>
+    Number.isFinite(candle.low) ? Math.min(minPrice, candle.low) : minPrice, fallback)
 }
 
 // ==================== Paper Account ====================
@@ -277,6 +346,10 @@ export interface BestConfigEvidence {
   winRatePct: number | null
   signals: number | null
   score: number | null
+  status: string | null
+  selectedConfig: boolean | null
+  noPassingConfigReason: string | null
+  hardGatePassedCount: number | null
   discoveredAt: string | null
   dataRange: { start: string | null; end: string | null } | null
   assetCount: number | null
@@ -367,6 +440,7 @@ export interface PaperDecisionReport {
   dataMode: PaperDataMode
   requiredBars: number | null
   blockReasons: string[]
+  sidecarRunId?: string
   bestConfig: CrossSectionalConfig | null
   bestConfigEvidence: BestConfigEvidence | null
   dataQuality: Array<CandleDataQualityReport & { source: string; path: string }>
@@ -606,9 +680,8 @@ const PAPER_COST_MODEL: PaperCostModel = {
   feeRate: 0.0006,
   slippageBps: 8,
   fundingRatePer8h: 0,
-  expectedHoldingHours: 48,
+  expectedHoldingHours: 24,
 }
-const PAPER_STALE_MARK_MATCH_PENALTY_BPS = DEFAULT_PAPER_MARK_MATCH_FALLBACK_PENALTY_BPS
 
 const DATA_MAX_STALENESS_MS = 6 * 3_600_000
 
@@ -618,6 +691,11 @@ async function loadBestConfig(): Promise<BestConfigLoadResult | null> {
     const raw = await readFile(bestPath, 'utf-8')
     const best = JSON.parse(raw)
     const cfg = isRecord(best.config) ? best.config : {}
+    const status = readString(best.status)
+    const selectedConfig = typeof best.selectedConfig === 'boolean' ? best.selectedConfig : null
+    if (status === 'no_passing_config' || selectedConfig === false || !isRecord(best.config)) {
+      return null
+    }
     return {
       strategyConfig: {
         lookbackHours: readNumber(cfg.lookbackHours),
@@ -635,6 +713,10 @@ async function loadBestConfig(): Promise<BestConfigLoadResult | null> {
         winRatePct: readNumber(cfg.winRate) ?? null,
         signals: readNumber(cfg.signals) ?? null,
         score: readNumber(cfg.score) ?? null,
+        status: status ?? null,
+        selectedConfig,
+        noPassingConfigReason: readString(best.noPassingConfigReason) ?? null,
+        hardGatePassedCount: readNumber(best.hardGatePassedCount) ?? null,
         discoveredAt: readString(best.discoveredAt) ?? null,
         dataRange: isRecord(best.dataRange)
           ? {
@@ -725,7 +807,7 @@ export function loadPaperAccount(profile: PaperAccountProfile): PaperAccount {
 async function saveAccount(account: PaperAccount): Promise<void> {
   const dir = paperTradingDir()
   await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, 'account.json'), JSON.stringify(account, null, 2))
+  writeJsonAtomic(join(dir, 'account.json'), account)
 }
 
 async function saveTradeLog(trade: PaperTrade): Promise<void> {
@@ -739,7 +821,7 @@ async function savePaperAccount(profile: Pick<PaperAccountProfile, 'id' | 'mode'
   if (profile.mode === 'stress_only') return
   const dir = accountProfileDir(profile)
   await mkdir(dir, { recursive: true })
-  await writeFile(accountProfilePath(profile), JSON.stringify(account, null, 2))
+  writeJsonAtomic(accountProfilePath(profile), account)
   if (profile.id === 'spot_1x') {
     await saveAccount(account)
   }
@@ -759,7 +841,7 @@ async function saveProfileTradeLog(profile: Pick<PaperAccountProfile, 'id' | 'mo
 async function saveDecisionReport(report: PaperDecisionReport): Promise<void> {
   const dir = join(import.meta.dirname ?? '.', '..', 'data', 'runtime')
   await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, 'paper_decision.latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf-8')
+  writeJsonAtomic(join(dir, 'paper_decision.latest.json'), report)
 }
 
 function createDecisionReport(now: Date, args: PaperTraderCliArgs): PaperDecisionReport {
@@ -1130,10 +1212,6 @@ function rankAtOpen(rank: MomentumRank): number | null {
   return Number.isFinite(rank.rank) ? rank.rank : null
 }
 
-function roundSignalQualityNumber(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000
-}
-
 function rankSpreadPctAtOpen(rank: MomentumRank): number | null {
   const match = rank.reason.match(/\bspread\s+(-?\d+(?:\.\d+)?)%/i)
   if (!match) return null
@@ -1252,9 +1330,10 @@ function buildMarketIntelOpenContextSnapshot(
   context: MarketIntelContext | undefined,
   ruleScore: number,
   now = new Date(),
+  symbol?: string,
 ): MarketIntelOpenContextSnapshot {
   if (!context) return { ruleScoreAtOpen: ruleScore }
-  const shared = buildPaperOpenContextSnapshot(context, 'cross_sectional', now)
+  const shared = buildPaperOpenContextSnapshot(context, 'cross_sectional', now, symbol)
 
   return {
     contextSnapshotId: shared.contextSnapshotId,
@@ -1297,7 +1376,7 @@ function recordRejectedCrossSectionalShadowOpen(input: {
   const { profile, order, rejectReason, marketIntelContext, now, fwdHours } = input
   if (order.price <= 0) return null
   const lane = inferPaperResultLane(profile)
-  const openContext = buildMarketIntelOpenContextSnapshot(marketIntelContext, order.confidence, now)
+  const openContext = buildMarketIntelOpenContextSnapshot(marketIntelContext, order.confidence, now, order.symbol)
   const shadowTradeId = [
     'cross_sectional',
     lane,
@@ -1666,7 +1745,28 @@ export function applySignalsToPaperAccount(input: ApplySignalsToPaperAccountInpu
     const bannedSymbol = input.marketIntelContext
       ? isMarketIntelSymbolBanned(input.marketIntelContext, pos.symbol)
       : false
-    const shouldClose = bannedSymbol || holdingHours >= input.fwdHours || evaluated.wouldLiquidate
+    const pathCandles = input.assetCandlesBySymbol?.get(pos.symbol) ?? []
+    const atr = computeAtrFromPathCandles(pathCandles, 14)
+    const trailingAnchor = trailingAnchorPrice(
+      pathCandles,
+      entryTime,
+      pos.direction,
+      currentPrice,
+    )
+    const atrTrailing = atr != null
+      ? computeAtrTrailingStop({
+        side: pos.direction === 'long' ? 'long' : 'short',
+        price: trailingAnchor,
+        atr,
+        multiplier: 2,
+      })
+      : null
+    const trailingStopHit = atrTrailing != null && (
+      pos.direction === 'long'
+        ? currentPrice <= atrTrailing.stop
+        : currentPrice >= atrTrailing.stop
+    )
+    const shouldClose = bannedSymbol || holdingHours >= input.fwdHours || evaluated.wouldLiquidate || trailingStopHit
 
     if (!shouldClose) continue
 
@@ -1685,6 +1785,8 @@ export function applySignalsToPaperAccount(input: ApplySignalsToPaperAccountInpu
         ? `Virtual liquidation threshold reached (${evaluated.adverseMovePct.toFixed(2)}% >= ${evaluated.liquidationMovePctApprox.toFixed(2)}%)`
         : bannedSymbol
           ? 'MarketIntel banned symbol'
+          : trailingStopHit
+            ? `ATR trailing stop hit (${atrTrailing?.stop.toFixed(4)})`
           : `Holding period expired (${holdingHours.toFixed(0)}h >= ${input.fwdHours}h)`,
       accountId: input.profile.id,
       accountLabel: input.profile.label,
@@ -1744,7 +1846,7 @@ export function applySignalsToPaperAccount(input: ApplySignalsToPaperAccountInpu
   const rejectedOrders: ProposedPaperOrder[] = []
 
   for (const order of proposedOrders) {
-    const openContext = buildMarketIntelOpenContextSnapshot(input.marketIntelContext, order.confidence, input.now)
+    const openContext = buildMarketIntelOpenContextSnapshot(input.marketIntelContext, order.confidence, input.now, order.symbol)
     const contextRejectReasons = paperOpenContextAcceptRejectReasons(openContext)
     if (contextRejectReasons.length > 0) {
       const rejectReason = contextRejectReasons.join('; ')
@@ -1764,6 +1866,23 @@ export function applySignalsToPaperAccount(input: ApplySignalsToPaperAccountInpu
       })
       continue
     }
+
+    const shortfallTradeId = `${order.symbol}_${nowMs}_${Math.random().toString(36).slice(2, 8)}`
+    const orderStrategy = order.strategyLane ?? input.profile.strategyLane
+    recordIntentEvidence({
+      trade_id: shortfallTradeId,
+      symbol: order.symbol,
+      side: order.direction,
+      intent_price: order.price,
+      bid: 0,
+      ask: 0,
+      mid: order.price,
+      spread_bps: 0,
+      snapshot_age_ms: 0,
+      intent_at: isoNow,
+      strategy: orderStrategy,
+    })
+
     const pos: PaperPosition = {
       symbol: order.symbol,
       direction: order.direction,
@@ -1837,6 +1956,8 @@ export function applySignalsToPaperAccount(input: ApplySignalsToPaperAccountInpu
     assertCompletePredictedOpenEvidence('trade', trade)
     account.tradeHistory.push(trade)
     executedTrades.push(trade)
+
+    recordFillEvidence(shortfallTradeId, order.price, 'paper_market', isoNow, orderStrategy)
   }
 
   const dailyPnl = account.positions.reduce((sum, pos) => {
@@ -1904,6 +2025,7 @@ async function applyCloseOnlyForBlockedDataGate(input: {
       returns: { '0h': 0 },
       realizedVolPct: computeVol(asset.candles, asset.candles.length - 1, Math.min(24, asset.candles.length - 1)),
       avgVolume24h: last.volume,
+      dailyVolumeUsd: computeDailyVolumeUsd(asset.candles, asset.candles.length - 1, Math.min(24, asset.candles.length)),
     } satisfies CrossSectionalAsset
   })
 
@@ -2084,7 +2206,7 @@ function countCsvDataRows(path: string): number {
 
 export function parsePaperTraderArgs(argv: string[]): PaperTraderCliArgs {
   const raw = parseRawArgs(argv)
-  const requirePromotionV2 = parseBool(raw.get('requirePromotionV2'), false)
+  const requirePromotionV2 = parseBool(raw.get('requirePromotionV2'), true)
   return {
     dataMode: parseDataMode(raw.get('dataMode'), 'auto'),
     requirePromotionV2,
@@ -2254,6 +2376,11 @@ export async function main(argv = process.argv.slice(2)) {
     generation: systemFuse.generation,
     heartbeatAgeMs: systemFuse.heartbeatAgeMs,
   }
+  // Kill switch gate — block new positions if kill switch is active
+  const killSwitch = readKillSwitch()
+  if (killSwitch && killSwitch.enabled && killSwitch.block_new_positions) {
+    decisionReport.blockReasons.push(formatBlockReason('kill_switch', killSwitch.state, killSwitch.reason ?? 'no_reason'))
+  }
   const profileStates = defaultPaperAccountProfiles({ includeSecondLevel: true })
     .map(profile => ({
       profile,
@@ -2389,6 +2516,14 @@ export async function main(argv = process.argv.slice(2)) {
   decisionReport.dataQuality = reportDataQuality(assetData)
   decisionReport.liveDataQuality = reportDataQuality(liveAssetData)
   refreshPromotionReadiness()
+
+  // Market data freshness gate
+  const freshnessGate = evaluateMarketDataFreshnessGate()
+  if (!freshnessGate.fresh) {
+    console.log(`\nMarket data freshness blocked: ${freshnessGate.reasons.join(', ')}`)
+    decisionReport.blockReasons.push(...freshnessGate.reasons)
+    decisionReport.notes.push(`market_data_freshness:${freshnessGate.reasons.join(';')}`)
+  }
 
   if (cliArgs.dataMode === 'live_only' && assetData.length < DEFAULT_CONFIG.minLiveUniverseSize) {
     console.log('\nLive-only data gate blocked new paper decisions:')
@@ -2535,6 +2670,7 @@ export async function main(argv = process.argv.slice(2)) {
     },
     realizedVolPct: computeVol(candles, idx, 24),
     avgVolume24h: candles[idx].volume,
+    dailyVolumeUsd: computeDailyVolumeUsd(candles, idx, 24),
     fundingRatePct: fundingRates.get(symbol),
   }))
 
@@ -2610,9 +2746,278 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   // Compute signals
-  const config = { ...bestConfig, minUniverseSize: Math.max(2, Math.floor(assetData.length / 2)), topN: 1, bottomN: 1 }
+  const config = applyCrossSectionalExecutionShape(bestConfig, assetData.length, { mode: 'paper' })
   const rawRanks = evaluateCrossSectionalMomentum(csAssets, config)
   const ranks = applyMarketIntelSymbolBlocks(rawRanks, marketIntelContext)
+
+  // ── CryptoDL Multi-Model Aggregation ──────────────────────────
+
+  const MODEL_DISAGREEMENT_THRESHOLD_PCT = 40
+
+  interface AggregatedCryptoDlResult {
+    symbol: string
+    target_position_bps: number
+    confidence_bps: number
+    direction: 1 | -1 | 0
+    models_agreeing: number
+    models_total: number
+    disagreement: boolean
+    suppressed: boolean
+    suppression_reason: string | null
+  }
+
+  function aggregateCryptoDlSignals(signals: CryptoDlSignalV1[]): AggregatedCryptoDlResult[] {
+    const bySymbol = new Map<string, CryptoDlSignalV1[]>()
+    for (const sig of signals) {
+      const sym = sig.symbol.replace('/', '').toUpperCase()
+      if (!bySymbol.has(sym)) bySymbol.set(sym, [])
+      bySymbol.get(sym)!.push(sig)
+    }
+
+    const results: AggregatedCryptoDlResult[] = []
+    for (const [symbol, group] of bySymbol) {
+      let totalWeightedPosition = 0
+      let totalWeight = 0
+      let positiveWeight = 0
+      let negativeWeight = 0
+      let positiveCount = 0
+      let negativeCount = 0
+
+      for (const sig of group) {
+        const w = sig.confidence_bps
+        totalWeightedPosition += sig.target_position_bps * w
+        totalWeight += w
+        if (sig.target_position_bps > 0) {
+          positiveWeight += w
+          positiveCount++
+        } else if (sig.target_position_bps < 0) {
+          negativeWeight += w
+          negativeCount++
+        }
+      }
+
+      const targetPositionBps = totalWeight > 0
+        ? Math.round(totalWeightedPosition / totalWeight)
+        : 0
+      const confidenceBps = totalWeight > 0
+        ? Math.round(totalWeight / group.length)
+        : 0
+
+      const minorityWeight = Math.min(positiveWeight, negativeWeight)
+      const disagreement = totalWeight > 0 && (minorityWeight / totalWeight) * 100 > MODEL_DISAGREEMENT_THRESHOLD_PCT
+      const suppressed = disagreement
+      const modelsTotal = group.length
+      const modelsAgreeing = positiveWeight >= negativeWeight ? positiveCount : negativeCount
+      const direction: 1 | -1 | 0 = suppressed ? 0 : targetPositionBps > 0 ? 1 : targetPositionBps < 0 ? -1 : 0
+
+      results.push({
+        symbol,
+        target_position_bps: suppressed ? 0 : targetPositionBps,
+        confidence_bps: confidenceBps,
+        direction,
+        models_agreeing: modelsAgreeing,
+        models_total: modelsTotal,
+        disagreement,
+        suppressed,
+        suppression_reason: suppressed ? 'model_disagreement_exceeds_40pct' : null,
+      })
+    }
+
+    return results
+  }
+
+  function checkCryptoDlProducerReady(): { ready: boolean; reason?: string } {
+    const statusPath = runtimePath(CRYPTO_DL_SIDECAR_STATUS_PATH)
+    if (!existsSync(statusPath)) {
+      return { ready: false, reason: 'sidecar_status_file_missing' }
+    }
+    try {
+      const raw = readFileSync(statusPath, 'utf-8')
+      const parsed = JSON.parse(raw) as { ready?: boolean; status?: string }
+      if (parsed.ready !== true) {
+        return { ready: false, reason: `sidecar_producer_not_ready:status=${parsed.status ?? 'unknown'}` }
+      }
+      return { ready: true }
+    } catch (err) {
+      return { ready: false, reason: `sidecar_status_parse_error:${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
+
+  function evaluateMarketDataFreshnessGate(): { fresh: boolean; reasons: string[] } {
+    const path = runtimePath(DEFAULT_LIVE_DATA_FRESHNESS_PATH)
+    if (!existsSync(path)) {
+      return { fresh: false, reasons: ['live_data_freshness_report_missing'] }
+    }
+    try {
+      const raw = readFileSync(path, 'utf-8')
+      const report = JSON.parse(raw) as { status?: string; blockers?: string[] }
+      if (report.status === 'fresh') {
+        return { fresh: true, reasons: [] }
+      }
+      return {
+        fresh: false,
+        reasons: [
+          `market_data_${report.status ?? 'unknown'}`,
+          ...(report.blockers ?? []).slice(0, 3).map(b => `freshness:${b}`),
+        ],
+      }
+    } catch {
+      return { fresh: false, reasons: ['live_data_freshness_parse_error'] }
+    }
+  }
+
+  // === CRYPTO_DL SIDECAR SIGNAL INTEGRATION ===
+  const producerReady = checkCryptoDlProducerReady()
+  if (!producerReady.ready) {
+    console.log(`[crypto_dl] Skipping sidecar consumption: ${producerReady.reason}`)
+    decisionReport.blockReasons.push(`sidecar_producer_blocked:${producerReady.reason}`)
+  } else {
+    try {
+      let sidecarRunId: string | undefined
+      const sidecarIntakePath = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'data/runtime/sidecar_signal_intake.latest.json')
+      const sidecarRaw = readFileSync(sidecarIntakePath, 'utf-8')
+      const sidecarData = JSON.parse(sidecarRaw)
+
+      let isV5Processed = false
+
+      // v5 envelope path: validate → aggregate → inject
+      if (sidecarData && typeof sidecarData === 'object' && !Array.isArray(sidecarData)) {
+        const obj = sidecarData as Record<string, unknown>
+        if (Array.isArray(obj.signals) && obj.signals.length > 0) {
+          const first = (obj.signals as Record<string, unknown>[])[0]
+          if (first && typeof first === 'object' && (first as Record<string, unknown>).source === 'cryptotrade') {
+            isV5Processed = true
+            const validation = validateSidecarEnvelope(obj)
+            if (!validation.valid) {
+              console.log(`[crypto_dl] v5 envelope validation failed: ${validation.reason}`)
+            } else {
+              const parsed = cryptoDlSidecarEnvelopeV1Schema.parse(obj)
+              const aggregated = aggregateCryptoDlSignals(parsed.signals)
+              sidecarRunId = parsed.run_id
+              console.log(`[crypto_dl] Sidecar run_id=${sidecarRunId}, slot=${parsed.slot_id}, signals=${parsed.signals.length}`)
+              try {
+                const { readLockInfo } = await import('../src/runtime/runtime_lock.js')
+                const lockInfo = readLockInfo('data/runtime/locks/cross_sectional.lock')
+                if (lockInfo && lockInfo.runId !== sidecarRunId) {
+                  console.log(`[crypto_dl] Run ID mismatch: sidecar=${sidecarRunId}, lock=${lockInfo.runId}`)
+                }
+              } catch { /* optional cross-check */ }
+              let v5Injected = 0
+              let v5Skipped = 0
+              for (const result of aggregated) {
+                if (result.suppressed) {
+                  v5Skipped++
+                  continue
+                }
+                const poolConfidence = Math.min(result.confidence_bps / 10000, 0.99)
+                const sigValue = result.direction
+                const cryptoRank = sigValue === 1 ? poolConfidence * 100 : -poolConfidence * 100
+                const existingIdx = ranks.findIndex(r => r.symbol === result.symbol)
+                if (existingIdx >= 0) {
+                  const existing = ranks[existingIdx]
+                  if (sigValue === existing.signal) {
+                    ranks[existingIdx] = {
+                      ...existing,
+                      confidence: Math.min(existing.confidence + poolConfidence * 0.3, 0.99),
+                      rank: existing.rank + cryptoRank * 0.3,
+                      reason: `${existing.reason}+crypto_dl_v5`,
+                    }
+                  } else if (poolConfidence > existing.confidence * 1.5) {
+                    ranks[existingIdx] = {
+                      ...existing,
+                      signal: sigValue,
+                      confidence: Math.min(existing.confidence + poolConfidence, 0.99),
+                      rank: cryptoRank,
+                      reason: 'crypto_dl_v5_override',
+                    }
+                  } else {
+                    v5Skipped++
+                    continue
+                  }
+                } else {
+                  ranks.push({ symbol: result.symbol, signal: sigValue, confidence: poolConfidence, rank: cryptoRank, reason: 'crypto_dl_v5' } as MomentumRank)
+                }
+                v5Injected++
+              }
+              if (v5Injected > 0 || v5Skipped > 0) {
+                ranks.sort((a, b) => b.rank - a.rank)
+                console.log(`[crypto_dl] Injected ${v5Injected} aggregated v5 sidecar signals (skipped ${v5Skipped})`)
+              }
+            }
+          }
+        }
+      }
+
+      // Legacy path (bare array or non-cryptotrade envelope)
+      if (!isV5Processed) {
+        const rawSignals: Record<string, unknown>[] = Array.isArray(sidecarData) ? sidecarData
+          : sidecarData && typeof sidecarData === 'object' && Array.isArray((sidecarData as Record<string, unknown>).signals)
+            ? (sidecarData as Record<string, unknown>).signals as Record<string, unknown>[]
+            : []
+
+        let injected = 0
+        let skipped = 0
+        for (const raw of rawSignals) {
+          const symbol = typeof raw.symbol === 'string' ? raw.symbol.replace('/', '').toUpperCase() : ''
+          if (!symbol) { skipped++; continue }
+
+          const positionPct = typeof raw.target_position_pct === 'number' ? raw.target_position_pct
+            : typeof raw.position_pct === 'number' ? raw.position_pct
+            : null
+          if (positionPct === null || Math.abs(positionPct) < 0.02) { skipped++; continue }
+
+          const direction = typeof raw.direction === 'string' ? raw.direction : ''
+          let sigValue: 1 | -1 | 0 = 0
+          if (direction === 'long' || positionPct > 0.02) sigValue = 1
+          else if (direction === 'short' || positionPct < -0.02) sigValue = -1
+          if (sigValue === 0) { skipped++; continue }
+
+          const confidence = Math.min(
+            typeof raw.confidence === 'number' && raw.confidence > 0 ? Math.abs(raw.confidence) : Math.abs(positionPct),
+            0.99,
+          )
+
+          const cryptoRank = sigValue === 1 ? confidence * 100 : -confidence * 100
+          const existingIdx = ranks.findIndex(r => r.symbol === symbol)
+
+          if (existingIdx >= 0) {
+            const existing = ranks[existingIdx]
+            if (sigValue === existing.signal) {
+              ranks[existingIdx] = {
+                ...existing,
+                confidence: Math.min(existing.confidence + confidence * 0.3, 0.99),
+                rank: existing.rank + cryptoRank * 0.3,
+                reason: `${existing.reason}+crypto_dl`,
+              }
+            } else if (confidence > existing.confidence * 1.5) {
+              ranks[existingIdx] = {
+                ...existing,
+                signal: sigValue,
+                confidence: Math.min(existing.confidence + confidence, 0.99),
+                rank: cryptoRank,
+                reason: 'crypto_dl_override',
+              }
+            } else {
+              skipped++
+              continue
+            }
+          } else {
+            ranks.push({ symbol, signal: sigValue, confidence, rank: cryptoRank, reason: 'crypto_dl' } as MomentumRank)
+          }
+          injected++
+        }
+
+        if (injected > 0 || skipped > 0) {
+          ranks.sort((a, b) => b.rank - a.rank)
+          console.log(`[crypto_dl] Injected ${injected} sidecar signals into cross-sectional pool (skipped ${skipped})`)
+        }
+      }
+      decisionReport.sidecarRunId = sidecarRunId
+    } catch (_e) {
+      // Sidecar signals are optional — quiet skip when file missing or unparseable
+    }
+
+  }
   const blockedRankSymbols = rawRanks
     .filter(rank => isMarketIntelSymbolBanned(marketIntelContext, rank.symbol) && rank.signal !== 0)
     .map(rank => rank.symbol)

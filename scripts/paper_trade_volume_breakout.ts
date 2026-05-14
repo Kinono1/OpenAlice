@@ -20,12 +20,16 @@ import {
   type MarketIntelContext,
 } from '../src/runtime/market_intel_context.js'
 import { readSystemFuse, type SystemFuseState } from '../src/runtime/system_fuse.js'
+import { readKillSwitch } from '../src/risk/kill-switch.js'
+import { writeJsonAtomic } from '../src/runtime/atomic_write.js'
 import {
   appendPaperTradeResult,
   assertCompletePredictedOpenEvidenceRecord,
   buildPaperTradeMfeMaeEvidence,
   buildPaperTradeCostEvidence,
+  buildPaperTradePredictedOpenEvidence,
   withPaperTradeContextCoverage,
+  type PaperTradeResult,
   type PaperTradeCloseReason,
 } from '../src/runtime/paper_trade_result.js'
 import {
@@ -38,10 +42,8 @@ import {
   paperOpenContextAcceptRejectReasons,
   type PaperOpenContextStatus,
 } from '../src/runtime/paper_open_context.js'
-import {
-  DEFAULT_PAPER_MARK_MATCH_FALLBACK_PENALTY_BPS,
-  resolvePaperMarkMatchOpenFields,
-} from './lib/paper_mark_match.js'
+import { estimatePaperRoundTripCostPct, roundSignalQualityNumber, PAPER_STALE_MARK_MATCH_PENALTY_BPS } from '../src/runtime/paper_cost_helpers.js'
+import { buildOpenCostSnapshot } from '../src/runtime/paper_open_cost_builder.js'
 
 // ==================== Data ====================
 
@@ -110,6 +112,7 @@ interface VBExecutionGate {
   minBreakQuality: number
   minLiquidityUsd: number
   maxSpreadBps: number
+  minExpectedNetEdgePct: number
 }
 interface RejectedVBSignal {
   symbol: string
@@ -151,16 +154,14 @@ const MINUTE_PROFILES: VBProfile[] = [
   { id: 'conservative_3x', label: 'Conservative 3x', leverage: 3, positionFraction: 0.05, maxPositions: 3 },
 ]
 const DEFAULT_VB_EXECUTION_GATE: VBExecutionGate = {
-  minConfidence: 0.2,
-  minRangeBreakoutPct: 1,
+  minConfidence: 0.05,
+  minRangeBreakoutPct: 0.1,
   maxVolumeRatio: 1_000,
   minBreakQuality: DEFAULT_VB_CONFIG.minBreakQuality,
   minLiquidityUsd: DEFAULT_VB_CONFIG.minVolumeUsd,
   maxSpreadBps: DEFAULT_VB_CONFIG.maxSpreadBps,
+  minExpectedNetEdgePct: 0.0,
 }
-const PAPER_FEE_RATE = 0.0006
-const PAPER_SLIPPAGE_BPS = 8
-const PAPER_STALE_MARK_MATCH_PENALTY_BPS = DEFAULT_PAPER_MARK_MATCH_FALLBACK_PENALTY_BPS
 
 function accountPath(profile: VBProfile): string {
   return join(import.meta.dirname ?? '.', '..', 'data', 'paper_trading', `account_vb_${profile.id}.json`)
@@ -212,12 +213,6 @@ function copyVBSignalQualityFromPosition(pos: VBPosition): VBSignalQualitySnapsh
   }
 }
 
-function estimatePaperRoundTripCostPct(markMatchPenaltyBps = PAPER_STALE_MARK_MATCH_PENALTY_BPS): number {
-  const feeCost = PAPER_FEE_RATE * 2
-  const slippageCost = (PAPER_SLIPPAGE_BPS / 10_000) * 2
-  const markMatchPenalty = Math.max(0, markMatchPenaltyBps) / 10_000
-  return roundSignalQualityNumber((feeCost + slippageCost + markMatchPenalty) * 100)
-}
 
 function buildVBCostSnapshot(
   leverage: number,
@@ -237,28 +232,7 @@ function buildVBCostSnapshot(
   | 'markMatchPenaltyBpsAtOpen'
   | 'markMatchStatusAtOpen'
 > {
-  const markMatch = symbol
-    ? resolvePaperMarkMatchOpenFields({
-        symbol,
-        decisionTime,
-        matchPrice,
-        fallbackPenaltyBps: PAPER_STALE_MARK_MATCH_PENALTY_BPS,
-      })
-    : resolvePaperMarkMatchOpenFields({
-        symbol: '',
-        decisionTime: null,
-        matchPrice,
-        fallbackPenaltyBps: PAPER_STALE_MARK_MATCH_PENALTY_BPS,
-      })
-  const estimatedRoundTripCostPctAtOpen = estimatePaperRoundTripCostPct(markMatch.markMatchPenaltyBpsAtOpen)
-  const roundTripCostBpsAtOpen = roundSignalQualityNumber(estimatedRoundTripCostPctAtOpen * 100)
-  return {
-    estimatedRoundTripCostPctAtOpen,
-    estimatedRoundTripCostPctOfMarginAtOpen: roundSignalQualityNumber(estimatedRoundTripCostPctAtOpen * Math.max(leverage, 1)),
-    routeCostBpsAtOpen: roundTripCostBpsAtOpen,
-    roundTripCostBpsAtOpen,
-    ...markMatch,
-  }
+  return buildOpenCostSnapshot(leverage, matchPrice, symbol, decisionTime)
 }
 
 function buildVBExpectedEdgeSnapshot(
@@ -285,9 +259,6 @@ function buildVBExpectedEdgeSnapshot(
   }
 }
 
-function roundSignalQualityNumber(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000
-}
 
 function copyVBCostSnapshotFromPosition(pos: VBPosition): Pick<
   VBPosition,
@@ -397,16 +368,16 @@ function loadAccount(profile: VBProfile): VBAccount {
 async function saveAccount(profile: VBProfile, acc: VBAccount) {
   const dir = join(import.meta.dirname ?? '.', '..', 'data', 'paper_trading')
   await mkdir(dir, { recursive: true })
-  await writeFile(accountPath(profile), JSON.stringify(acc, null, 2))
+  writeJsonAtomic(accountPath(profile), acc)
   if (profile.id === 'spot_1x') {
-    await writeFile(legacyAccountPath(), JSON.stringify(acc, null, 2))
+    writeJsonAtomic(legacyAccountPath(), acc)
   }
 }
 
 async function saveRuntimeReport(report: unknown) {
   const dir = join(import.meta.dirname ?? '.', '..', 'data', 'runtime')
   await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, 'paper_volume_breakout.latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf-8')
+  writeJsonAtomic(join(dir, 'paper_volume_breakout.latest.json'), report)
 }
 
 export function shouldAllowUngatedPaperLane(argv: string[]): boolean {
@@ -450,6 +421,14 @@ export function filterExecutableVolumeBreakoutSignals(
     }
     if (signal.spreadStatus === 'fail') {
       reasons.push(`spread ${(signal.spreadBps ?? 0).toFixed(1)} bps > ${gate.maxSpreadBps}`)
+    }
+    const conservativeCostPct = estimatePaperRoundTripCostPct(PAPER_STALE_MARK_MATCH_PENALTY_BPS)
+    const edge = buildVBExpectedEdgeSnapshot(signal, conservativeCostPct)
+    if (
+      edge.expectedNetEdgePctAtOpen == null ||
+      edge.expectedNetEdgePctAtOpen < gate.minExpectedNetEdgePct
+    ) {
+      reasons.push(`expected_net_edge ${edge.expectedNetEdgePctAtOpen ?? 'null'} < ${gate.minExpectedNetEdgePct}`)
     }
 
     if (reasons.length > 0) {
@@ -550,6 +529,10 @@ export function closeExpiredPositions(
     account.equity += pnl
     account.tradeHistory.push(trade)
     account.positions = account.positions.filter(p => p !== pos)
+    const predictedOpenEvidenceInput: Partial<PaperTradeResult> = {
+      openTs: trade.entryTime,
+      ...costAtOpen,
+    }
     appendPaperTradeResult(withPaperTradeContextCoverage({
       tradeId: trade.id,
       lane: profileLane(profile),
@@ -582,6 +565,7 @@ export function closeExpiredPositions(
       marketIntelTriggerAtOpen: pos.marketIntelTriggerAtOpen ?? null,
       ...signalQualityAtOpen,
       ...costAtOpen,
+      ...buildPaperTradePredictedOpenEvidence(predictedOpenEvidenceInput),
       ...buildPaperTradeCostEvidence(costAtOpen),
       ...buildPaperTradeMfeMaeEvidence({
         side: trade.direction,
@@ -626,8 +610,20 @@ export function openNewPositions(
     const notionalUsd = marginUsd * profile.leverage
     const quantity = notionalUsd / price
     const lane = profileLane(profile)
-    const openContext = buildPaperOpenContextSnapshot(gate.context, lane)
-    const contextRejectReasons = paperOpenContextAcceptRejectReasons(openContext)
+    const openContext = buildPaperOpenContextSnapshot(gate.context, lane, new Date(), signal.symbol)
+    const contextRejectReasons: string[] = []
+    if (!openContext.featuresAvailableAtDecisionTime) {
+      contextRejectReasons.push('features_not_available_at_decision_time')
+    }
+    if (openContext.contextStatus !== 'ok') {
+      contextRejectReasons.push(`context_status:${openContext.contextStatus}`)
+    }
+    if (openContext.flashContextStatus !== 'ok') {
+      contextRejectReasons.push(`flash_context_status:${openContext.flashContextStatus}`)
+    }
+    if (openContext.flashConfidenceLowAtOpen == null) {
+      contextRejectReasons.push('missing_flashConfidenceLowAtOpen')
+    }
     if (contextRejectReasons.length > 0) {
       recordRejectedSignalShadowOpen(
         profile,
@@ -638,8 +634,20 @@ export function openNewPositions(
       continue
     }
     const signalQualityAtOpen = buildVBSignalQualitySnapshot(signal)
-    const costAtOpen = buildVBCostSnapshot(profile.leverage, price, signal.symbol, openContext.decisionTime)
-    const edgeAtOpen = buildVBExpectedEdgeSnapshot(signal, costAtOpen.estimatedRoundTripCostPctAtOpen)
+    const costAtOpen = buildVBCostSnapshot(profile.leverage, price, signal.symbol, openContext.decisionTime ?? new Date().toISOString())
+    const edgeAtOpen = buildVBExpectedEdgeSnapshot(signal, costAtOpen.estimatedRoundTripCostPctAtOpen ?? 0.01)
+    if (
+      edgeAtOpen.expectedNetEdgePctAtOpen == null ||
+      edgeAtOpen.expectedNetEdgePctAtOpen < DEFAULT_VB_EXECUTION_GATE.minExpectedNetEdgePct
+    ) {
+      recordRejectedSignalShadowOpen(
+        profile,
+        signal,
+        `expected_net_edge ${edgeAtOpen.expectedNetEdgePctAtOpen ?? 'null'} < ${DEFAULT_VB_EXECUTION_GATE.minExpectedNetEdgePct}`,
+        gate.context,
+      )
+      continue
+    }
 
     const pos: VBPosition = {
       symbol: signal.symbol,
@@ -726,7 +734,7 @@ function recordRejectedSignalShadowOpen(
   const lane = profileLane(profile)
   const side = signal.signal === 1 ? 'long' : 'short'
   const horizonMs = DEFAULT_VB_CONFIG.holdBars * 5 * 60 * 1000
-  const openContext = buildPaperOpenContextSnapshot(context, lane)
+  const openContext = buildPaperOpenContextSnapshot(context, lane, new Date(), signal.symbol)
   const quality = buildVBSignalQualitySnapshot(signal)
   const cost = buildVBCostSnapshot(profile.leverage, signal.entryPrice, signal.symbol, openContext.decisionTime)
   const edge = buildVBExpectedEdgeSnapshot(signal, cost.estimatedRoundTripCostPctAtOpen)
@@ -793,9 +801,10 @@ function buildVBGate(profile: VBProfile, context: MarketIntelContext, fuse: Syst
     allowNew = false
     reasons.push(`system_fuse:${fuse.reason ?? 'risk_off'}`)
   }
-  if (context.riskMode === 'risk_off') {
+  const killSwitch = readKillSwitch()
+  if (killSwitch && killSwitch.enabled && killSwitch.block_new_positions) {
     allowNew = false
-    reasons.push('risk_off')
+    reasons.push(`kill_switch:${killSwitch.state}:${killSwitch.reason || 'no_reason'}`)
   }
   if (context.newsRiskRegime === 'severe') {
     allowNew = false
@@ -808,10 +817,6 @@ function buildVBGate(profile: VBProfile, context: MarketIntelContext, fuse: Syst
   if (!Number.isFinite(validUntil) || validUntil <= Date.now()) {
     allowNew = false
     reasons.push('context_stale')
-  }
-  if (context.allowNewPositionsByLane[lane] !== true) {
-    allowNew = false
-    reasons.push(`lane_not_allowed:${lane}`)
   }
   return { allowNew, reasons, context, fuse }
 }

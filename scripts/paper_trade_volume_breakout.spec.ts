@@ -134,7 +134,7 @@ describe('paper_trade_volume_breakout safety guard', () => {
         [signal as ReturnType<typeof evaluateVolumeBreakout>],
         buildGate(),
       ),
-    ).toThrow('volume_breakout_open_position_missing_predicted_open_evidence:expectedGrossEdgePctAtOpen,expectedNetEdgePctAtOpen,expectedEdgeSourceAtOpen')
+    ).toThrow('volume_breakout_open_shadow_open_missing_predicted_open_evidence:expectedGrossEdgePctAtOpen,expectedNetEdgePctAtOpen,expectedEdgeSourceAtOpen')
     expect(account.positions).toEqual([])
     expect(account.tradeHistory).toEqual([])
   })
@@ -452,6 +452,8 @@ describe('paper_trade_volume_breakout safety guard', () => {
       matchPriceSourceAtOpen: 'simulated_fill',
       markMatchPenaltyBpsAtOpen: 15,
       markMatchStatusAtOpen: 'stale_or_missing',
+      predictedOpenEvidenceStatus: 'ok',
+      predictedOpenEvidenceReason: null,
       costEvidenceSource: 'paper_cost_model_at_open',
       costEvidenceStatus: 'paper_model_not_exchange_reconciled',
       realizedRoundTripCostBps: null,

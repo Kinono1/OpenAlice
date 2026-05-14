@@ -204,6 +204,8 @@ describe('run_paper_shadow_loop safety guard', () => {
       'live_only',
       '--skipPaper',
       'false',
+      '--dryRun',
+      'false',
       '--summaryPath',
       '/tmp/openalice-shadow-loop-test-summary.json',
       '--paperEvidenceRoot',
@@ -269,14 +271,16 @@ describe('run_paper_shadow_loop safety guard', () => {
     const plan = buildStepPlan(parseArgs([]))
     const skipPlan = buildStepPlan(parseArgs(['--skipData', 'true']))
 
-    expect(plan.slice(0, 3).map(step => [step.id, step.args])).toEqual([
+    expect(plan.slice(0, 4).map(step => [step.id, step.args])).toEqual([
       ['accumulate_live_data', ['pnpm', 'data:accumulate']],
       ['accumulate_5m_data', ['pnpm', 'data:accumulate-5m']],
+      ['accumulate_1m_data', ['pnpm', 'data:accumulate-1m']],
       ['accumulate_1s_data', ['pnpm', 'data:accumulate-1s']],
     ])
-    expect(skipPlan.slice(0, 3).map(step => [step.id, step.skipped, step.skipReason])).toEqual([
+    expect(skipPlan.slice(0, 4).map(step => [step.id, step.skipped, step.skipReason])).toEqual([
       ['accumulate_live_data', true, 'skipData=true'],
       ['accumulate_5m_data', true, 'skipData=true'],
+      ['accumulate_1m_data', true, 'skipData=true'],
       ['accumulate_1s_data', true, 'skipData=true'],
     ])
   })
