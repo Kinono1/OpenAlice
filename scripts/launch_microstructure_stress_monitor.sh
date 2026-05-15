@@ -23,15 +23,45 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 cd "$REPO_ROOT"
 
+run_pnpm() {
+  if command -v corepack >/dev/null 2>&1; then
+    corepack pnpm "$@"
+    return
+  fi
+
+  local corepack_candidate
+  for corepack_candidate in \
+    /opt/homebrew/Cellar/node/*/bin/corepack \
+    /usr/local/Cellar/node/*/bin/corepack \
+    /opt/pkg/env/active/bin/corepack \
+    /opt/pmk/env/global/bin/corepack; do
+    if [[ -x "$corepack_candidate" ]]; then
+      "$corepack_candidate" pnpm "$@"
+      return
+    fi
+  done
+
+  if command -v pnpm >/dev/null 2>&1; then
+    pnpm "$@"
+    return
+  fi
+
+  echo "corepack or pnpm is required for launch_microstructure_stress_monitor.sh but was not found in PATH or known Node install locations" >&2
+  return 127
+}
+
 run_microstructure_paper_lane() {
+  if [[ "${OPENALICE_ALLOW_UNGATED_PAPER_LANES:-false}" == "true" && "${OPENALICE_CRON_DIAGNOSTIC_MODE:-false}" != "true" ]]; then
+    echo "ERROR: OPENALICE_ALLOW_UNGATED_PAPER_LANES requires OPENALICE_CRON_DIAGNOSTIC_MODE=true" >&2
+    exit 78
+  fi
   if [[ "${OPENALICE_ALLOW_UNGATED_PAPER_LANES:-false}" != "true" ]]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] skip paper:microstructure-stress: OPENALICE_ALLOW_UNGATED_PAPER_LANES is not true"
     return 0
   fi
 
   local -a microstructure_paper_cmd=(
-    corepack
-    pnpm
+    run_pnpm
     paper:microstructure-stress
     --
     --allowUngatedPaperLane
@@ -48,7 +78,7 @@ while true; do
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "[$started_at] cycle start"
 
-  if ! corepack pnpm data:accumulate-1s; then
+  if ! run_pnpm data:accumulate-1s; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] data:accumulate-1s failed"
   fi
 

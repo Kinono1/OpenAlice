@@ -833,27 +833,13 @@ async function main() {
   const now = new Date()
   console.log(`=== Volume Breakout Paper Trader — ${now.toISOString().slice(0, 19)} ===\n`)
 
-  if (shouldDryRun(process.argv.slice(2))) {
-    console.log(JSON.stringify({
-      family: 'volume_breakout',
-      command: 'paper_trade_volume_breakout',
-      executionMode: {
-        dryRun: true,
-        writesPaperAccounts: false,
-        writesPaperTradeResults: false,
-        writesShadowLedger: false,
-        writesRuntimeReport: false,
-        placesOrders: false,
-      },
-      optIn: {
-        runPaperMutation: '--dryRun false',
-        allowUngatedPaperLane: '--allowUngatedPaperLane true',
-      },
-    }, null, 2))
-    return
-  }
-
-  if (!shouldAllowUngatedPaperLane(process.argv.slice(2))) {
+  if (shouldAllowUngatedPaperLane(process.argv.slice(2))) {
+    if (!shouldDryRun(process.argv.slice(2))) {
+      console.error('ERROR: --allowUngatedPaperLane true requires --dryRun true for research diagnostics')
+      process.exit(78)
+    }
+    console.log('Ungated paper lane allowed for research diagnostics only')
+  } else {
     const blockReason = 'promotion_v2_required_for_paper_lane'
     console.log(`Blocked: ${blockReason}`)
     await saveRuntimeReport({

@@ -1258,7 +1258,12 @@ async function main(): Promise<void> {
     return
   }
   writeMicrostructureHeartbeat()
-  if (!shouldAllowUngatedPaperLane(process.argv.slice(2))) {
+  if (shouldAllowUngatedPaperLane(process.argv.slice(2))) {
+    if (!shouldDryRun(process.argv.slice(2))) {
+      console.error('ERROR: --allowUngatedPaperLane true requires --dryRun true for research diagnostics')
+      process.exit(78)
+    }
+  } else {
     const blockReason = 'promotion_v2_required_for_paper_lane'
     await saveRuntimeReport({
       generatedAt: new Date().toISOString(),
