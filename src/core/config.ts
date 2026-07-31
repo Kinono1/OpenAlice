@@ -3,8 +3,17 @@ import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { resolve } from 'path'
 import { newsCollectorSchema } from '../domain/news/config.js'
 import { AI_PROVIDER_DEFAULT_MODELS } from '../generated/approvedModelRegistry.js'
+import { isConfigReadOnly } from '../runtime/runtime-paths.js'
 
-const CONFIG_DIR = resolve('data/config')
+function configDir(): string {
+  return resolve(process.env.OPENALICE_CONFIG_DIR?.trim() || 'data/config')
+}
+
+function assertConfigWritable(): void {
+  if (isConfigReadOnly()) {
+    throw new Error('runtime role forbids configuration writes')
+  }
+}
 
 // ==================== Individual Schemas ====================
 
@@ -484,7 +493,7 @@ export type Config = {
 /** Read a JSON config file. Returns undefined if file does not exist. */
 async function loadJsonFile(filename: string): Promise<unknown | undefined> {
   try {
-    return JSON.parse(await readFile(resolve(CONFIG_DIR, filename), 'utf-8'))
+    return JSON.parse(await readFile(resolve(configDir(), filename), 'utf-8'))
   } catch (err: unknown) {
     if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined
@@ -495,15 +504,16 @@ async function loadJsonFile(filename: string): Promise<unknown | undefined> {
 
 /** Silently remove a config file (ignore if missing). */
 async function removeJsonFile(filename: string): Promise<void> {
-  try { await unlink(resolve(CONFIG_DIR, filename)) } catch { /* ENOENT ok */ }
+  if (isConfigReadOnly()) return
+  try { await unlink(resolve(configDir(), filename)) } catch { /* ENOENT ok */ }
 }
 
 /** Parse with Zod; if the file was missing, seed it to disk with defaults. */
 async function parseAndSeed<T>(filename: string, schema: z.ZodType<T>, raw: unknown | undefined): Promise<T> {
   const parsed = schema.parse(raw ?? {})
-  if (raw === undefined) {
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, filename), JSON.stringify(parsed, null, 2) + '\n')
+  if (raw === undefined && !isConfigReadOnly()) {
+    await mkdir(configDir(), { recursive: true })
+    await writeFile(resolve(configDir(), filename), JSON.stringify(parsed, null, 2) + '\n')
   }
   return parsed
 }
@@ -527,18 +537,22 @@ export async function loadConfig(): Promise<Config> {
       apiKeys: oldKeys ?? {},
     }
     raws[6] = migrated
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(migrated, null, 2) + '\n')
-    await removeJsonFile('model.json')
-    await removeJsonFile('api-keys.json')
+    if (!isConfigReadOnly()) {
+      await mkdir(configDir(), { recursive: true })
+      await writeFile(resolve(configDir(), 'ai-provider-manager.json'), JSON.stringify(migrated, null, 2) + '\n')
+      await removeJsonFile('model.json')
+      await removeJsonFile('api-keys.json')
+    }
   }
 
   // ---------- Migration: claude-code backend → agent-sdk + claudeai ----------
   if (aiProviderRaw && (aiProviderRaw as Record<string, unknown>).backend === 'claude-code') {
     const patched = { ...(aiProviderRaw as Record<string, unknown>), backend: 'agent-sdk', loginMethod: 'claudeai' }
     raws[6] = patched
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(patched, null, 2) + '\n')
+    if (!isConfigReadOnly()) {
+      await mkdir(configDir(), { recursive: true })
+      await writeFile(resolve(configDir(), 'ai-provider-manager.json'), JSON.stringify(patched, null, 2) + '\n')
+    }
   }
 
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
@@ -560,8 +574,10 @@ export async function loadConfig(): Promise<Config> {
       if (oldEngine.askMcpPort !== undefined) migrated.mcpAsk = { enabled: true, port: oldEngine.askMcpPort }
       const { mcpPort: _m, askMcpPort: _a, webPort: _w, ...cleanEngine } = oldEngine
       raws[0] = cleanEngine
-      await mkdir(CONFIG_DIR, { recursive: true })
-      await writeFile(resolve(CONFIG_DIR, 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
+      if (!isConfigReadOnly()) {
+        await mkdir(configDir(), { recursive: true })
+        await writeFile(resolve(configDir(), 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
+      }
     }
     raws[11] = Object.keys(migrated).length > 0 ? migrated : undefined
   }
@@ -611,9 +627,11 @@ function migrateAccountConfig(raw: Record<string, unknown>): Record<string, unkn
 export async function readAccountsConfig(): Promise<AccountConfig[]> {
   const raw = await loadJsonFile('accounts.json')
   if (raw === undefined) {
-    // Seed empty file on first run
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, 'accounts.json'), '[]\n')
+    if (!isConfigReadOnly()) {
+      // Seed empty file on first primary run.
+      await mkdir(configDir(), { recursive: true })
+      await writeFile(resolve(configDir(), 'accounts.json'), '[]\n')
+    }
     return []
   }
   // Migrate legacy flat format → nested brokerConfig
@@ -622,9 +640,10 @@ export async function readAccountsConfig(): Promise<AccountConfig[]> {
 }
 
 export async function writeAccountsConfig(accounts: AccountConfig[]): Promise<void> {
+  assertConfigWritable()
   const validated = accountsFileSchema.parse(accounts)
-  await mkdir(CONFIG_DIR, { recursive: true })
-  await writeFile(resolve(CONFIG_DIR, 'accounts.json'), JSON.stringify(validated, null, 2) + '\n')
+  await mkdir(configDir(), { recursive: true })
+  await writeFile(resolve(configDir(), 'accounts.json'), JSON.stringify(validated, null, 2) + '\n')
 }
 
 // ==================== Hot-read helpers ====================
@@ -632,7 +651,7 @@ export async function writeAccountsConfig(accounts: AccountConfig[]): Promise<vo
 /** Read a typed config section from disk, returning defaults on any failure (with logging for non-ENOENT errors). */
 async function readConfigSection<T>(filename: string, schema: z.ZodType<T>): Promise<T> {
   try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, filename), 'utf-8'))
+    const raw = JSON.parse(await readFile(resolve(configDir(), filename), 'utf-8'))
     return schema.parse(raw)
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
@@ -679,10 +698,11 @@ export async function readAIBackend(): Promise<{ backend: AIBackend }> {
 
 /** Switch the AI backend in ai-provider-manager.json (preserves other fields). */
 export async function writeAIBackend(backend: AIBackend): Promise<void> {
+  assertConfigWritable()
   const current = await readAIProviderConfig()
   const updated = { ...current, backend }
-  await mkdir(CONFIG_DIR, { recursive: true })
-  await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(updated, null, 2) + '\n')
+  await mkdir(configDir(), { recursive: true })
+  await writeFile(resolve(configDir(), 'ai-provider-manager.json'), JSON.stringify(updated, null, 2) + '\n')
 }
 
 // ==================== Writer ====================
@@ -728,6 +748,7 @@ export const validSections = Object.keys(sectionSchemas) as ConfigSection[]
 
 /** Validate and write a config section to disk. Returns the validated config. */
 export async function writeConfigSection(section: ConfigSection, data: unknown): Promise<unknown> {
+  assertConfigWritable()
   if (section === 'connectors' && data && typeof data === 'object') {
     const telegram = (data as { telegram?: Record<string, unknown> }).telegram
     if (telegram && Object.hasOwn(telegram, 'botToken')) {
@@ -736,8 +757,8 @@ export async function writeConfigSection(section: ConfigSection, data: unknown):
   }
   const schema = sectionSchemas[section]
   const validated = schema.parse(data)
-  await mkdir(CONFIG_DIR, { recursive: true })
-  await writeFile(resolve(CONFIG_DIR, sectionFiles[section]), JSON.stringify(validated, null, 2) + '\n')
+  await mkdir(configDir(), { recursive: true })
+  await writeFile(resolve(configDir(), sectionFiles[section]), JSON.stringify(validated, null, 2) + '\n')
   return validated
 }
 
@@ -756,7 +777,8 @@ export async function readWebSubchannels(): Promise<WebChannel[]> {
 
 /** Write web sub-channel definitions to disk. */
 export async function writeWebSubchannels(channels: WebChannel[]): Promise<void> {
+  assertConfigWritable()
   const validated = webSubchannelsSchema.parse(channels)
-  await mkdir(CONFIG_DIR, { recursive: true })
-  await writeFile(resolve(CONFIG_DIR, 'web-subchannels.json'), JSON.stringify(validated, null, 2) + '\n')
+  await mkdir(configDir(), { recursive: true })
+  await writeFile(resolve(configDir(), 'web-subchannels.json'), JSON.stringify(validated, null, 2) + '\n')
 }

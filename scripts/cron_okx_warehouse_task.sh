@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$REPO_ROOT/scripts/openalice_env.sh"
 source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
+source "$REPO_ROOT/scripts/openalice_pnpm.sh"
 
 export PATH="/Users/kino/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$REPO_ROOT/data}"
@@ -39,24 +40,24 @@ trap 'openalice_release_cron_lock "$LOCK_DIR"' EXIT INT TERM
 cd "$REPO_ROOT"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] start ${TASK}" >> "$LOG_FILE"
 case "$TASK" in
-  instrument) corepack pnpm data:okx:warehouse:instrument >> "$LOG_FILE" 2>&1 ;;
-  fast) corepack pnpm data:okx:warehouse:fast >> "$LOG_FILE" 2>&1 ;;
-  broad) corepack pnpm data:okx:warehouse:broad >> "$LOG_FILE" 2>&1 ;;
-  health) corepack pnpm data:okx:warehouse:health >> "$LOG_FILE" 2>&1 || true ;;
+  instrument) openalice_run_pnpm data:okx:warehouse:instrument >> "$LOG_FILE" 2>&1 ;;
+  fast) openalice_run_pnpm data:okx:warehouse:fast >> "$LOG_FILE" 2>&1 ;;
+  broad) openalice_run_pnpm data:okx:warehouse:broad >> "$LOG_FILE" 2>&1 ;;
+  health) openalice_run_pnpm data:okx:warehouse:health >> "$LOG_FILE" 2>&1 || true ;;
   compact)
-    corepack pnpm data:okx:warehouse:compact >> "$LOG_FILE" 2>&1
-    corepack pnpm data:okx:warehouse:derive >> "$LOG_FILE" 2>&1
-    corepack pnpm data:okx:warehouse:compact >> "$LOG_FILE" 2>&1
+    openalice_run_pnpm data:okx:warehouse:compact >> "$LOG_FILE" 2>&1
+    openalice_run_pnpm data:okx:warehouse:derive >> "$LOG_FILE" 2>&1
+    openalice_run_pnpm data:okx:warehouse:compact >> "$LOG_FILE" 2>&1
     if [[ "${OPENALICE_OKX_COMPATIBILITY_MATERIALIZER_ENABLED:-false}" == "true" ]]; then
-      corepack pnpm data:okx:warehouse:materialize >> "$LOG_FILE" 2>&1
+      openalice_run_pnpm data:okx:warehouse:materialize >> "$LOG_FILE" 2>&1
     fi
     ;;
-  universe) corepack pnpm data:okx:warehouse:universe >> "$LOG_FILE" 2>&1 ;;
-  ssd_probe) corepack pnpm data:okx:ssd:probe >> "$LOG_FILE" 2>&1 ;;
-  ssd_reminder_weekly) corepack pnpm data:okx:ssd:reminder -- --mode weekly >> "$LOG_FILE" 2>&1 ;;
-  ssd_reminder_followup) corepack pnpm data:okx:ssd:reminder -- --mode followup >> "$LOG_FILE" 2>&1 ;;
-  ssd_integrity) corepack pnpm data:okx:ssd:integrity >> "$LOG_FILE" 2>&1 ;;
-  retention) corepack pnpm data:okx:warehouse:retention >> "$LOG_FILE" 2>&1 ;;
+  universe) openalice_run_pnpm data:okx:warehouse:universe >> "$LOG_FILE" 2>&1 ;;
+  ssd_probe) openalice_run_pnpm data:okx:ssd:probe >> "$LOG_FILE" 2>&1 ;;
+  ssd_reminder_weekly) openalice_run_pnpm data:okx:ssd:reminder -- --mode weekly >> "$LOG_FILE" 2>&1 ;;
+  ssd_reminder_followup) openalice_run_pnpm data:okx:ssd:reminder -- --mode followup >> "$LOG_FILE" 2>&1 ;;
+  ssd_integrity) openalice_run_pnpm data:okx:ssd:integrity >> "$LOG_FILE" 2>&1 ;;
+  retention) openalice_run_pnpm data:okx:warehouse:retention >> "$LOG_FILE" 2>&1 ;;
   *) echo "unknown OKX warehouse task: $TASK" >&2; exit 64 ;;
 esac
 

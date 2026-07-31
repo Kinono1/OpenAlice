@@ -7,7 +7,7 @@ import type { Plugin, EngineContext } from '../../core/types.js'
 import { createCorsOriginResolver } from '../../core/cors.js'
 import { SessionStore } from '../../core/session.js'
 import { WebConnector } from './web-connector.js'
-import { loadConfig, readWebSubchannels } from '../../core/config.js'
+import { readWebSubchannels } from '../../core/config.js'
 import { createChatRoutes, createMediaRoutes, type SSEClient } from './routes/chat.js'
 import { createChannelsRoutes } from './routes/channels.js'
 import { createConfigRoutes, createMarketDataRoutes } from './routes/config.js'
@@ -22,7 +22,12 @@ import { createAgentStatusRoutes } from './routes/agent-status.js'
 import { createHealthRoutes } from './routes/health.js'
 import { createSignalRoutes } from './routes/signals.js'
 import { createStrategyRoutes } from './routes/strategy.js'
-import { createRateLimitMiddleware, createRequireAuth, createRequireTrade } from './routes/security.js'
+import {
+  createRateLimitMiddleware,
+  createRequireAuth,
+  createRequireTrade,
+  createRuntimeRoleGuard,
+} from './routes/security.js'
 
 export interface WebConfig {
   port: number
@@ -45,8 +50,7 @@ export class WebPlugin implements Plugin {
   async start(ctx: EngineContext) {
     // Load sub-channel definitions
     const subChannels = await readWebSubchannels()
-    const appConfig = await loadConfig().catch(() => null)
-    const enforceAuth = appConfig?.auth.enforceAuth ?? true
+    const enforceAuth = ctx.config.auth.enforceAuth
     const rateLimitMax = this.config.rateLimitMax ?? Number(process.env.WEB_RATE_LIMIT_MAX ?? 100)
     const rateLimitWindowMs = this.config.rateLimitWindowMs ?? Number(process.env.WEB_RATE_LIMIT_WINDOW_MS ?? 60_000)
     const maxSseClients = this.config.maxSseClients ?? Number(process.env.WEB_SSE_MAX_CLIENTS ?? 100)
@@ -85,6 +89,7 @@ export class WebPlugin implements Plugin {
 
     app.use('/api/*', cors({ origin: createCorsOriginResolver(this.config.allowOrigins) }))
     app.use('/api/*', createRateLimitMiddleware({ maxRequests: rateLimitMax, windowMs: rateLimitWindowMs }))
+    app.use('/api/*', createRuntimeRoleGuard(ctx.runtime.role))
 
     // ==================== Mount route modules ====================
     app.route('/api/chat', createChatRoutes({

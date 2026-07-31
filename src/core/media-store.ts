@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { readFile, copyFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { extname, join } from 'node:path'
+import { resolveDataPath } from '../runtime/runtime-paths.js'
 
 /** 256 short, common English words — one per byte value. */
 const WORDS = [
@@ -41,8 +42,6 @@ const WORDS = [
   'ski','sky','sly','sob','sod','son',
 ] as const
 
-const MEDIA_DIR = join(process.cwd(), 'data', 'media')
-
 /** YYYY-MM-DD date folder for today. */
 function datePath(): string {
   const d = new Date()
@@ -58,7 +57,7 @@ function datePath(): string {
  */
 export async function persistMedia(filePath: string): Promise<string> {
   const dateDir = datePath()
-  const dir = join(MEDIA_DIR, dateDir)
+  const dir = join(resolveDataPath('media'), dateDir)
   await mkdir(dir, { recursive: true })
 
   const buf = await readFile(filePath)
@@ -81,5 +80,5 @@ export async function persistMedia(filePath: string): Promise<string> {
 
 /** Resolve a media relative path to its absolute path on disk. */
 export function resolveMediaPath(name: string): string {
-  return join(MEDIA_DIR, name)
+  return join(resolveDataPath('media'), name)
 }

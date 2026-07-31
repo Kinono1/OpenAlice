@@ -2,6 +2,7 @@ import { createMiddleware } from 'hono/factory'
 import type { MiddlewareHandler } from 'hono'
 import { getConnInfo } from '@hono/node-server/conninfo'
 import { resolveGatewayClientIp } from '../../../openclaw/gateway/net.js'
+import type { RuntimeRole } from '../../../runtime/runtime-paths.js'
 import {
   createRequireAuth as createCoreRequireAuth,
   createRequireTrade as createCoreRequireTrade,
@@ -54,6 +55,31 @@ export function createRequireAuth(enforceAuth = false): MiddlewareHandler {
 
 export function createRequireTrade(enforceAuth = true): MiddlewareHandler {
   return withDevBypass(createCoreRequireTrade(enforceAuth))
+}
+
+/**
+ * Canary and test runtimes expose only read-only HTTP surfaces.
+ *
+ * This guard is intentionally mounted before every /api route. It does not
+ * attempt to enumerate dangerous endpoints: any non-safe HTTP method is
+ * rejected so newly added mutation routes fail closed by default.
+ */
+export function createRuntimeRoleGuard(role: RuntimeRole): MiddlewareHandler {
+  return createMiddleware(async (c, next) => {
+    if (
+      role === 'primary'
+      || c.req.method === 'GET'
+      || c.req.method === 'HEAD'
+      || c.req.method === 'OPTIONS'
+    ) {
+      return next()
+    }
+    return c.json({
+      error: `runtime role ${role} is read-only`,
+      code: 'runtime_read_only',
+      runtimeRole: role,
+    }, 403)
+  })
 }
 
 export function createRateLimitMiddleware(opts?: {

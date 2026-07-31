@@ -9,6 +9,7 @@ import type { EventLog } from './event-log.js'
 import type { ToolCallLog } from './tool-call-log.js'
 import type { ToolCenter } from './tool-center.js'
 import type { CryptoClientLike } from '../domain/market-data/client/types.js'
+import type { RuntimePaths } from '../runtime/runtime-paths.js'
 
 export type { Config, WebChannel }
 
@@ -26,6 +27,7 @@ export interface ReconnectResult {
 
 export interface EngineContext {
   config: Config
+  runtime: RuntimePaths
   connectorCenter: ConnectorCenter
   agentCenter: AgentCenter
   eventLog: EventLog

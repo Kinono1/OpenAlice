@@ -41,6 +41,7 @@ export interface CronJobState {
   circuitOpenedAtMs?: number | null
   lastErrorClass?: string | null
   lastErrorFingerprint?: string | null
+  pauseReason?: 'paused_external_dependency' | 'disabled_pending_independent_evidence' | null
 }
 
 export type CronJobKind = 'agent' | 'script'
@@ -61,6 +62,32 @@ export interface CronJob {
   payload: string
   script?: CronScriptSpec
   retryPolicy?: CronRetryPolicy
+  state: CronJobState
+  createdAt: number
+}
+
+const CRON_DEFINITION_REGISTRY_SCHEMA = 'cron_definition_registry.v1'
+const CRON_DYNAMIC_DEFINITION_SCHEMA = 'cron_dynamic_definitions.v1'
+const CRON_RUNTIME_STATE_SCHEMA = 'cron_runtime_state.v1'
+
+interface CronJobDefinition {
+  id: string
+  name: string
+  enabled: boolean
+  kind: CronJobKind
+  schedule: CronSchedule
+  payload: string
+  script?: CronScriptSpec
+  retryPolicy?: CronRetryPolicy
+  forcedDisabled?: boolean
+  forcedDisabledReason?:
+    | 'paused_external_dependency'
+    | 'disabled_pending_independent_evidence'
+}
+
+interface CronRuntimeRecord {
+  id: string
+  enabled: boolean
   state: CronJobState
   createdAt: number
 }
@@ -116,6 +143,13 @@ export interface CronEngine {
 export interface CronEngineOpts {
   eventLog: EventLog
   storePath?: string
+  /**
+   * Optional authoritative declarative registry. When present, jobs.json is
+   * persisted as runtime state only and definitions are reconciled by stable ID.
+   */
+  definitionPath?: string
+  /** Mutable definitions for user-created agent reminders, separate from state. */
+  dynamicDefinitionPath?: string
   /** Inject clock for testing. */
   now?: () => number
 }
@@ -125,7 +159,10 @@ export interface CronEngineOpts {
 export function createCronEngine(opts: CronEngineOpts): CronEngine {
   const { eventLog } = opts
   const storePath = opts.storePath ?? 'data/cron/jobs.json'
+  const definitionPath = opts.definitionPath
+  const dynamicDefinitionPath = opts.dynamicDefinitionPath ?? `${storePath}.definitions.local.v1.json`
   const now = opts.now ?? Date.now
+  const managedDefinitions = definitionPath !== undefined
 
   let jobs: CronJob[] = []
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -134,10 +171,18 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   let saveChain: Promise<void> = Promise.resolve()
   const removedJobIds = new Set<string>()
   const removedJobNames = new Set<string>()
+  const staticDefinitionIds = new Set<string>()
+  const forcedDisabledIds = new Set<string>()
+  const dynamicDefinitions = new Map<string, CronJobDefinition>()
+  let orphanedRuntimeRecords: CronRuntimeRecord[] = []
 
   // ---------- persistence ----------
 
   async function load(): Promise<void> {
+    if (managedDefinitions) {
+      await loadManaged()
+      return
+    }
     try {
       const raw = await readFile(storePath, 'utf-8')
       const data = JSON.parse(raw)
@@ -152,11 +197,132 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   }
 
   async function save(): Promise<void> {
+    if (managedDefinitions) {
+      await saveManaged()
+      return
+    }
     jobs = await mergeExternallyInstalledJobs(jobs)
     await mkdir(dirname(storePath), { recursive: true })
     const tmp = `${storePath}.${process.pid}.tmp`
     await writeFile(tmp, JSON.stringify({ jobs }, null, 2), 'utf-8')
     await rename(tmp, storePath)
+  }
+
+  async function loadManaged(): Promise<void> {
+    const staticDefinitions = await readDefinitionRegistry(definitionPath!)
+    for (const definition of staticDefinitions) {
+      staticDefinitionIds.add(definition.id)
+      if (definition.forcedDisabled) forcedDisabledIds.add(definition.id)
+    }
+
+    const persistedDynamic = await readDynamicDefinitions(dynamicDefinitionPath)
+    for (const definition of persistedDynamic) {
+      if (!staticDefinitionIds.has(definition.id)) {
+        dynamicDefinitions.set(definition.id, definition)
+      }
+    }
+
+    const runtimeRecords = new Map<string, CronRuntimeRecord>()
+    try {
+      const raw = await readFile(storePath, 'utf-8')
+      const data = JSON.parse(raw) as {
+        schemaVersion?: unknown
+        jobs?: unknown
+      }
+      if (Array.isArray(data.jobs)) {
+        if (data.schemaVersion === CRON_RUNTIME_STATE_SCHEMA) {
+          for (const item of data.jobs) {
+            const record = parseRuntimeRecord(item)
+            if (record) runtimeRecords.set(record.id, record)
+          }
+        } else {
+          // Additive compatibility: import the legacy full-job store once.
+          for (const item of data.jobs) {
+            const legacy = parseLegacyJob(item)
+            if (!legacy) continue
+            runtimeRecords.set(legacy.id, runtimeRecordFromJob(legacy))
+            if (!staticDefinitionIds.has(legacy.id)) {
+              dynamicDefinitions.set(legacy.id, definitionFromJob(legacy))
+            }
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (!(err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT')) {
+        throw err
+      }
+    }
+
+    const allDefinitions = [
+      ...staticDefinitions,
+      ...[...dynamicDefinitions.values()].filter(
+        (definition) => !staticDefinitionIds.has(definition.id),
+      ),
+    ]
+    const knownIds = new Set(allDefinitions.map((definition) => definition.id))
+    orphanedRuntimeRecords = [...runtimeRecords.values()].filter(
+      (record) => !knownIds.has(record.id),
+    )
+    jobs = allDefinitions.map((definition) => {
+      const runtime = runtimeRecords.get(definition.id)
+      const enabled = definition.forcedDisabled
+        ? false
+        : runtime?.enabled ?? definition.enabled
+      const state = runtime?.state ?? initialRuntimeState(
+        definition.schedule,
+        enabled,
+        now(),
+      )
+      if (definition.forcedDisabled) {
+        state.nextRunAtMs = null
+        state.pauseReason = definition.forcedDisabledReason ?? null
+      }
+      return normalizeLoadedJob({
+        id: definition.id,
+        name: definition.name,
+        enabled,
+        kind: definition.kind,
+        schedule: definition.schedule,
+        payload: definition.payload,
+        script: definition.script,
+        retryPolicy: definition.retryPolicy,
+        state,
+        createdAt: runtime?.createdAt ?? now(),
+      })
+    })
+  }
+
+  async function saveManaged(): Promise<void> {
+    await mkdir(dirname(storePath), { recursive: true })
+    const records = [
+      ...jobs.map(runtimeRecordFromJob),
+      ...orphanedRuntimeRecords.filter(
+        (record) => !jobs.some((job) => job.id === record.id),
+      ),
+    ]
+    const document = {
+      schemaVersion: CRON_RUNTIME_STATE_SCHEMA,
+      schedulerOwner: 'openalice_cron_engine',
+      jobs: records,
+    }
+    const tmp = `${storePath}.${process.pid}.tmp`
+    await writeFile(tmp, `${JSON.stringify(document, null, 2)}\n`, 'utf-8')
+    await rename(tmp, storePath)
+
+    await mkdir(dirname(dynamicDefinitionPath), { recursive: true })
+    const dynamicDocument = {
+      schemaVersion: CRON_DYNAMIC_DEFINITION_SCHEMA,
+      definitions: [...dynamicDefinitions.values()]
+        .filter((definition) => !staticDefinitionIds.has(definition.id))
+        .map(serializeDefinition),
+    }
+    const dynamicTmp = `${dynamicDefinitionPath}.${process.pid}.tmp`
+    await writeFile(
+      dynamicTmp,
+      `${JSON.stringify(dynamicDocument, null, 2)}\n`,
+      'utf-8',
+    )
+    await rename(dynamicTmp, dynamicDefinitionPath)
   }
 
   async function saveQueued(): Promise<void> {
@@ -370,6 +536,11 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     },
 
     async add(params) {
+      if (managedDefinitions && (params.kind === 'script' || params.script)) {
+        throw new Error(
+          'managed Cron engine accepts new agent jobs only; script definitions require registry review',
+        )
+      }
       const id = randomUUID().slice(0, 8)
       const currentMs = now()
 
@@ -396,6 +567,9 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       }
 
       jobs.push(job)
+      if (managedDefinitions) {
+        dynamicDefinitions.set(job.id, definitionFromJob(job))
+      }
       removedJobIds.delete(job.id)
       removedJobNames.delete(job.name)
       await saveQueued()
@@ -410,6 +584,31 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     async update(id, patch) {
       const job = jobs.find((j) => j.id === id)
       if (!job) throw new Error(`cron job not found: ${id}`)
+      if (
+        managedDefinitions
+        && staticDefinitionIds.has(id)
+        && (
+          patch.name !== undefined
+          || patch.payload !== undefined
+          || patch.kind !== undefined
+          || patch.script !== undefined
+          || patch.schedule !== undefined
+          || patch.retryPolicy !== undefined
+        )
+      ) {
+        throw new Error(`managed Cron definition is immutable: ${id}`)
+      }
+      if (
+        job.state.circuitOpenedAtMs != null
+        && (patch.enabled === true || patch.schedule !== undefined)
+      ) {
+        throw new Error(
+          `cron circuit for ${id} requires a commit-bound operator receipt`,
+        )
+      }
+      if (forcedDisabledIds.has(id) && patch.enabled === true) {
+        throw new Error(`cron job ${id} is declaratively blocked and cannot be enabled`)
+      }
       const wasEnabled = job.enabled
 
       if (patch.name !== undefined) job.name = patch.name
@@ -422,20 +621,15 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       if (patch.schedule !== undefined) {
         job.schedule = patch.schedule
         job.state.nextRunAtMs = computeNextRun(patch.schedule, now())
-        job.state.consecutiveErrors = 0
-        job.state.circuitOpenedAtMs = null
-        job.state.lastErrorClass = null
-        job.state.lastErrorFingerprint = null
       } else if (patch.enabled === true && !wasEnabled) {
         job.state.nextRunAtMs = computeNextRun(job.schedule, now())
-        job.state.consecutiveErrors = 0
-        job.state.circuitOpenedAtMs = null
-        job.state.lastErrorClass = null
-        job.state.lastErrorFingerprint = null
       } else if (patch.enabled === false) {
         job.state.nextRunAtMs = null
       }
 
+      if (managedDefinitions && dynamicDefinitions.has(id)) {
+        dynamicDefinitions.set(id, definitionFromJob(job))
+      }
       await saveQueued()
       if (timer) { clearTimeout(timer); timer = null }
       armTimer()
@@ -444,8 +638,12 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     async remove(id) {
       const idx = jobs.findIndex((j) => j.id === id)
       if (idx === -1) throw new Error(`cron job not found: ${id}`)
+      if (managedDefinitions && staticDefinitionIds.has(id)) {
+        throw new Error(`managed Cron definition cannot be removed: ${id}`)
+      }
       removedJobIds.add(jobs[idx].id)
       removedJobNames.add(jobs[idx].name)
+      dynamicDefinitions.delete(jobs[idx].id)
       jobs.splice(idx, 1)
       await saveQueued()
     },
@@ -659,7 +857,260 @@ function normalizeLoadedJob(job: CronJob): CronJob {
       circuitOpenedAtMs: job.state.circuitOpenedAtMs ?? null,
       lastErrorClass: job.state.lastErrorClass ?? null,
       lastErrorFingerprint: job.state.lastErrorFingerprint ?? null,
+      pauseReason: job.state.pauseReason ?? null,
     },
+  }
+}
+
+function initialRuntimeState(
+  schedule: CronSchedule,
+  enabled: boolean,
+  currentMs: number,
+): CronJobState {
+  return {
+    nextRunAtMs: enabled ? computeNextRun(schedule, currentMs) : null,
+    lastRunAtMs: null,
+    lastStatus: null,
+    consecutiveErrors: 0,
+    lastSuccessAtMs: null,
+    circuitOpenedAtMs: null,
+    lastErrorClass: null,
+    lastErrorFingerprint: null,
+    pauseReason: null,
+  }
+}
+
+function runtimeRecordFromJob(job: CronJob): CronRuntimeRecord {
+  return {
+    id: job.id,
+    enabled: job.enabled,
+    state: { ...job.state },
+    createdAt: job.createdAt,
+  }
+}
+
+function definitionFromJob(job: CronJob): CronJobDefinition {
+  return {
+    id: job.id,
+    name: job.name,
+    enabled: job.enabled,
+    kind: job.kind ?? 'agent',
+    schedule: job.schedule,
+    payload: job.payload,
+    script: job.script,
+    retryPolicy: normalizeRetryPolicy(job.retryPolicy),
+  }
+}
+
+function serializeDefinition(definition: CronJobDefinition): Record<string, unknown> {
+  return {
+    id: definition.id,
+    name: definition.name,
+    enabled: definition.enabled,
+    kind: definition.kind,
+    schedule: definition.schedule,
+    payload: definition.payload,
+    script: definition.script,
+    retryPolicy: normalizeRetryPolicy(definition.retryPolicy),
+  }
+}
+
+function parseRuntimeRecord(value: unknown): CronRuntimeRecord | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  if (
+    typeof raw.id !== 'string'
+    || typeof raw.enabled !== 'boolean'
+    || typeof raw.createdAt !== 'number'
+    || !raw.state
+    || typeof raw.state !== 'object'
+  ) {
+    return null
+  }
+  const state = raw.state as Partial<CronJobState>
+  if (
+    !('nextRunAtMs' in state)
+    || !('lastRunAtMs' in state)
+    || !('lastStatus' in state)
+    || typeof state.consecutiveErrors !== 'number'
+  ) {
+    return null
+  }
+  return {
+    id: raw.id,
+    enabled: raw.enabled,
+    createdAt: raw.createdAt,
+    state: state as CronJobState,
+  }
+}
+
+function parseLegacyJob(value: unknown): CronJob | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Partial<CronJob>
+  if (
+    typeof raw.id !== 'string'
+    || typeof raw.name !== 'string'
+    || typeof raw.enabled !== 'boolean'
+    || !isCronSchedule(raw.schedule)
+    || typeof raw.payload !== 'string'
+    || !raw.state
+    || typeof raw.createdAt !== 'number'
+  ) {
+    return null
+  }
+  return normalizeLoadedJob(raw as CronJob)
+}
+
+async function readDefinitionRegistry(path: string): Promise<CronJobDefinition[]> {
+  const raw = JSON.parse(await readFile(path, 'utf-8')) as {
+    schemaVersion?: unknown
+    jobs?: unknown
+  }
+  if (
+    raw.schemaVersion !== CRON_DEFINITION_REGISTRY_SCHEMA
+    || !Array.isArray(raw.jobs)
+  ) {
+    throw new Error(`invalid Cron definition registry: ${path}`)
+  }
+  const definitions: CronJobDefinition[] = []
+  const ids = new Set<string>()
+  for (const value of raw.jobs) {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`invalid Cron definition in ${path}`)
+    }
+    const item = value as Record<string, unknown>
+    const id = item.id
+    const name = item.name
+    const schedule = item.schedule
+    const kind: CronJobKind = item.kind === 'script' ? 'script' : 'agent'
+    if (
+      typeof id !== 'string'
+      || !id
+      || ids.has(id)
+      || typeof name !== 'string'
+      || !name
+      || !isCronSchedule(schedule)
+    ) {
+      throw new Error(`invalid or duplicate Cron definition in ${path}: ${String(id)}`)
+    }
+    ids.add(id)
+    const entrypoint = typeof item.entrypoint === 'string' ? item.entrypoint : undefined
+    const args = Array.isArray(item.args)
+      ? item.args.filter((arg): arg is string => typeof arg === 'string')
+      : undefined
+    const initialState = typeof item.initialState === 'string'
+      ? item.initialState
+      : 'scheduled'
+    definitions.push({
+      id,
+      name,
+      enabled: item.enabled === true,
+      kind,
+      schedule,
+      payload: typeof item.payload === 'string' ? item.payload : '',
+      script: entrypoint
+        ? {
+            path: entrypoint,
+            args,
+            cwd: typeof item.cwd === 'string' ? item.cwd : undefined,
+            notificationPath: typeof item.notificationArtifact === 'string'
+              ? item.notificationArtifact
+              : undefined,
+          }
+        : undefined,
+      retryPolicy: parseRetryPolicy(item.retryPolicy),
+      forcedDisabled:
+        initialState === 'paused_external_dependency'
+        || initialState === 'disabled_pending_independent_evidence',
+      forcedDisabledReason:
+        initialState === 'paused_external_dependency'
+        || initialState === 'disabled_pending_independent_evidence'
+          ? initialState
+          : undefined,
+    })
+  }
+  return definitions
+}
+
+async function readDynamicDefinitions(path: string): Promise<CronJobDefinition[]> {
+  let raw: { schemaVersion?: unknown; definitions?: unknown }
+  try {
+    raw = JSON.parse(await readFile(path, 'utf-8')) as typeof raw
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return []
+    }
+    throw err
+  }
+  if (
+    raw.schemaVersion !== CRON_DYNAMIC_DEFINITION_SCHEMA
+    || !Array.isArray(raw.definitions)
+  ) {
+    throw new Error(`invalid dynamic Cron definition registry: ${path}`)
+  }
+  return raw.definitions.map((value) => {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`invalid dynamic Cron definition in ${path}`)
+    }
+    const item = value as Record<string, unknown>
+    if (
+      typeof item.id !== 'string'
+      || typeof item.name !== 'string'
+      || typeof item.enabled !== 'boolean'
+      || !isCronSchedule(item.schedule)
+      || typeof item.payload !== 'string'
+    ) {
+      throw new Error(`invalid dynamic Cron definition in ${path}`)
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      enabled: item.enabled,
+      kind: item.kind === 'script' ? 'script' : 'agent',
+      schedule: item.schedule,
+      payload: item.payload,
+      script: parseScriptSpec(item.script),
+      retryPolicy: parseRetryPolicy(item.retryPolicy),
+    }
+  })
+}
+
+function isCronSchedule(value: unknown): value is CronSchedule {
+  if (!value || typeof value !== 'object') return false
+  const raw = value as Record<string, unknown>
+  if (raw.kind === 'at') return typeof raw.at === 'string'
+  if (raw.kind === 'every') return typeof raw.every === 'string'
+  if (raw.kind === 'cron') {
+    return (
+      typeof raw.cron === 'string'
+      && (
+        raw.timezone === undefined
+        || raw.timezone === 'local'
+        || raw.timezone === 'UTC'
+      )
+    )
+  }
+  return false
+}
+
+function parseRetryPolicy(value: unknown): CronRetryPolicy {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_RETRY_POLICY }
+  return normalizeRetryPolicy(value as CronRetryPolicy)
+}
+
+function parseScriptSpec(value: unknown): CronScriptSpec | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  if (typeof raw.path !== 'string') return undefined
+  return {
+    path: raw.path,
+    args: Array.isArray(raw.args)
+      ? raw.args.filter((arg): arg is string => typeof arg === 'string')
+      : undefined,
+    cwd: typeof raw.cwd === 'string' ? raw.cwd : undefined,
+    notificationPath: typeof raw.notificationPath === 'string'
+      ? raw.notificationPath
+      : undefined,
   }
 }
 

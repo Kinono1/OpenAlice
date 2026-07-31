@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traderalice.com/schemas/openalice/controller_state.v1.json",
+  "title": "OpenAlice controller state v1 additive extension",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "updatedAt",
+    "workspace",
+    "sourceCommit",
+    "dirtyStateHash",
+    "sourceClean",
+    "receiptPath",
+    "executedAt",
+    "expiresAt",
+    "statusSource",
+    "engineeringStatus",
+    "candidate",
+    "blockers",
+    "checks",
+    "admission"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "controller_state.v1" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "workspace": { "type": "string", "minLength": 1 },
+    "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "dirtyStateHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceClean": { "type": "boolean" },
+    "receiptPath": { "type": "string", "minLength": 1 },
+    "executedAt": { "type": ["string", "null"], "format": "date-time" },
+    "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+    "statusSource": { "enum": ["executed_receipt", "stale", "missing"] },
+    "engineeringStatus": { "enum": ["pass", "blocked"] },
+    "candidate": { "type": "object" },
+    "blockers": { "type": "object" },
+    "checks": { "type": "array" },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paperTradingAllowed",
+        "liveTradingAllowed",
+        "liveExecutionArmed",
+        "reason"
+      ],
+      "properties": {
+        "paperTradingAllowed": { "type": "boolean" },
+        "liveTradingAllowed": { "type": "boolean" },
+        "liveExecutionArmed": { "const": false },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

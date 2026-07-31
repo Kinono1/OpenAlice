@@ -1,0 +1,849 @@
+{
+  "schemaVersion": "cron_definition_registry.v1",
+  "source": {
+    "legacyStatePath": "data/cron/jobs.json",
+    "legacyStateSha256": "f7a9eb4d25ab4cda3dc396e1060f59b42bd73553f83d83f53f7d04f7447d3b9f",
+    "jobCount": 32
+  },
+  "schedulerOwner": "openalice_cron_engine",
+  "retiredDependencies": [
+    {
+      "id": "TradingAgents-crypto",
+      "status": "retired_missing_dependency",
+      "legacyStatusBytesMutable": false
+    }
+  ],
+  "jobs": [
+    {
+      "id": "0d84f47e",
+      "name": "__heartbeat__",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "agent",
+      "schedule": {
+        "kind": "every",
+        "every": "15m"
+      },
+      "payload": "Read data/brain/heartbeat.md (or data/default/heartbeat.default.md if not found) and follow the instructions inside.",
+      "entrypoint": null,
+      "args": [],
+      "cwd": null,
+      "notificationArtifact": null,
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "106cef5e",
+      "name": "external_derivatives_data_collect_8h",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "7 */8 * * *",
+        "timezone": "UTC"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_external_derivatives_data_collect.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/external_derivatives_data_collect_notification.json",
+      "retryPolicy": {
+        "mode": "bounded-backoff",
+        "maxAttempts": 2,
+        "circuitOpenAfter": 3
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "14d3f645",
+      "name": "eth_carry_refresh_pipeline_daily",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "5 7 * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_eth_carry_refresh_pipeline.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/eth_carry_status/eth_carry_actionability_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "242684fd",
+      "name": "okx_depth_universe_daily",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "15 0 * * *",
+        "timezone": "UTC"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "universe"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/universe_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "2db31e4c",
+      "name": "pro_policy_window_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "8 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_pro_policy_window.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/pro_policy_window_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "2fe3538e",
+      "name": "runtime_fee_auth_tick_4h",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "11 */4 * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "runtime_fee_auth_tick"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/runtime_fee_auth_tick_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "3eed0b62",
+      "name": "__snapshot__",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "agent",
+      "schedule": {
+        "kind": "every",
+        "every": "15m"
+      },
+      "payload": "",
+      "entrypoint": null,
+      "args": [],
+      "cwd": null,
+      "notificationArtifact": null,
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "43c28d0b",
+      "name": "okx_warehouse_retention_daily",
+      "enabled": false,
+      "initialState": "paused_external_dependency",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "35 4 * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "retention"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/storage/okx_warehouse_retention_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": {
+        "id": "external_ssd",
+        "missingState": "paused_external_dependency",
+        "archiveCreationAllowed": false,
+        "localDeletionAllowed": false
+      }
+    },
+    {
+      "id": "45c69946",
+      "name": "paper_pnl_diagnostics_30m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "4,34 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_paper_pnl_diagnostics.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/paper_pnl_diagnostics_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "4d5a7624",
+      "name": "prospective_evidence_tick_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "9 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "prospective_evidence_tick"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/prospective_evidence_tick_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "67efe604",
+      "name": "paper_policy_shadow_settle_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "2-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_paper_policy_shadow_settle.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/paper_policy_shadow_settle_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "69df13ea",
+      "name": "okx_warehouse_compact_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "17 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "compact"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/okx_warehouse_compact_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "6a6a9e58",
+      "name": "low_vol_research_daily",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "0 2 * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_low_vol_research.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/low_vol_research_daily_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "6d7c0bb5",
+      "name": "okx_public_fast_refresh_1m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "* * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "fast"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/okx_public_fast_refresh_notification.json",
+      "retryPolicy": {
+        "mode": "bounded-backoff",
+        "maxAttempts": 2,
+        "circuitOpenAfter": 3
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "7e49a580",
+      "name": "okx_public_broad_refresh_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "1-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "broad"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/okx_public_broad_refresh_notification.json",
+      "retryPolicy": {
+        "mode": "bounded-backoff",
+        "maxAttempts": 2,
+        "circuitOpenAfter": 3
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "83ee1258",
+      "name": "okx_public_freshness_audit_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "2-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "live_data_freshness_audit"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/live_data_freshness_audit_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "8b1b0281",
+      "name": "okx_ssd_weekly_reminder_sunday",
+      "enabled": false,
+      "initialState": "paused_external_dependency",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "0 20 * * 0"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "ssd_reminder_weekly"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/storage/ssd_reminder_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": {
+        "id": "external_ssd",
+        "missingState": "paused_external_dependency",
+        "archiveCreationAllowed": false,
+        "localDeletionAllowed": false
+      }
+    },
+    {
+      "id": "8c511e37",
+      "name": "p1_trading_evidence_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "18 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_p1_trading_evidence.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/p1_trading_evidence_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "8f219262",
+      "name": "okx_ssd_integrity_audit_weekly",
+      "enabled": false,
+      "initialState": "paused_external_dependency",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "30 22 * * 0"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "ssd_integrity"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/ssd_integrity_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": {
+        "id": "external_ssd",
+        "missingState": "paused_external_dependency",
+        "archiveCreationAllowed": false,
+        "localDeletionAllowed": false
+      }
+    },
+    {
+      "id": "9bb305a9",
+      "name": "microstructure_stoploss_replay_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "12 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_microstructure_stoploss_replay.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/microstructure_stoploss_replay_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "a2607aa5",
+      "name": "dirty_worktree_audit_daily",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "17 9 * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_dirty_worktree_audit.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/dirty_worktree_audit_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "a759f507",
+      "name": "okx_ssd_followup_reminder_mon_wed",
+      "enabled": false,
+      "initialState": "paused_external_dependency",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "0 20 * * 1-3"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "ssd_reminder_followup"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/storage/ssd_reminder_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": {
+        "id": "external_ssd",
+        "missingState": "paused_external_dependency",
+        "archiveCreationAllowed": false,
+        "localDeletionAllowed": false
+      }
+    },
+    {
+      "id": "a92bc474",
+      "name": "okx_ssd_presence_archive_probe_15m",
+      "enabled": false,
+      "initialState": "paused_external_dependency",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "7,22,37,52 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "ssd_probe"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/storage/ssd_archive_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": {
+        "id": "external_ssd",
+        "missingState": "paused_external_dependency",
+        "archiveCreationAllowed": false,
+        "localDeletionAllowed": false
+      }
+    },
+    {
+      "id": "bc6946b3",
+      "name": "gated_improvement_candidate_daily",
+      "enabled": false,
+      "initialState": "disabled_pending_independent_evidence",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "30 3 * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_gated_improvement_candidate.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/gated_improvement_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "d1bcc634",
+      "name": "okx_instrument_master_refresh_15m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "4,19,34,49 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "instrument"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/okx_instrument_master_refresh_notification.json",
+      "retryPolicy": {
+        "mode": "bounded-backoff",
+        "maxAttempts": 2,
+        "circuitOpenAfter": 3
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "d371079b",
+      "name": "okx_public_1h_accumulate_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "3 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "accumulate_live_data"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/accumulate_live_data_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "dbdc04ce",
+      "name": "scheduler_security_audit_hourly",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "23 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_scheduler_security_audit.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/scheduler_security_audit_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "dc0695ed",
+      "name": "okx_market_data_health_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "3-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_okx_warehouse_task.sh",
+      "args": [
+        "health"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/okx_warehouse/okx_market_data_health_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "de414b10",
+      "name": "paper_policy_shadow_capture_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "1-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_paper_policy_shadow_capture.sh",
+      "args": [],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/paper_policy_shadow_capture_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "e5a55c70",
+      "name": "okx_public_1s_accumulate_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "1-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "accumulate_1s_data"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/accumulate_1s_data_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "e7d7dfed",
+      "name": "okx_public_5m_accumulate_5m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "0-59/5 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "accumulate_5m_data"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/accumulate_5m_data_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    },
+    {
+      "id": "edd10984",
+      "name": "market_intel_refresh_15m",
+      "enabled": true,
+      "initialState": "scheduled",
+      "kind": "script",
+      "schedule": {
+        "kind": "cron",
+        "cron": "*/15 * * * *"
+      },
+      "payload": "",
+      "entrypoint": "scripts/cron_openalice_task.sh",
+      "args": [
+        "refresh_market_intel_context"
+      ],
+      "cwd": ".",
+      "notificationArtifact": "data/runtime/cron_openalice_task/refresh_market_intel_context_notification.json",
+      "retryPolicy": {
+        "mode": "next-schedule",
+        "maxAttempts": 0,
+        "circuitOpenAfter": 0
+      },
+      "schedulerOwner": "openalice_cron_engine",
+      "operatorReceiptRequiredToCloseCircuit": true,
+      "externalDependency": null
+    }
+  ]
+}

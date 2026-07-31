@@ -19,8 +19,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFile, mkdir, open } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
 import { getActiveEntries } from './compaction.js'
+import { resolveDataPath } from '../runtime/runtime-paths.js'
 
 function hasErrorCode(err: unknown, code: string): err is NodeJS.ErrnoException {
   return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === code
@@ -115,8 +116,6 @@ export interface ISessionStore {
 
 // ==================== JSONL Session Store ====================
 
-const SESSIONS_DIR = join(process.cwd(), 'data', 'sessions')
-
 export class SessionStore implements ISessionStore {
   private sessionId: string
   private lastUuid: string | null = null
@@ -131,7 +130,7 @@ export class SessionStore implements ISessionStore {
   }
 
   private get filePath(): string {
-    return join(SESSIONS_DIR, `${this.sessionId}.jsonl`)
+    return resolveDataPath('sessions', `${this.sessionId}.jsonl`)
   }
 
   /** Append a user message to the session. */

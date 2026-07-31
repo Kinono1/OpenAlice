@@ -283,6 +283,21 @@ describe('OpenAlice shell wrappers', () => {
     expect(script).not.toContain('if corepack pnpm paper:policy-shadow:capture')
   })
 
+  it('runs OKX warehouse tasks through the shared launchd-safe pnpm resolver', async () => {
+    const script = await readFile('scripts/cron_okx_warehouse_task.sh', 'utf-8')
+    const resolver = await readFile('scripts/openalice_pnpm.sh', 'utf-8')
+
+    expect(script).toContain('source "$REPO_ROOT/scripts/openalice_pnpm.sh"')
+    expect(script).toContain('openalice_run_pnpm data:okx:warehouse:instrument')
+    expect(script).toContain('openalice_run_pnpm data:okx:warehouse:fast')
+    expect(script).toContain('openalice_run_pnpm data:okx:warehouse:broad')
+    expect(script).not.toMatch(/^\s*corepack pnpm data:okx:/m)
+    expect(resolver).toContain('/opt/homebrew/bin/pnpm')
+    expect(resolver).toContain('command -v pnpm')
+    expect(resolver).not.toContain('corepack enable')
+    expect(resolver).not.toContain('corepack prepare')
+  })
+
   it('refreshes P1.5 meta-labeling readiness from P1 evidence without training or trading', async () => {
     const script = await readFile('scripts/cron_p1_trading_evidence.sh', 'utf-8')
 

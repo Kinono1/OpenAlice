@@ -38,13 +38,27 @@ interface CacheEnvelope {
 /** 免费 provider 列表 — 扩展时在这里加 */
 const SOURCES = ['sec'] as const
 
-const CACHE_FILE = resolve('data/cache/equity/symbols.json')
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 
 // ==================== SymbolIndex ====================
 
+export interface SymbolIndexOptions {
+  cacheFile?: string
+  allowNetwork?: boolean
+  writeCache?: boolean
+}
+
 export class SymbolIndex {
   private entries: SymbolEntry[] = []
+  private readonly cacheFile: string
+  private readonly allowNetwork: boolean
+  private readonly cacheWritesEnabled: boolean
+
+  constructor(options: SymbolIndexOptions = {}) {
+    this.cacheFile = resolve(options.cacheFile ?? 'data/cache/equity/symbols.json')
+    this.allowNetwork = options.allowNetwork ?? true
+    this.cacheWritesEnabled = options.writeCache ?? true
+  }
 
   /** 索引大小 */
   get size(): number {
@@ -66,15 +80,17 @@ export class SymbolIndex {
       return
     }
 
-    // 2. 从 API 拉取
-    try {
-      const entries = await this.fetchFromApi(client)
-      this.entries = entries
-      await this.writeCache(entries)
-      console.log(`equity: fetched ${entries.length} symbols from API (${SOURCES.join(', ')})`)
-      return
-    } catch (err) {
-      console.warn('equity: API fetch failed:', err)
+    // 2. 从 API 拉取（Canary/test 可禁用，只读使用已有快照）
+    if (this.allowNetwork) {
+      try {
+        const entries = await this.fetchFromApi(client)
+        this.entries = entries
+        await this.writeCache(entries)
+        console.log(`equity: fetched ${entries.length} symbols from API (${SOURCES.join(', ')})`)
+        return
+      } catch (err) {
+        console.warn('equity: API fetch failed:', err)
+      }
     }
 
     // 3. 降级到过期缓存
@@ -158,7 +174,7 @@ export class SymbolIndex {
 
   private async readCache(): Promise<CacheEnvelope | null> {
     try {
-      const raw = await readFile(CACHE_FILE, 'utf-8')
+      const raw = await readFile(this.cacheFile, 'utf-8')
       return JSON.parse(raw) as CacheEnvelope
     } catch {
       return null
@@ -166,15 +182,16 @@ export class SymbolIndex {
   }
 
   private async writeCache(entries: SymbolEntry[]): Promise<void> {
+    if (!this.cacheWritesEnabled) return
     try {
-      await mkdir(dirname(CACHE_FILE), { recursive: true })
+      await mkdir(dirname(this.cacheFile), { recursive: true })
       const envelope: CacheEnvelope = {
         cachedAt: new Date().toISOString(),
         sources: [...SOURCES],
         count: entries.length,
         entries,
       }
-      await writeFile(CACHE_FILE, JSON.stringify(envelope))
+      await writeFile(this.cacheFile, JSON.stringify(envelope))
     } catch {
       // 缓存写入失败不中断
     }

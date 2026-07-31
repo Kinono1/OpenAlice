@@ -451,6 +451,165 @@ describe('cron engine', () => {
       ]))
       expect(engine.list().some(job => job.name === 'external_derivatives_data_collect_8h')).toBe(true)
     })
+
+    it('reconciles declarative definitions while preserving legacy circuit history', async () => {
+      const definitionPath = tempPath('definitions.json')
+      const dynamicDefinitionPath = tempPath('dynamic-definitions.json')
+      const managedStorePath = tempPath('managed-state.json')
+      const circuitOpenedAtMs = clock - 60_000
+      await writeFile(definitionPath, `${JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        schedulerOwner: 'openalice_cron_engine',
+        jobs: [{
+          id: 'managed1',
+          name: 'managed-script',
+          enabled: true,
+          initialState: 'scheduled',
+          kind: 'script',
+          schedule: { kind: 'every', every: '2h' },
+          payload: 'definition-payload',
+          entrypoint: 'scripts/cron_openalice_task.sh',
+          args: ['scheduler-health'],
+          cwd: '.',
+          notificationArtifact: 'data/runtime/scheduler_health.latest.json',
+          retryPolicy: {
+            mode: 'bounded-backoff',
+            maxAttempts: 2,
+            circuitOpenAfter: 3,
+          },
+        }],
+      }, null, 2)}\n`, 'utf-8')
+      await writeFile(managedStorePath, `${JSON.stringify({
+        jobs: [{
+          id: 'managed1',
+          name: 'legacy-name',
+          enabled: true,
+          kind: 'script',
+          schedule: { kind: 'every', every: '1h' },
+          payload: 'legacy-payload',
+          script: { path: '/legacy/path.sh' },
+          retryPolicy: {
+            mode: 'bounded-backoff',
+            maxAttempts: 2,
+            circuitOpenAfter: 3,
+          },
+          state: {
+            nextRunAtMs: null,
+            lastRunAtMs: clock - 120_000,
+            lastSuccessAtMs: clock - 3_600_000,
+            lastStatus: 'blocked',
+            consecutiveErrors: 3,
+            circuitOpenedAtMs,
+            lastErrorClass: 'transient_network',
+            lastErrorFingerprint: 'stable-fingerprint',
+          },
+          createdAt: clock - 7_200_000,
+        }],
+      }, null, 2)}\n`, 'utf-8')
+
+      const managed = createCronEngine({
+        eventLog,
+        storePath: managedStorePath,
+        definitionPath,
+        dynamicDefinitionPath,
+        now: () => clock,
+      })
+      await managed.start()
+
+      expect(managed.get('managed1')).toMatchObject({
+        name: 'managed-script',
+        payload: 'definition-payload',
+        schedule: { kind: 'every', every: '2h' },
+        state: {
+          lastStatus: 'blocked',
+          consecutiveErrors: 3,
+          circuitOpenedAtMs,
+          lastErrorClass: 'transient_network',
+          lastErrorFingerprint: 'stable-fingerprint',
+        },
+      })
+      await expect(
+        managed.update('managed1', { enabled: true }),
+      ).rejects.toThrow('operator receipt')
+
+      const stateDocument = JSON.parse(
+        await readFile(managedStorePath, 'utf-8'),
+      ) as { schemaVersion: string; jobs: Record<string, unknown>[] }
+      expect(stateDocument.schemaVersion).toBe('cron_runtime_state.v1')
+      expect(stateDocument.jobs[0]).toEqual(expect.objectContaining({
+        id: 'managed1',
+        enabled: true,
+        state: expect.any(Object),
+        createdAt: clock - 7_200_000,
+      }))
+      expect(stateDocument.jobs[0]).not.toHaveProperty('name')
+      expect(stateDocument.jobs[0]).not.toHaveProperty('schedule')
+      expect(stateDocument.jobs[0]).not.toHaveProperty('script')
+
+      managed.stop()
+      await Promise.all([
+        unlink(definitionPath),
+        unlink(dynamicDefinitionPath),
+        unlink(managedStorePath),
+      ])
+    })
+
+    it('persists dynamic agent definitions separately from runtime state', async () => {
+      const definitionPath = tempPath('definitions.json')
+      const dynamicDefinitionPath = tempPath('dynamic-definitions.json')
+      const managedStorePath = tempPath('managed-state.json')
+      await writeFile(definitionPath, `${JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        schedulerOwner: 'openalice_cron_engine',
+        jobs: [],
+      }, null, 2)}\n`, 'utf-8')
+
+      const managed = createCronEngine({
+        eventLog,
+        storePath: managedStorePath,
+        definitionPath,
+        dynamicDefinitionPath,
+        now: () => clock,
+      })
+      await managed.start()
+      const id = await managed.add({
+        name: 'dynamic-reminder',
+        schedule: { kind: 'every', every: '3h' },
+        payload: 'remember',
+      })
+      managed.stop()
+
+      const managedAfterRestart = createCronEngine({
+        eventLog,
+        storePath: managedStorePath,
+        definitionPath,
+        dynamicDefinitionPath,
+        now: () => clock,
+      })
+      await managedAfterRestart.start()
+      expect(managedAfterRestart.get(id)).toMatchObject({
+        name: 'dynamic-reminder',
+        payload: 'remember',
+      })
+      const stateDocument = JSON.parse(
+        await readFile(managedStorePath, 'utf-8'),
+      ) as { jobs: Record<string, unknown>[] }
+      const definitionDocument = JSON.parse(
+        await readFile(dynamicDefinitionPath, 'utf-8'),
+      ) as { schemaVersion: string; definitions: Record<string, unknown>[] }
+      expect(stateDocument.jobs[0]).not.toHaveProperty('payload')
+      expect(definitionDocument).toMatchObject({
+        schemaVersion: 'cron_dynamic_definitions.v1',
+        definitions: [expect.objectContaining({ id, payload: 'remember' })],
+      })
+
+      managedAfterRestart.stop()
+      await Promise.all([
+        unlink(definitionPath),
+        unlink(dynamicDefinitionPath),
+        unlink(managedStorePath),
+      ])
+    })
   })
 
   // ==================== one-shot (at) ====================

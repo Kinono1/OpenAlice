@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traderalice.com/schemas/openalice/validation_receipt.v1.json",
+  "title": "OpenAlice validation receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "receiptId",
+    "checkId",
+    "startedAt",
+    "endedAt",
+    "executedAt",
+    "expiresAt",
+    "exitCode",
+    "sourceCommit",
+    "dirtyStateHash",
+    "sourceClean",
+    "commandDigest",
+    "inputSummary",
+    "outputSummary",
+    "artifacts",
+    "status"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "validation_receipt.v1" },
+    "receiptId": { "type": "string", "minLength": 1 },
+    "checkId": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "executedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "exitCode": { "type": "integer" },
+    "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "dirtyStateHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceClean": { "type": "boolean" },
+    "commandDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "inputSummary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fileHash" }
+    },
+    "outputSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stdoutBytes",
+        "stderrBytes",
+        "stdoutSha256",
+        "stderrSha256",
+        "stdoutTail",
+        "stderrTail",
+        "timedOut"
+      ],
+      "properties": {
+        "stdoutBytes": { "type": "integer", "minimum": 0 },
+        "stderrBytes": { "type": "integer", "minimum": 0 },
+        "stdoutSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "stderrSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "stdoutTail": { "type": "array", "items": { "type": "string" } },
+        "stderrTail": { "type": "array", "items": { "type": "string" } },
+        "timedOut": { "type": "boolean" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fileHash" }
+    },
+    "status": { "enum": ["pass", "fail"] }
+  },
+  "$defs": {
+    "fileHash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "exists", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "exists": { "type": "boolean" },
+        "sha256": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}

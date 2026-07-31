@@ -54,6 +54,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockWriteFile.mockResolvedValue(undefined as any)
   mockMkdir.mockResolvedValue(undefined as any)
+  delete process.env.OPENALICE_CONFIG_READ_ONLY
+  delete process.env.OPENALICE_RUNTIME_ROLE
+  delete process.env.OPENALICE_CONFIG_DIR
 })
 
 // ==================== readAIProviderConfig ====================
@@ -222,6 +225,13 @@ describe('writeConfigSection', () => {
     const filePath = mockWriteFile.mock.calls[0][0] as string
     expect(filePath).toMatch(/connectors\.json$/)
   })
+
+  it('hard-blocks configuration writes for canary role', async () => {
+    process.env.OPENALICE_RUNTIME_ROLE = 'canary'
+    await expect(writeConfigSection('tools', { disabled: [] }))
+      .rejects.toThrow('runtime role forbids configuration writes')
+    expect(mockWriteFile).not.toHaveBeenCalled()
+  })
 })
 
 // ==================== readAccountsConfig / writeAccountsConfig ====================
@@ -250,6 +260,15 @@ describe('readAccountsConfig', () => {
     const accounts = await readAccountsConfig()
     expect(accounts).toHaveLength(1)
     expect(accounts[0].type).toBe('alpaca')
+  })
+
+  it('does not seed a shared accounts file for canary role', async () => {
+    process.env.OPENALICE_RUNTIME_ROLE = 'canary'
+    const enoent = new Error('ENOENT') as NodeJS.ErrnoException
+    enoent.code = 'ENOENT'
+    mockReadFile.mockRejectedValueOnce(enoent)
+    expect(await readAccountsConfig()).toEqual([])
+    expect(mockWriteFile).not.toHaveBeenCalled()
   })
 })
 

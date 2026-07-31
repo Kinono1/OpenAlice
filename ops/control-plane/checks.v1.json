@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "validation_check_registry.v1",
+  "checks": [
+    {
+      "id": "control_plane_unit",
+      "description": "Receipt, freshness, commit binding, and fail-closed controller tests",
+      "required": true,
+      "ttlSeconds": 86400,
+      "timeoutSeconds": 120,
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "ops/control-plane",
+        "-p",
+        "test_*.py"
+      ],
+      "inputPaths": [
+        "ops/control-plane/control.py",
+        "ops/control-plane/checks.v1.json"
+      ],
+      "artifactPaths": []
+    },
+    {
+      "id": "migration_inventory_unit",
+      "description": "Dirty-worktree migration inventory tests",
+      "required": true,
+      "ttlSeconds": 86400,
+      "timeoutSeconds": 120,
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "ops/migration",
+        "-p",
+        "test_*.py"
+      ],
+      "inputPaths": [
+        "ops/migration/build_manifest.py",
+        "docs/architecture-v2/migration_manifest.v1.json"
+      ],
+      "artifactPaths": [
+        "docs/architecture-v2/migration_manifest.v1.json"
+      ]
+    },
+    {
+      "id": "pipeline_registry",
+      "description": "Every file under scripts is registered and Cron definitions are stable",
+      "required": true,
+      "ttlSeconds": 86400,
+      "timeoutSeconds": 120,
+      "command": [
+        "python3",
+        "ops/pipeline/build_registry.py",
+        "--check"
+      ],
+      "inputPaths": [
+        "ops/pipeline/build_registry.py",
+        "ops/pipeline/pipeline_registry.v1.json",
+        "ops/pipeline/cron_definitions.v1.json"
+      ],
+      "artifactPaths": [
+        "ops/pipeline/pipeline_registry.v1.json",
+        "ops/pipeline/cron_definitions.v1.json"
+      ]
+    },
+    {
+      "id": "runtime_boundaries",
+      "description": "Runtime role, path isolation, and read-only configuration tests",
+      "required": true,
+      "ttlSeconds": 86400,
+      "timeoutSeconds": 300,
+      "command": [
+        "./node_modules/.bin/vitest",
+        "run",
+        "src/runtime/runtime-paths.spec.ts",
+        "src/core/config.spec.ts"
+      ],
+      "inputPaths": [
+        "src/runtime/runtime-paths.ts",
+        "src/core/config.ts"
+      ],
+      "artifactPaths": []
+    },
+    {
+      "id": "typescript",
+      "description": "Repository TypeScript contract",
+      "required": true,
+      "ttlSeconds": 86400,
+      "timeoutSeconds": 900,
+      "command": [
+        "./node_modules/.bin/tsc",
+        "--noEmit"
+      ],
+      "inputPaths": [
+        "package.json",
+        "pnpm-lock.yaml",
+        "tsconfig.json"
+      ],
+      "artifactPaths": []
+    }
+  ]
+}

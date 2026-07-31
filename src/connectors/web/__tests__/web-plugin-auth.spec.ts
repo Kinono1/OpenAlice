@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   serve: vi.fn(() => ({ close: vi.fn() })),
   readWebSubchannels: vi.fn(),
-  loadConfig: vi.fn(),
   createRequireAuth: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
   createRequireTrade: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
+  createRuntimeRoleGuard: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
   createRateLimitMiddleware: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
 }))
 
@@ -22,7 +22,6 @@ vi.mock('../../../core/config.js', async (importOriginal) => {
   return {
     ...actual,
     readWebSubchannels: mocks.readWebSubchannels,
-    loadConfig: mocks.loadConfig,
   }
 })
 
@@ -36,6 +35,7 @@ vi.mock('../routes/security.js', async (importOriginal) => {
     ...actual,
     createRequireAuth: mocks.createRequireAuth,
     createRequireTrade: mocks.createRequireTrade,
+    createRuntimeRoleGuard: mocks.createRuntimeRoleGuard,
     createRateLimitMiddleware: mocks.createRateLimitMiddleware,
   }
 })
@@ -118,8 +118,17 @@ vi.mock('../routes/strategy.js', async () => {
 
 import { WebPlugin } from '../web-plugin.js'
 
-function makeCtx() {
+function makeCtx(input?: {
+  enforceAuth?: boolean
+  role?: 'primary' | 'canary' | 'test'
+}) {
   return {
+    config: {
+      auth: { enforceAuth: input?.enforceAuth ?? true },
+    },
+    runtime: {
+      role: input?.role ?? 'primary',
+    },
     reconnectConnectors: vi.fn(),
     connectorCenter: {
       register: vi.fn(() => undefined),
@@ -134,22 +143,25 @@ describe('WebPlugin auth wiring', () => {
   })
 
   it('passes auth.enforceAuth=true into protected route middleware', async () => {
-    mocks.loadConfig.mockResolvedValue({ auth: { enforceAuth: true } })
-
     const plugin = new WebPlugin({ port: 3002 })
-    await plugin.start(makeCtx() as any)
+    await plugin.start(makeCtx({ enforceAuth: true }) as any)
 
     expect(mocks.createRequireAuth).toHaveBeenCalledWith(true)
     expect(mocks.createRequireTrade).toHaveBeenCalledWith(true)
   })
 
   it('passes auth.enforceAuth=false into protected route middleware', async () => {
-    mocks.loadConfig.mockResolvedValue({ auth: { enforceAuth: false } })
-
     const plugin = new WebPlugin({ port: 3002 })
-    await plugin.start(makeCtx() as any)
+    await plugin.start(makeCtx({ enforceAuth: false }) as any)
 
     expect(mocks.createRequireAuth).toHaveBeenCalledWith(false)
     expect(mocks.createRequireTrade).toHaveBeenCalledWith(false)
+  })
+
+  it('mounts a fail-closed runtime role guard for canary', async () => {
+    const plugin = new WebPlugin({ port: 3002 })
+    await plugin.start(makeCtx({ role: 'canary' }) as any)
+
+    expect(mocks.createRuntimeRoleGuard).toHaveBeenCalledWith('canary')
   })
 })
