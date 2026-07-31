@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 const mocks = vi.hoisted(() => ({
   readStrategyConfig: vi.fn(),
@@ -16,8 +19,10 @@ import { evaluateRuntimeStrategySnapshotFromSources } from './runtime-service.js
 import type { StrategyConfig } from '../../core/config.js'
 
 function makeCandles(count: number) {
+  const intervalMs = 60 * 60_000
+  const startMs = Date.now() - (count - 1) * intervalMs
   return Array.from({ length: count }, (_, index) => ({
-    date: `2026-01-${String((index % 28) + 1).padStart(2, '0')}`,
+    date: new Date(startMs + index * intervalMs).toISOString(),
     open: 100 + index,
     high: 101 + index,
     low: 99 + index,
@@ -154,6 +159,7 @@ describe('runtime service', () => {
         side: 'buy',
         requestedUsdSize: 6000,
         reduceOnly: true,
+        fundingRatePct: 0.01,
       },
     })
 
@@ -215,5 +221,47 @@ describe('runtime service', () => {
 
     expect(snapshot.factorSignals.some((signal) => signal.name === 'liquidation-aftermath')).toBe(true)
     expect(snapshot.derivedMetrics.liquidationNotional24h).toBeNull()
+  })
+
+  it('persists IC monitor snapshot to disk after strategy evaluation', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-save-'))
+    process.env.OPENALICE_DATA_DIR = tmpDir
+
+    vi.resetModules()
+    const mod = await import('./runtime-service.js')
+    const snapshot = await mod.evaluateRuntimeStrategySnapshotFromSources({
+      cryptoClient: { getHistorical: vi.fn(async () => makeCandles(48)) } as any,
+      accountManager: { resolve: vi.fn(() => []) } as any,
+      request: { symbol: 'BTC/USD' },
+    })
+
+    expect(snapshot).toBeDefined()
+    expect(snapshot.icMonitorSnapshot).toBeDefined()
+
+    const byKeyPath = path.join(tmpDir, 'runtime', 'ic_monitor_snapshot.by_key.json')
+    const saved = JSON.parse(fs.readFileSync(byKeyPath, 'utf-8'))
+    const keys = Object.keys(saved)
+    expect(keys.length).toBeGreaterThan(0)
+
+    process.env.OPENALICE_DATA_DIR = undefined
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('starts fresh without crash when no IC snapshot file exists', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-clean-'))
+    process.env.OPENALICE_DATA_DIR = tmpDir
+
+    vi.resetModules()
+    const mod = await import('./runtime-service.js')
+    const snapshot = await mod.evaluateRuntimeStrategySnapshotFromSources({
+      cryptoClient: { getHistorical: vi.fn(async () => makeCandles(48)) } as any,
+      accountManager: { resolve: vi.fn(() => []) } as any,
+      request: { symbol: 'BTC/USD' },
+    })
+
+    expect(snapshot).toBeDefined()
+
+    process.env.OPENALICE_DATA_DIR = undefined
+    fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 })

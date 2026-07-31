@@ -1,11 +1,13 @@
 /**
- * Download deep historical data from Binance (primary) + OKX (fallback).
- * Binance: 1000 bars/request, no hard history limit.
- * OKX: 300 bars/request, capped at ~1440 for 1H.
+ * Download bounded public historical data from OKX for manual research use.
+ *
+ * Binance Futures REST is intentionally not a fallback here: that online source
+ * is retired after repeated HTTP 451 responses. Binance Data Vision remains a
+ * separate, explicit offline backfill workflow.
  */
 import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fetchBinanceExtendedCandles, fetchExtendedCandles, candlesToCSV } from '../src/domain/market-data/live-fetcher.js'
+import { fetchExtendedCandles, candlesToCSV } from '../src/domain/market-data/live-fetcher.js'
 import { defaultPaperUniverseAssets } from './lib/paper_universe.js'
 
 interface DownloadLiveAssetsArgs {
@@ -50,10 +52,12 @@ export function buildDownloadLiveAssetsPlan(args: DownloadLiveAssetsArgs) {
   return {
     mode: args.dryRun ? 'dry_run' : 'download',
     outDir: args.outDir,
+    exchange: 'okx',
+    timeframe: '1h',
+    maxCandles: 7000,
     assets: defaultPaperUniverseAssets().map(asset => ({
       storageFile: asset.file,
       storageSymbol: asset.storageSymbol,
-      binanceSymbol: asset.binanceSymbol,
       okxInstId: asset.okxInstId,
     })),
   }
@@ -70,35 +74,16 @@ async function main() {
   await mkdir(outDir, { recursive: true })
 
   for (const asset of defaultPaperUniverseAssets()) {
-    console.log(`Downloading ${asset.binanceSymbol} from Binance...`)
-    let candles: Awaited<ReturnType<typeof fetchBinanceExtendedCandles>> = []
-
-    // Primary: Binance (deep history, up to 10k bars)
     try {
-      candles = await fetchBinanceExtendedCandles(asset.binanceSymbol, '1H', 10000)
-      if (candles.length > 0) {
-        const csv = candlesToCSV(candles, asset.storageSymbol, 'binance_futures')
-        await writeFile(join(outDir, asset.file), csv)
-        const first = new Date(candles[0].timestamp).toISOString().slice(0, 10)
-        const last = new Date(candles[candles.length - 1].timestamp).toISOString().slice(0, 10)
-        console.log(`  Binance: ${candles.length} bars | ${first} -> ${last}`)
-        continue
-      }
-    } catch (err) {
-      console.log(`  Binance failed: ${err instanceof Error ? err.message : err}`)
-    }
-
-    // Fallback: OKX (limited to ~1440 bars for 1H)
-    try {
-      console.log(`  Falling back to OKX ${asset.okxInstId}...`)
-      candles = await fetchExtendedCandles(asset.okxInstId, '1H', 7000)
+      console.log(`Downloading ${asset.okxInstId} from OKX...`)
+      const candles = await fetchExtendedCandles(asset.okxInstId, '1H', 7000)
       const csv = candlesToCSV(candles, asset.storageSymbol, 'okx')
       await writeFile(join(outDir, asset.file), csv)
       const first = candles.length > 0 ? new Date(candles[0].timestamp).toISOString().slice(0, 10) : 'N/A'
       const last = candles.length > 0 ? new Date(candles[candles.length - 1].timestamp).toISOString().slice(0, 10) : 'N/A'
       console.log(`  OKX: ${candles.length} bars | ${first} -> ${last}`)
     } catch (err) {
-      console.log(`  OKX also failed: ${err instanceof Error ? err.message : err}`)
+      console.log(`  OKX failed: ${err instanceof Error ? err.message : err}`)
     }
   }
   console.log(`\nDone. Files in ${outDir}`)

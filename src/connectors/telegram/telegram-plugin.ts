@@ -1,18 +1,20 @@
 import { Bot, InlineKeyboard, InputFile } from 'grammy'
 import { autoRetry } from '@grammyjs/auto-retry'
 import { readFile } from 'node:fs/promises'
+import { ProxyAgent } from 'undici'
 import type { Message } from 'grammy/types'
 import type { Plugin, EngineContext, MediaAttachment } from '../../core/types.js'
 import type { TelegramConfig, ParsedMessage } from './types.js'
+import { resolveTelegramProxyUrl } from './types.js'
 import { buildParsedMessage } from './helpers.js'
 import { MediaGroupMerger } from './media-group.js'
 import { askAgentSdk } from '../../ai-providers/agent-sdk/query.js'
 import type { AgentSdkConfig } from '../../ai-providers/agent-sdk/query.js'
-import { SessionStore } from '../../core/session'
-import { forceCompact } from '../../core/compaction'
-import { readAIBackend, writeAIBackend, type AIBackend } from '../../core/config'
+import { SessionStore } from '../../core/session.js'
+import { forceCompact } from '../../core/compaction.js'
+import { readAIBackend, writeAIBackend, type AIBackend } from '../../core/config.js'
 import type { ConnectorCenter } from '../../core/connector-center.js'
-import { TelegramConnector, splitMessage, MAX_MESSAGE_LENGTH } from './telegram-connector.js'
+import { TelegramConnector, TelegramHttpConnector, splitMessage, MAX_MESSAGE_LENGTH } from './telegram-connector.js'
 
 const BACKEND_LABELS: Record<AIBackend, string> = {
   'claude-code': 'Claude Code',
@@ -28,6 +30,12 @@ export class TelegramPlugin implements Plugin {
   private connectorCenter: ConnectorCenter | null = null
   private merger: MediaGroupMerger | null = null
   private unregisterConnector?: () => void
+  private rateLimitCleanupTimer?: ReturnType<typeof setInterval>
+  private reconnectTimer?: ReturnType<typeof setTimeout>
+  private proxyAgent: ProxyAgent | null = null
+  private pollingStarted = false
+  private stopped = false
+  private engineCtx: EngineContext | null = null
 
   /** Per-user unified session stores (keyed by userId). */
   private sessions = new Map<number, SessionStore>()
@@ -35,15 +43,25 @@ export class TelegramPlugin implements Plugin {
   /** Throttle: last time we sent an auth-guidance reply per chatId. */
   private authReplyThrottle = new Map<number, number>()
 
+  /** Rate limit: message count and window reset per chatId. */
+  private chatRateLimits = new Map<number, { count: number; resetAt: number }>()
+  private static readonly MSG_RATE_LIMIT = 10        // max messages
+  private static readonly MSG_RATE_WINDOW_MS = 60_000 // per 60s window
+
   constructor(
-    config: Omit<TelegramConfig, 'pollingTimeout'> & { pollingTimeout?: number },
+    config: Omit<TelegramConfig, 'pollingTimeout' | 'pollingEnabled'> & {
+      pollingTimeout?: number
+      pollingEnabled?: boolean
+    },
     agentSdkConfig: AgentSdkConfig = {},
   ) {
-    this.config = { pollingTimeout: 30, ...config }
+    this.config = { pollingTimeout: 30, pollingEnabled: true, ...config }
     this.agentSdkConfig = agentSdkConfig
   }
 
   async start(engineCtx: EngineContext) {
+    this.stopped = false
+    this.engineCtx = engineCtx
     this.connectorCenter = engineCtx.connectorCenter
 
     // Inject agent config into Claude Code config (used by /compact command)
@@ -53,7 +71,42 @@ export class TelegramPlugin implements Plugin {
       ...this.agentSdkConfig,
     }
 
-    const bot = new Bot(this.config.token)
+    if (!this.config.token) {
+      this.connectorCenter.setChannelStatus('telegram', 'degraded', 'missing_secret')
+      console.warn('telegram: degraded (configured token environment variable is missing)')
+      return
+    }
+
+    try {
+      await this.initialize(engineCtx)
+    } catch (err) {
+      this.markDegraded(err)
+      this.scheduleReconnect()
+    }
+  }
+
+  private async initialize(engineCtx: EngineContext): Promise<void> {
+    if (!this.config.token) throw new Error('telegram token missing')
+    const proxyUrl = resolveTelegramProxyUrl()
+    this.proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null
+    if (!this.config.pollingEnabled) {
+      if (this.config.allowedChatIds.length === 0) {
+        throw new Error('telegram outbound-only mode requires one allowed chat id')
+      }
+      const connector = new TelegramHttpConnector(
+        this.config.token,
+        this.config.allowedChatIds[0],
+        this.proxyAgent ?? undefined,
+      )
+      const botInfo = await connector.verifyReady()
+      this.unregisterConnector = this.connectorCenter!.register(connector)
+      this.connectorCenter!.setChannelStatus('telegram', 'ready', 'outbound_only_shared_bot')
+      console.log(`telegram plugin: connected as @${botInfo.username ?? 'unknown'} (outbound-only shared bot)`)
+      console.log('telegram: outbound-only mode enabled; inbound polling and command registration are disabled')
+      return
+    }
+
+    const bot = new Bot(this.config.token, { client: { timeoutSeconds: 10 } })
 
     // Auto-retry on 429 rate limits
     bot.api.config.use(autoRetry())
@@ -62,6 +115,18 @@ export class TelegramPlugin implements Plugin {
     bot.catch((err) => {
       console.error('telegram bot error:', err)
     })
+
+    // Verify the token with a short request before registering outbound delivery.
+    await bot.init()
+    const aiConfig = await readAIBackend()
+    console.log(`telegram plugin: connected as @${bot.botInfo.username} (backend: ${aiConfig.backend})`)
+
+    this.bot = bot
+    if (this.config.allowedChatIds.length > 0) {
+      const deliveryChatId = this.config.allowedChatIds[0]
+      this.unregisterConnector = this.connectorCenter!.register(new TelegramConnector(bot, deliveryChatId))
+    }
+    this.connectorCenter!.setChannelStatus('telegram', 'ready')
 
     // ── Middleware: auth guard (always active) ──
     bot.use(async (ctx, next) => {
@@ -79,7 +144,35 @@ export class TelegramPlugin implements Plugin {
       }
     })
 
-    // ── Commands ──
+    // ── Middleware: inbound rate limit per chat (10 msg / 60s) ──
+    bot.use(async (ctx, next) => {
+      const chatId = ctx.chat?.id
+      if (!chatId) return next()
+      const now = Date.now()
+      let rl = this.chatRateLimits.get(chatId)
+      if (!rl || now > rl.resetAt) {
+        rl = { count: 0, resetAt: now + TelegramPlugin.MSG_RATE_WINDOW_MS }
+        this.chatRateLimits.set(chatId, rl)
+      }
+      rl.count++
+      if (rl.count > TelegramPlugin.MSG_RATE_LIMIT) {
+        console.warn(`telegram: rate-limited chat ${chatId} (${rl.count} msgs in window)`)
+        return // drop — no reply to avoid amplifying spam
+      }
+      return next()
+    })
+
+    // Periodic cleanup of stale rate-limit entries (every 5 min)
+    if (this.rateLimitCleanupTimer) clearInterval(this.rateLimitCleanupTimer)
+    this.rateLimitCleanupTimer = setInterval(() => {
+      const now = Date.now()
+      for (const [chatId, rl] of this.chatRateLimits) {
+        if (now > rl.resetAt) this.chatRateLimits.delete(chatId)
+      }
+      for (const [chatId, ts] of this.authReplyThrottle) {
+        if (now - ts > 60_000) this.authReplyThrottle.delete(chatId)
+      }
+    }, 5 * 60_000)
     bot.command('status', async (ctx) => {
       const aiConfig = await readAIBackend()
       await this.sendReply(ctx.chat.id, `Engine is running. Provider: ${BACKEND_LABELS[aiConfig.backend]}`)
@@ -159,39 +252,77 @@ export class TelegramPlugin implements Plugin {
     bot.on('edited_message', (ctx) => messageHandler(ctx.editedMessage))
     bot.on('channel_post', (ctx) => messageHandler(ctx.channelPost))
 
-    // ── Register commands with Telegram ──
-    await bot.api.setMyCommands([
-      { command: 'status', description: 'Show engine status' },
-      { command: 'settings', description: 'Choose default AI provider' },
-      { command: 'heartbeat', description: 'Toggle heartbeat self-check' },
-      { command: 'compact', description: 'Force compact session context' },
-    ])
-
-    // ── Initialize and get bot info ──
-    await bot.init()
-    const aiConfig = await readAIBackend()
-    console.log(`telegram plugin: connected as @${bot.botInfo.username} (backend: ${aiConfig.backend})`)
-
-    // ── Register connector for outbound delivery (heartbeat / cron responses) ──
-    if (this.config.allowedChatIds.length > 0) {
-      const deliveryChatId = this.config.allowedChatIds[0]
-      this.unregisterConnector = this.connectorCenter!.register(new TelegramConnector(bot, deliveryChatId))
-    }
-
     // ── Start polling ──
-    this.bot = bot
+    this.pollingStarted = true
     bot.start({
       allowed_updates: ['message', 'edited_message', 'channel_post', 'callback_query'],
       onStart: () => console.log('telegram: polling started'),
     }).catch((err) => {
+      this.pollingStarted = false
       console.error('telegram polling fatal error:', err)
+      this.markDegraded(err)
+      this.scheduleReconnect()
+    })
+
+    void bot.api.setMyCommands([
+      { command: 'status', description: 'Show engine status' },
+      { command: 'settings', description: 'Choose default AI provider' },
+      { command: 'heartbeat', description: 'Toggle heartbeat self-check' },
+      { command: 'compact', description: 'Force compact session context' },
+    ]).catch((err) => {
+      console.warn('telegram: setMyCommands failed (non-fatal):', err instanceof Error ? err.message : err)
     })
   }
 
   async stop() {
+    this.stopped = true
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = undefined
     this.merger?.flush()
-    await this.bot?.stop()
+    if (this.pollingStarted) await this.bot?.stop()
+    this.pollingStarted = false
+    this.bot = null
     this.unregisterConnector?.()
+    this.unregisterConnector = undefined
+    if (this.rateLimitCleanupTimer) {
+      clearInterval(this.rateLimitCleanupTimer)
+      this.rateLimitCleanupTimer = undefined
+    }
+    this.chatRateLimits.clear()
+    this.authReplyThrottle.clear()
+    await this.closeProxyAgent()
+    this.connectorCenter?.setChannelStatus('telegram', 'stopped')
+  }
+
+  private markDegraded(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`telegram: degraded (${message})`)
+    this.unregisterConnector?.()
+    this.unregisterConnector = undefined
+    if (this.pollingStarted) void this.bot?.stop().catch(() => undefined)
+    this.pollingStarted = false
+    this.bot = null
+    void this.closeProxyAgent()
+    this.connectorCenter?.setChannelStatus('telegram', 'degraded', message)
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopped || !this.engineCtx || this.reconnectTimer || !this.config.token) return
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined
+      if (this.stopped || !this.engineCtx) return
+      void this.initialize(this.engineCtx).catch((err) => {
+        this.markDegraded(err)
+        this.scheduleReconnect()
+      })
+    }, 5 * 60_000)
+    this.reconnectTimer.unref?.()
+  }
+
+  private async closeProxyAgent(): Promise<void> {
+    const agent = this.proxyAgent
+    this.proxyAgent = null
+    if (agent) await agent.close().catch(() => undefined)
   }
 
   private async getSession(userId: number): Promise<SessionStore> {

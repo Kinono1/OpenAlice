@@ -231,7 +231,10 @@ export class LiveGateManager {
   async beforePlaceOrder(
     req: CryptoPlaceOrderRequest
   ): Promise<RiskCheckResult | undefined> {
-    const manualOverride = await loadManualOverride(this.manualOverridePath);
+    const manualOverride = await loadManualOverride({
+      filePath: this.manualOverridePath,
+      eventLog: this.opts.eventLog,
+    });
     if (!req.reduceOnly && manualOverride.pauseNewOpens) {
       return {
         approved: false,
@@ -349,7 +352,10 @@ export class LiveGateManager {
   }
 
   async buildRiskContext(): Promise<RiskCheckContext | undefined> {
-    const manualOverride = await loadManualOverride(this.manualOverridePath);
+    const manualOverride = await loadManualOverride({
+      filePath: this.manualOverridePath,
+      eventLog: this.opts.eventLog,
+    });
     const account = await this.opts.engine.getAccount();
     const consecutive = this.riskBreakerStore.getConsecutiveLossStats();
     const tailLoss = this.riskBreakerStore.getTailLossStats({
@@ -422,7 +428,10 @@ export class LiveGateManager {
   }
 
   async buildRuntimePlanningState(): Promise<RuntimePlanningState> {
-    const manualOverride = await loadManualOverride(this.manualOverridePath);
+    const manualOverride = await loadManualOverride({
+      filePath: this.manualOverridePath,
+      eventLog: this.opts.eventLog,
+    });
     const gateStatus = await this.loadReleaseGateStatus();
     const now = new Date();
     const releaseGateDecision =
@@ -546,7 +555,10 @@ export class LiveGateManager {
       });
     }
 
-    const manualOverride = await loadManualOverride(this.manualOverridePath);
+    const manualOverride = await loadManualOverride({
+      filePath: this.manualOverridePath,
+      eventLog: this.opts.eventLog,
+    });
     const consecutiveLoss = this.riskBreakerStore.getConsecutiveLossStats();
     const riskBreakerState = this.riskBreakerStore.getState();
     const stageLabel =

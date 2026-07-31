@@ -8,9 +8,9 @@ export interface QuantLlmModelSpec extends ModelOverride {
 }
 
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1'
-const DEFAULT_REGULAR_MODEL = 'deepseek-v4-flash'
+const DEFAULT_REGULAR_MODEL = 'deepseek-v4-pro'
 const DEFAULT_ANALYSIS_MODEL = 'deepseek-v4-pro'
-const DEFAULT_TTL_MODEL = 'claude-haiku-4-5'
+const DEFAULT_TTL_MODEL = 'deepseek-v4-pro'
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000
 
 export function resolveQuantLlmModel(
@@ -47,15 +47,19 @@ export function resolveQuantLlmModel(
     }
   }
 
-  const provider = readEnv(env, 'OPENALICE_LLM_PROVIDER') ?? 'openai-compatible'
+  const provider = readEnv(env, 'OPENALICE_LLM_PROVIDER') ?? 'anthropic'
   const baseUrl =
     readEnv(env, 'OPENALICE_LLM_BASE_URL') ??
-    readEnv(env, 'OPENALICE_DEEPSEEK_BASE_URL') ??
-    DEFAULT_DEEPSEEK_BASE_URL
+    (provider === 'openai-compatible'
+      ? readEnv(env, 'OPENALICE_DEEPSEEK_BASE_URL') ??
+        DEFAULT_DEEPSEEK_BASE_URL
+      : undefined)
   const apiKeyEnv =
     readEnv(env, 'OPENALICE_LLM_API_KEY_ENV') ??
-    readEnv(env, 'OPENALICE_DEEPSEEK_API_KEY_ENV') ??
-    'DEEPSEEK_API_KEY'
+    (provider === 'openai-compatible'
+      ? readEnv(env, 'OPENALICE_DEEPSEEK_API_KEY_ENV') ??
+        'DEEPSEEK_API_KEY'
+      : 'NEWAPIS_API_KEY')
   const model = lane === 'analysis'
     ? readEnv(env, 'OPENALICE_LLM_ANALYSIS_MODEL') ??
       readEnv(env, 'OPENALICE_DEEPSEEK_PRO_MODEL') ??

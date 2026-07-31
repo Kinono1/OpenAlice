@@ -3,7 +3,7 @@ set -euo pipefail
 
 TASK="${1:-}"
 if [[ -z "$TASK" ]]; then
-  echo "usage: $0 <accumulate_live_data|accumulate_5m_data|accumulate_1s_data|live_data_freshness_audit|runtime_fee_auth_tick|prospective_evidence_tick|eth_carry_prospective_tick|continuous_improvement_loop|paper_pnl_diagnostics|paper_trade_cross_sectional|paper_trade_volume_breakout|refresh_market_intel_context|cp_intake|crypto_dl_predict>" >&2
+  echo "usage: $0 <accumulate_live_data|accumulate_5m_data|accumulate_1s_data|live_data_freshness_audit|runtime_fee_auth_tick|prospective_evidence_tick|eth_carry_prospective_tick|continuous_improvement_loop|paper_pnl_diagnostics|paper_trade_cross_sectional|paper_trade_volume_breakout|refresh_market_intel_context>" >&2
   exit 64
 fi
 
@@ -16,6 +16,7 @@ source "$REPO_ROOT/scripts/openalice_env.sh"
 source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
 
 export PATH="/Users/kino/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$REPO_ROOT/data}"
 
 mkdir -p "$LOCK_ROOT" "$REPO_ROOT/logs"
 
@@ -139,7 +140,7 @@ case "$TASK" in
     run_pnpm research:eth-carry:prospective-tick
     ;;
   continuous_improvement_loop)
-    run_pnpm improve:loop
+    run_pnpm improve:gated -- --mode observe --json true
     ;;
   paper_pnl_diagnostics)
     run_pnpm paper:pnl:diagnose
@@ -169,13 +170,9 @@ case "$TASK" in
   refresh_market_intel_context)
     run_pnpm market:intel:refresh -- --dryRun false
     ;;
-  cp_intake)
-    run_pnpm cp:intake
-    ;;
-  crypto_dl_predict)
-    cd /Users/kino/Files/work_projects/code/expCode/effeciency/AI-Scientist && \
-    AI_SCIENTIST_CRYPTO_DATA_DIR="templates/crypto_dl/data/binance_usds_1h_2024_2026" \
-    bash scripts/run_prediction.sh 2>&1 | tail -20
+  cp_intake|crypto_dl_predict)
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] archived_manual_only ${TASK}: automatic execution entry is retired" >&2
+    exit 78
     ;;
   *)
     echo "unknown task: ${TASK}" >&2

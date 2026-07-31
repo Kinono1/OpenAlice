@@ -51,7 +51,7 @@ describe('web config protection', () => {
         web: { port: 3002 },
         mcp: { port: 3001 },
         mcpAsk: { enabled: false },
-        telegram: { enabled: true, botToken: 'telegram-secret', chatIds: [] },
+        telegram: { enabled: true, botTokenEnv: 'TELEGRAM_BOT_TOKEN', chatIds: [] },
       },
       news: {},
       tools: { disabled: [] },
@@ -77,7 +77,8 @@ describe('web config protection', () => {
     const body = await allowed.json() as Record<string, any>
     expect(body.aiProvider.apiKeys.anthropic).toBe('****cret')
     expect(body.aiProvider.apiKeys.openai).toBe('****cret')
-    expect(body.connectors.telegram.botToken).toBe('****cret')
+    expect(body.connectors.telegram.botTokenEnv).toBe('TELEGRAM_BOT_TOKEN')
+    expect(body.connectors.telegram.botToken).toBeUndefined()
     expect(body.marketData.providerKeys.fred).toBe('****cret')
   })
 
@@ -95,17 +96,18 @@ describe('web config protection', () => {
         web: { port: 3002 },
         mcp: { port: 3001 },
         mcpAsk: { enabled: false },
-        telegram: { enabled: true, botToken: '****cret', chatIds: [] },
+        telegram: { enabled: true, botTokenEnv: 'TELEGRAM_BOT_TOKEN', chatIds: [] },
       }),
     })
 
     expect(res.status).toBe(200)
     expect(mocks.writeConfigSection).toHaveBeenCalledTimes(1)
     expect(mocks.writeConfigSection).toHaveBeenCalledWith('connectors', expect.objectContaining({
-      telegram: expect.objectContaining({ botToken: 'telegram-secret' }),
+      telegram: expect.objectContaining({ botTokenEnv: 'TELEGRAM_BOT_TOKEN' }),
     }))
 
     const body = await res.json() as Record<string, any>
-    expect(body.telegram.botToken).toBe('****cret')
+    expect(body.telegram.botTokenEnv).toBe('TELEGRAM_BOT_TOKEN')
+    expect(body.telegram.botToken).toBeUndefined()
   })
 })

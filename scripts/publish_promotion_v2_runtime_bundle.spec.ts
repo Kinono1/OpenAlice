@@ -17,6 +17,7 @@ import {
 import {
   buildPromotionV2RuntimeArtifactsFromInputs,
   buildP1TradingEvidenceSnapshot,
+  buildStrategyLanePolicySnapshot,
   parsePublishPromotionV2Args,
   readP1TradingEvidenceSnapshot,
 } from './publish_promotion_v2_runtime_bundle.js'
@@ -41,6 +42,7 @@ describe('publish_promotion_v2_runtime_bundle', () => {
       paperEvidencePointerPath: 'runtime/paper/latest_pointer.json',
       paperEvidenceLedgerPath: 'runtime/paper/evidence_ledger.jsonl',
       p1EvidenceIndexPath: 'data/runtime/p1_trading_evidence/p1_trading_evidence.index.latest.json',
+      strategyLanePolicyPath: 'data/runtime/strategy_lane_policy.latest.json',
     })
   })
 
@@ -184,6 +186,52 @@ describe('publish_promotion_v2_runtime_bundle', () => {
     expect(loaded.kind).toBe('invalid')
     expect(loaded.error).not.toContain('manual_fee_override_not_allowed_for_paper_or_live')
     expect(loaded.error).not.toContain('fee_snapshot_not_runtime_verified')
+  })
+
+  it('aligns monetization selected route with the release-gate economics route when present', () => {
+    const paperDecision = makePaperDecision()
+    const result = buildPromotionV2RuntimeArtifactsFromInputs({
+      now: new Date('2026-04-30T12:00:00.000Z'),
+      runtimeDir: 'data/runtime',
+      paperDecisionPath: 'data/runtime/paper_decision.latest.json',
+      paperDecisionRaw: `${JSON.stringify(paperDecision)}\n`,
+      paperDecision,
+      bestConfig: {
+        experimentId: 'experiment-1',
+        config: paperDecision.bestConfigEvidence,
+      },
+      releaseGateStatus: {
+        version: 1,
+        generatedAt: '2026-04-30T11:00:00.000Z',
+        allowPaperTrading: false,
+        allowLiveTrading: false,
+        failedChecks: ['economics'],
+        warningChecks: [],
+        checks: [{
+          name: 'economics',
+          status: 'fail',
+          summary: 'Route-cost economics failed.',
+          metrics: {
+            selectedRoute: 'passive_passive',
+            netExpectancyPct: -0.1,
+          },
+        }],
+        expiresAt: '2026-05-01T12:00:00.000Z',
+      },
+      candidateRegistry: makeCandidateRegistry('candidate_registry', false),
+      graveyard: makeCandidateRegistry('graveyard', true),
+      ...makeCleanDirtyWorktreeEvidence(),
+      ...makePaperEvidence('data/runtime', paperDecision),
+    })
+
+    expect(result.artifacts.strategyPromotion.monetizationGate.metricSnapshot).toMatchObject({
+      selectedRoute: 'passive_passive',
+      routeTotalExpectedCostBps: 18,
+      routeMaxAllowedCostBps: 20,
+    })
+    expect(result.artifacts.strategyPromotion.monetizationGate.hardBlocks).not.toContain(
+      'route_cost_budget_exceeded:taker_taker',
+    )
   })
 
   it('marks auto/backfilled paper decisions as backtest-origin evidence', () => {
@@ -828,6 +876,86 @@ describe('publish_promotion_v2_runtime_bundle', () => {
         'stoploss_symbol:WIF-USDT:cooldown',
       ],
     })
+  })
+
+  it('carries diagnostic lane policy into paper hard blocks without approving execution', () => {
+    const paperDecision = makePaperDecision()
+    const strategyLanePolicy = {
+      diagnosticOnly: true,
+      policyMutationAllowed: false,
+      paperExecutionAllowed: false,
+      liveExecutionAllowed: false,
+      globalBlockers: ['best_config_no_passing_config'],
+      summary: {
+        lanesReviewed: 3,
+        blockNewOrders: 1,
+        shadowOnly: 1,
+        probation: 1,
+        worstLane: 'cross_sectional',
+        bestPositiveLowSampleLane: 'cross_sectional_10x',
+      },
+      lanes: [
+        {
+          lane: 'cross_sectional',
+          action: 'block_new_orders',
+          severity: 'high',
+        },
+        {
+          lane: 'microstructure_10x',
+          action: 'shadow_only',
+          severity: 'medium',
+        },
+        {
+          lane: 'cross_sectional_10x',
+          action: 'probation',
+          severity: 'low',
+        },
+      ],
+    }
+
+    const result = buildPromotionV2RuntimeArtifactsFromInputs({
+      now: new Date('2026-04-30T12:00:00.000Z'),
+      runtimeDir: 'data/runtime',
+      paperDecisionPath: 'data/runtime/paper_decision.latest.json',
+      paperDecisionRaw: `${JSON.stringify(paperDecision)}\n`,
+      paperDecision,
+      bestConfig: null,
+      releaseGateStatus: null,
+      candidateRegistry: makeCandidateRegistry('candidate_registry', false),
+      graveyard: makeCandidateRegistry('graveyard', true),
+      ...makeCleanDirtyWorktreeEvidence(),
+      ...makePaperEvidence('data/runtime', paperDecision),
+      strategyLanePolicy: buildStrategyLanePolicySnapshot(strategyLanePolicy),
+    })
+
+    expect(result.artifacts.strategyPromotion.paperGate.hardBlocks).toEqual(expect.arrayContaining([
+      'strategy_lane_global_blocker:best_config_no_passing_config',
+      'strategy_lane_block:cross_sectional',
+    ]))
+    expect(result.artifacts.strategyPromotion.paperGate.advisoryWarnings).toEqual(expect.arrayContaining([
+      'strategy_lane_shadow_only:microstructure_10x',
+      'strategy_lane_probation:cross_sectional_10x',
+    ]))
+    expect(result.artifacts.strategyPromotion.paperGate.hardBlocks).not.toContain(
+      'strategy_lane_policy_allows_paper_execution',
+    )
+    expect(result.artifacts.strategyPromotion.paperGate.metricSnapshot).toMatchObject({
+      strategyLanePolicyStatus: 'loaded',
+      strategyLanePolicyDiagnosticOnly: true,
+      strategyLanePolicyPolicyMutationAllowed: false,
+      strategyLanePolicyPaperExecutionAllowed: false,
+      strategyLanePolicyLiveExecutionAllowed: false,
+      strategyLanePolicyLanesReviewed: 3,
+      strategyLanePolicyBlockNewOrders: 1,
+      strategyLanePolicyShadowOnly: 1,
+      strategyLanePolicyProbation: 1,
+      strategyLanePolicyWorstLane: 'cross_sectional',
+      strategyLanePolicyBestPositiveLowSampleLane: 'cross_sectional_10x',
+      strategyLanePolicyTopBlockedLanes: 'cross_sectional',
+      strategyLanePolicyShadowLanes: 'microstructure_10x',
+      strategyLanePolicyProbationLanes: 'cross_sectional_10x',
+    })
+    expect(result.readiness.finalVerdict).not.toBe('paper_ready')
   })
 
   it('blocks paper promotion when stratified gate diagnostics require cost coverage', () => {

@@ -10,7 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { fetchLiveCandles } from '../src/domain/market-data/live-fetcher.js'
-import { defaultSecondLevelUniverseAssets, paperSymbolToCsvFile } from './lib/paper_universe.js'
+import { defaultSecondLevelMarketDataUniverseAssets, paperSymbolToCsvFile } from './lib/paper_universe.js'
 
 interface CandleRow {
   timestamp: number
@@ -21,7 +21,7 @@ interface CandleRow {
   volume: number
 }
 
-const ASSETS = defaultSecondLevelUniverseAssets().map(asset => ({
+const ASSETS = defaultSecondLevelMarketDataUniverseAssets().map(asset => ({
   instId: asset.okxInstId,
   symbol: asset.storageSymbol,
   file: paperSymbolToCsvFile(asset.paperSymbol, '1s'),

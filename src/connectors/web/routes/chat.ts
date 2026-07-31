@@ -146,6 +146,7 @@ export function createChatRoutes(
           await stream.writeSSE({ event: 'closing', data: 'max-duration-reached' }).catch(() => {})
           clearInterval(pingInterval)
           channelClients.delete(clientId)
+          if (channelClients.size === 0) sseByChannel.delete(channelId)
           finish()
         })()
       }, sseMaxDurationMs)
@@ -154,6 +155,7 @@ export function createChatRoutes(
         clearInterval(pingInterval)
         clearTimeout(maxDurationTimer)
         channelClients.delete(clientId)
+        if (channelClients.size === 0) sseByChannel.delete(channelId)
         finish()
       })
 

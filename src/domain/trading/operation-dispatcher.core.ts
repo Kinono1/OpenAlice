@@ -26,18 +26,32 @@ export function createCryptoOperationDispatcher(
 ): CryptoOperationDispatcher {
   const options = normalizeDispatcherOptions(optionsOrRiskConfig)
   const operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
+  const placeOrderLockTimeoutMs = operationTimeoutMs + 10_000 // lock timeout > operation timeout
   let placeOrderQueue: Promise<void> = Promise.resolve()
 
   async function withPlaceOrderLock<T>(task: () => Promise<T>): Promise<T> {
     const prev = placeOrderQueue
     let release!: () => void
+    let queueTimedOut = false
+    const queueTimeout = setTimeout(() => {
+      queueTimedOut = true
+      console.warn(`[crypto-dispatcher] place-order lock timed out after ${placeOrderLockTimeoutMs}ms — releasing`)
+      release()
+    }, placeOrderLockTimeoutMs)
     placeOrderQueue = new Promise<void>(resolve => {
       release = resolve
     })
 
-    await prev
     try {
-      return await task()
+      await prev
+    } finally {
+      clearTimeout(queueTimeout)
+    }
+    // If release already fired via timeout, the queue was reset — we can't proceed
+    if (queueTimedOut) throw new Error('place-order lock queue timeout — previous operation did not complete')
+    try {
+      const result = await task()
+      return result
     } finally {
       release()
     }
@@ -104,7 +118,9 @@ export function createCryptoOperationDispatcher(
         commitId,
         operationCount: operations.length,
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.warn('[operation-dispatcher] Event log append failed:', err)
+      })
 
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i]
@@ -218,7 +234,9 @@ export function createCryptoOperationDispatcher(
         summary,
         operations: results,
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.warn('[operation-dispatcher] Event log commit.failed append failed:', err)
+      })
 
     return { commitId, operations: results, summary }
   }

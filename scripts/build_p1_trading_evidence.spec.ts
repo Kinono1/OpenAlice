@@ -333,6 +333,59 @@ describe('build_p1_trading_evidence', () => {
     ]))
   })
 
+  it('treats a no-passing optimizer best_config as no active survivor provenance', async () => {
+    const root = makeRoot()
+    const paperDir = join(root, 'paper')
+    const dataDir = join(root, 'market')
+    const outputDir = join(root, 'out')
+    const optimizationDir = join(root, 'optimization')
+    const validationDir = join(root, 'new_strategies_validation')
+    mkdirSync(paperDir, { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    mkdirSync(optimizationDir, { recursive: true })
+    mkdirSync(validationDir, { recursive: true })
+
+    writeFileSync(join(root, 'candidate_registry.json'), JSON.stringify({ entries: [] }))
+    writeFileSync(join(root, 'graveyard.json'), JSON.stringify({ entries: [] }))
+    writeFileSync(join(root, 'trial_registry.jsonl'), '')
+    writeFileSync(join(root, 'best_config.json'), JSON.stringify({
+      status: 'no_passing_config',
+      selectedConfig: false,
+      config: null,
+      noPassingConfigReason: 'optimizer_hard_gate_passed_count_zero',
+    }))
+    writeFileSync(join(paperDir, 'trades.jsonl'), '')
+    writeFileSync(join(paperDir, 'account.json'), JSON.stringify({ tradeHistory: [], dailyPnL: [] }))
+    writeFileSync(join(dataDir, 'BTC_USDT_USDT_1h.csv'), 'timestamp,open,high,low,close,volume\n')
+
+    const index = await buildP1TradingEvidence({
+      paperDir,
+      dataDir,
+      oneSecondDataDir: dataDir,
+      oneHourDataDir: dataDir,
+      shadowLedgerPath: join(paperDir, 'missing_shadow.jsonl'),
+      outputDir,
+      candidateRegistryPath: join(root, 'candidate_registry.json'),
+      graveyardPath: join(root, 'graveyard.json'),
+      bestConfigPath: join(root, 'best_config.json'),
+      trialRegistryPath: join(root, 'trial_registry.jsonl'),
+      evidenceOutputRoot: join(root, 'runtime_research'),
+      optimizationDir,
+      validationDir,
+      routeCostBudgetPath: join(root, 'missing_route_cost_budget.json'),
+      timeframe: '5m',
+      lookbackHours: null,
+      json: true,
+    })
+
+    const trialLedger = JSON.parse(await readFile(index.artifacts.trialLedger, 'utf-8'))
+    expect(trialLedger.sourceDiagnostics.find((item: any) => item.source === 'best_config')).toMatchObject({
+      status: 'loaded',
+      entriesEmitted: 0,
+      notes: ['best config has no active survivor: optimizer_hard_gate_passed_count_zero'],
+    })
+  })
+
   it('keeps trial ledger blocked when p-values exist but raw_m is only visible sources', () => {
     const gate = buildGateEffectivenessReport({
       acceptedTrades: [],

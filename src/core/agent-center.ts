@@ -192,7 +192,9 @@ export class AgentCenter {
       try {
         const name = await persistMedia(m.path)
         mediaBlocks.push({ type: 'image', url: `/api/media/${name}` })
-      } catch { /* temp file gone — skip */ }
+      } catch (err) {
+        console.warn(`[agent-center] media persist failed: ${err instanceof Error ? err.message : err}`)
+      }
     }
 
     const finalBlocks: ContentBlock[] = [

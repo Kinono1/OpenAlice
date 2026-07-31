@@ -14,6 +14,7 @@ import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOr
 import { TradingGit } from './git/TradingGit.js'
 import type {
   Operation,
+  OperationGovernance,
   AddResult,
   CommitPrepareResult,
   PushResult,
@@ -30,6 +31,10 @@ import type {
 } from './git/types.js'
 import { createGuardPipeline, resolveGuards } from './guards/index.js'
 import './contract-ext.js'
+import {
+  isReleaseGateStatusBlocking,
+  loadReleaseGateStatus,
+} from '../../runtime/release_gate_status.js'
 
 // ==================== Options ====================
 
@@ -67,6 +72,8 @@ export interface StagePlaceOrderParams {
   ocaGroup?: string
   takeProfit?: { price: string }
   stopLoss?: { price: string; limitPrice?: string }
+  /** Optional governance metadata from strategy evaluation. */
+  governance?: OperationGovernance
 }
 
 export interface StageModifyOrderParams {
@@ -118,6 +125,8 @@ export class UnifiedTradingAccount {
   private _disabled = false
   private _connectPromise: Promise<void>
   private _accountOperationQueue: Promise<void> = Promise.resolve()
+  /** Track last-known filled quantity per orderId for partial fill detection. */
+  private _lastFilledQuantities = new Map<string, number>()
 
   constructor(broker: IBroker, options: UnifiedTradingAccountOptions = {}) {
     this.broker = broker
@@ -405,6 +414,7 @@ export class UnifiedTradingAccount {
       order,
       tpsl,
       ticketId: params.ticketId,
+      governance: params.governance,
     })
   }
 
@@ -460,8 +470,18 @@ export class UnifiedTradingAccount {
       if (this.health === 'offline') {
         throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
       }
+
+      // Gate check: enforce release gate status before executing trades
+      const releaseGate = await loadReleaseGateStatus()
+      const blocking = isReleaseGateStatusBlocking(releaseGate, 'paper')
+      if (blocking.blocking) {
+        throw new BrokerError('GATE_BLOCKED', blocking.reason ?? 'release_gate_failed')
+      }
+
       const result = await this.git.push()
-      Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
+      Promise.resolve(this._onPostPush?.(this.id)).catch((err) => {
+        console.warn(`[UTA] onPostPush callback failed for account ${this.id}:`, err)
+      })
       return result
     })
   }
@@ -469,7 +489,9 @@ export class UnifiedTradingAccount {
   async reject(reason?: string): Promise<RejectResult> {
     return this._withAccountOperationLock(async () => {
       const result = await this.git.reject(reason)
-      Promise.resolve(this._onPostReject?.(this.id)).catch(() => {})
+      Promise.resolve(this._onPostReject?.(this.id)).catch((err) => {
+        console.warn(`[UTA] onPostReject callback failed for account ${this.id}:`, err)
+      })
       return result
     })
   }
@@ -529,12 +551,23 @@ export class UnifiedTradingAccount {
       if (!brokerOrder) continue
 
       const status = brokerOrder.orderState.status
+      const orderFilledQty = brokerOrder.order.filledQuantity
+      const filledQty = orderFilledQty && !orderFilledQty.equals(UNSET_DECIMAL)
+        ? orderFilledQty.toNumber()
+        : undefined
+
+      // Detect partial fills: order stays Submitted but filledQuantity changed
+      const lastFilled = this._lastFilledQuantities.get(orderId)
+      if (filledQty !== undefined && lastFilled !== undefined && filledQty !== lastFilled) {
+        console.log(`UTA[${this.id}]: partial fill detected order ${orderId} (${lastFilled} → ${filledQty})`)
+        this._lastFilledQuantities.set(orderId, filledQty)
+      } else if (filledQty !== undefined && lastFilled === undefined) {
+        this._lastFilledQuantities.set(orderId, filledQty)
+      }
+
       if (status !== 'Submitted' && status !== 'PreSubmitted') {
-        // Extract fill data when available
-        const orderFilledQty = brokerOrder.order.filledQuantity
-        const filledQty = orderFilledQty && !orderFilledQty.equals(UNSET_DECIMAL)
-          ? orderFilledQty.toNumber()
-          : undefined
+        // Clear tracking for completed orders
+        this._lastFilledQuantities.delete(orderId)
 
         updatesByOrderId.set(orderId, {
           orderId,

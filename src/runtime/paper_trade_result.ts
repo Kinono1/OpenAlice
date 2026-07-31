@@ -82,6 +82,16 @@ export const PaperTradeResultSchema = z.object({
   fillAdjustedCostPct: z.number().nullable().default(null),
   costEvidenceSource: z.string().nullable().default(null),
   costEvidenceStatus: z.string().nullable().default(null),
+  paperFillTelemetryStatus: z.enum([
+    'paper_model_not_exchange_reconciled',
+    'missing_predicted_open_cost',
+  ]).nullable().default(null),
+  paperFillModelSource: z.string().nullable().default(null),
+  paperFillExpectedCostBps: z.number().nullable().default(null),
+  paperFillExpectedCostPct: z.number().nullable().default(null),
+  paperFillSimulatedSlippageBps: z.number().nullable().default(null),
+  paperFillRouteCostBps: z.number().nullable().default(null),
+  paperFillIsExchangeReconciled: z.boolean().nullable().default(null),
   predictedOpenEvidenceStatus: z.enum([
     'ok',
     'missing',
@@ -118,6 +128,8 @@ export interface PaperTradeCostEvidenceInput {
   roundTripCostBpsAtOpen?: number | null
   routeCostBpsAtOpen?: number | null
   estimatedRoundTripCostPctAtOpen?: number | null
+  markMatchPenaltyBpsAtOpen?: number | null
+  matchPriceSourceAtOpen?: string | null
 }
 
 export type PaperTradeCostEvidence = Pick<
@@ -128,6 +140,13 @@ export type PaperTradeCostEvidence = Pick<
   | 'fillAdjustedCostPct'
   | 'costEvidenceSource'
   | 'costEvidenceStatus'
+  | 'paperFillTelemetryStatus'
+  | 'paperFillModelSource'
+  | 'paperFillExpectedCostBps'
+  | 'paperFillExpectedCostPct'
+  | 'paperFillSimulatedSlippageBps'
+  | 'paperFillRouteCostBps'
+  | 'paperFillIsExchangeReconciled'
 >
 
 export type PaperTradePredictedOpenEvidence = Pick<
@@ -167,20 +186,45 @@ export type PaperTradeMfeMaeEvidence = Pick<
   | 'mfeBeforeStop'
 >
 
+// Default spread cost estimate (5 bps) — used when route cost model data is unavailable
+// This allows paper execution to record cost evidence even during cost model bootstrap
+const DEFAULT_SPREAD_COST_BPS = 5
+
 export function buildPaperTradeCostEvidence(input: PaperTradeCostEvidenceInput): PaperTradeCostEvidence {
   const explicitBps = firstNonNegativeFinite([
     input.roundTripCostBpsAtOpen,
     input.routeCostBpsAtOpen,
   ])
   const estimatedPct = nonNegativeFinite(input.estimatedRoundTripCostPctAtOpen)
-  const costBps = explicitBps ?? (estimatedPct == null ? null : roundCostNumber(estimatedPct * 100))
+  let costBps = explicitBps ?? (estimatedPct == null ? null : roundCostNumber(estimatedPct * 100))
+  let simulatedSlippageBps = firstNonNegativeFinite([
+    input.markMatchPenaltyBpsAtOpen,
+  ])
+  const routeCostBps = firstNonNegativeFinite([
+    input.routeCostBpsAtOpen,
+    input.roundTripCostBpsAtOpen,
+  ])
+  // If no cost evidence is available, use spread-based default estimate
+  // This breaks the chicken-and-egg deadlock between cost model and paper execution
+  const isFallback = explicitBps == null && estimatedPct == null
+  if (isFallback) {
+    costBps = DEFAULT_SPREAD_COST_BPS
+    simulatedSlippageBps = DEFAULT_SPREAD_COST_BPS / 2
+  }
   return {
     realizedRoundTripCostBps: null,
     realizedCostBps: null,
     fillAdjustedCostBps: null,
     fillAdjustedCostPct: null,
-    costEvidenceSource: costBps == null ? null : 'paper_cost_model_at_open',
-    costEvidenceStatus: costBps == null ? 'missing' : 'paper_model_not_exchange_reconciled',
+    costEvidenceSource: isFallback ? 'spread_estimate' : (costBps == null ? null : 'paper_cost_model_at_open'),
+    costEvidenceStatus: isFallback ? 'estimated' : (costBps == null ? 'missing' : 'paper_model_not_exchange_reconciled'),
+    paperFillTelemetryStatus: costBps == null ? 'missing_predicted_open_cost' : 'paper_model_not_exchange_reconciled',
+    paperFillModelSource: costBps == null ? null : `paper_open_cost_model:${input.matchPriceSourceAtOpen ?? 'unknown_match_price'}`,
+    paperFillExpectedCostBps: costBps,
+    paperFillExpectedCostPct: costBps == null ? null : roundCostNumber(costBps / 100),
+    paperFillSimulatedSlippageBps: simulatedSlippageBps,
+    paperFillRouteCostBps: routeCostBps,
+    paperFillIsExchangeReconciled: false,
   }
 }
 

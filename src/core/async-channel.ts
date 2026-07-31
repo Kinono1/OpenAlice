@@ -4,6 +4,10 @@
  * Used by Claude Code and Vercel providers where events arrive via synchronous
  * callbacks (onToolUse, onToolResult, onStepFinish) but consumers need an
  * AsyncIterator interface.
+ *
+ * IMPORTANT: When the channel is closed, the final IteratorResult has `done: true`
+ * and `value: undefined`. Consumers MUST check the `done` flag before accessing
+ * `value` to avoid runtime errors with non-nullable types.
  */
 
 export interface AsyncChannel<T> {

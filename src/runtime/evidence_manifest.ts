@@ -26,6 +26,7 @@ export interface EvidenceManifest {
   git: GitEvidenceSnapshot
   dqStatus: EvidenceTrust
   evidenceTrust: EvidenceTrust
+  /** @deprecated Use evidenceTrust instead. businessStatus is user-supplied and can diverge from computed trust. */
   businessStatus: 'pass' | 'warn' | 'fail' | 'unknown'
   recordsIn: number | null
   recordsOut: number | null

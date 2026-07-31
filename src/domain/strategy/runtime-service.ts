@@ -1,6 +1,8 @@
 import ccxt from 'ccxt'
 import type { Exchange } from 'ccxt'
 import { Contract } from '@traderalice/ibkr'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { OhlcvData } from '../analysis/indicator/types.js'
 import type { CryptoClientLike } from '../market-data/client/types.js'
 import type { AccountManager } from '../trading/account-manager.js'
@@ -90,6 +92,58 @@ interface ResolvedDerivativesData {
 
 const publicExchangeCache = new Map<string, Promise<Exchange>>()
 const runtimeIcMonitorSnapshots = new Map<string, IcMonitorSnapshot>()
+
+// ── Persistent IC Monitor Snapshots ────────────────────────────────────
+function icMonitorByKeyPath(): string {
+  return process.env.OPENALICE_DATA_DIR
+    ? path.join(process.env.OPENALICE_DATA_DIR, 'runtime', 'ic_monitor_snapshot.by_key.json')
+    : path.join('data', 'runtime', 'ic_monitor_snapshot.by_key.json')
+}
+let _ensureIcMonitorPromise: Promise<void> | null = null
+
+/** Lazy-load the IC monitor snapshot map from disk. Idempotent. */
+async function ensureIcMonitorSnapshotsLoaded(): Promise<void> {
+  if (_ensureIcMonitorPromise) return _ensureIcMonitorPromise
+  _ensureIcMonitorPromise = (async () => {
+    const snapshotPath = icMonitorByKeyPath()
+    try {
+      const raw = await fs.promises.readFile(snapshotPath, 'utf-8')
+      const parsed: Record<string, IcMonitorSnapshot> = JSON.parse(raw)
+      for (const [key, snap] of Object.entries(parsed)) {
+        runtimeIcMonitorSnapshots.set(key, snap)
+      }
+      console.log(`ic-monitor: loaded ${Object.keys(parsed).length} snapshot(s) from ${snapshotPath}`)
+    } catch (err: unknown) {
+      // Missing/corrupt file on first run — start fresh, log a warning
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`ic-monitor: failed to load snapshots from ${snapshotPath}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  })()
+  return _ensureIcMonitorPromise
+}
+
+/** Persist the current IC monitor snapshot map to disk (atomic write). */
+async function saveIcMonitorSnapshotsToFile(): Promise<void> {
+  const snapshotPath = icMonitorByKeyPath()
+  const dir = path.dirname(snapshotPath)
+  await fs.promises.mkdir(dir, { recursive: true })
+  const data: Record<string, IcMonitorSnapshot> = {}
+  for (const [key, snap] of runtimeIcMonitorSnapshots) {
+    data[key] = snap
+  }
+  const tmp = `${snapshotPath}.tmp.${process.pid}.${Date.now()}`
+  await fs.promises.writeFile(tmp, JSON.stringify(data), 'utf-8')
+  await fs.promises.rename(tmp, snapshotPath)
+}
+
+let _saveIcMonitorChain: Promise<void> = Promise.resolve()
+function persistIcMonitorSnapshots(): Promise<void> {
+  _saveIcMonitorChain = _saveIcMonitorChain
+    .catch(() => undefined)
+    .then(() => saveIcMonitorSnapshotsToFile())
+  return _saveIcMonitorChain
+}
 
 function normalizeOhlcv(data: Record<string, unknown>[]): OhlcvData[] {
   return data
@@ -1081,6 +1135,7 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
   })
 
   const strategyConfig = await readStrategyConfig()
+  await ensureIcMonitorSnapshotsLoaded()
   const icMonitorCacheKey = runtimeIcMonitorCacheKey(request)
   const icMonitorSnapshot =
     request.icMonitorSnapshot ?? runtimeIcMonitorSnapshots.get(icMonitorCacheKey)
@@ -1120,6 +1175,45 @@ export async function evaluateRuntimeStrategySnapshotFromSources(input: {
   })
   if (snapshot.icMonitorSnapshot) {
     runtimeIcMonitorSnapshots.set(icMonitorCacheKey, snapshot.icMonitorSnapshot)
+    await persistIcMonitorSnapshots()
+  }
+
+  // Apply portfolio risk overlay if positions are available
+  if (
+    input.accountManager &&
+    strategyConfig.positionSizing.portfolioRiskOverlay?.enabled &&
+    'positions' in (input as unknown as Record<string, unknown>)
+  ) {
+    // positions variable was scoped inside the accountManager block — re-fetch
+    const accountUta = input.accountManager.resolve(request.source)[0]
+    if (accountUta) {
+      const currentPositions = await accountUta.getPositions().catch(() => [])
+      const pendingOps = accountUta.getPendingOrderIds().map((p) => ({
+        symbol: p.symbol,
+        side: 'long' as const,
+        notional: 0,
+      }))
+      try {
+        const { applyPortfolioRiskOverlay } = await import('./position-sizing/portfolio-risk-overlay.js')
+        const overlay = applyPortfolioRiskOverlay({
+          currentSnapshot: snapshot as any,
+          currentPositions: currentPositions
+            .map((p) => ({
+              symbol: p.contract.symbol ?? '',
+              side: p.side,
+              notional: p.marketValue ?? 0,
+            })),
+          pendingOperations: pendingOps,
+          config: strategyConfig.positionSizing.portfolioRiskOverlay,
+        })
+        snapshot.positionSizing.portfolioRiskOverlay = overlay
+        snapshot.positionSizing.recommendedPctOfEquity = overlay.cappedPct
+      } catch (err) {
+        console.warn(
+          `portfolio-risk-overlay: skipped for ${request.symbol}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    }
   }
 
   if (request.side && (request.requestedSize != null || request.requestedUsdSize != null)) {

@@ -12,6 +12,8 @@ import {
 describe('refresh_eth_carry_pipeline', () => {
   it('defaults to dry-run planning without runtime publish', () => {
     expect(parseArgs([])).toMatchObject({
+      ethFundingPath: 'data/research/derivatives_history/okx_ETH_USDT_USDT_funding_history.json',
+      btcFundingPath: 'data/research/derivatives_history/okx_BTC_USDT_USDT_funding_history.json',
       dryRun: true,
       publishRuntimeTargets: false,
     })

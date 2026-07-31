@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  alignAssetsByTailLength,
+  buildBestConfigArtifact,
   buildCandidateRegistries,
   buildOptimizationSweepArtifact,
   createSeededRng,
+  evaluateConfig,
   parseOptimizerArgs,
   rankNormalizeSweepResults,
+  summarizeHardGateRejections,
   type SweepResult,
 } from './optimize_cross_sectional.js'
 
@@ -14,11 +18,15 @@ describe('optimize_cross_sectional promotion v2 integration', () => {
       seed: 'openalice-cross-sectional-v2.6',
       samples: 200,
       runtimeDir: 'data/runtime',
+      forwardHours: [12, 24, 48],
+      executionMode: 'paper',
       dryRun: true,
     })
-    expect(parseOptimizerArgs(['--seed', 'abc', '--samples', '7', '--dryRun', 'false'])).toMatchObject({
+    expect(parseOptimizerArgs(['--seed', 'abc', '--samples', '7', '--forwardHours', '24,48,24', '--executionMode', 'legacy_thirds', '--dryRun', 'false'])).toMatchObject({
       seed: 'abc',
       samples: 7,
+      forwardHours: [24, 48],
+      executionMode: 'legacy_thirds',
       dryRun: false,
     })
   })
@@ -48,6 +56,27 @@ describe('optimize_cross_sectional promotion v2 integration', () => {
     expect(candidateRegistry.graveyardCandidateCount).toBe(1)
     expect(graveyard.candidateCount).toBe(1)
     expect(graveyard.entries[0].status).toBe('graveyard')
+  })
+
+  it('can represent optimizer runs with no passing best config without reusing stale winners', () => {
+    const artifact = buildBestConfigArtifact({
+      experimentId: 'experiment-1',
+      generatedAt: '2026-05-05T00:00:00.000Z',
+      dataRange: { start: '2026-05-01T00:00:00.000Z', end: '2026-05-05T00:00:00.000Z' },
+      assetCount: 34,
+      best: undefined,
+      evaluatedConfigs: 178,
+      hardGatePassedCount: 0,
+    })
+
+    expect(artifact).toMatchObject({
+      strategyId: 'cross_sectional_v2',
+      status: 'no_passing_config',
+      selectedConfig: false,
+      config: null,
+      hardGatePassedCount: 0,
+      noPassingConfigReason: 'optimizer_hard_gate_passed_count_zero',
+    })
   })
 
   it('ranks by normalized utility rather than raw mixed-unit metric scale', () => {
@@ -136,6 +165,114 @@ describe('optimize_cross_sectional promotion v2 integration', () => {
     expect(scored.find((result) => result.lookbackHours === 120)?.score).toBe(1)
   })
 
+  it('summarizes hard-gate rejection causes without relying on ad hoc artifact queries', () => {
+    const insufficientSignals = makeSweepResult({
+      lookbackHours: 72,
+      signals: 3,
+      netAvgSpread: 0.7,
+      hardGateStatus: 'fail',
+      hardGateReasons: ['insufficient_signals:3<10'],
+    })
+    const negativeNetA = makeSweepResult({
+      lookbackHours: 120,
+      signals: 20,
+      netAvgSpread: -0.2,
+      hardGateStatus: 'fail',
+      hardGateReasons: ['non_positive_net_expectancy:-0.2000'],
+    })
+    const negativeNetB = makeSweepResult({
+      lookbackHours: 168,
+      signals: 25,
+      netAvgSpread: -0.1,
+      hardGateStatus: 'fail',
+      hardGateReasons: ['non_positive_net_expectancy:-0.2000'],
+    })
+    const passed = makeSweepResult({
+      lookbackHours: 240,
+      hardGateStatus: 'pass',
+      hardGateReasons: [],
+    })
+
+    const summary = summarizeHardGateRejections([insufficientSignals, negativeNetA, negativeNetB, passed])
+
+    expect(summary.rejectedCount).toBe(3)
+    expect(summary.byReason).toEqual([
+      { reason: 'non_positive_net_expectancy:-0.2000', count: 2 },
+      { reason: 'insufficient_signals:3<10', count: 1 },
+    ])
+    expect(summary.byReasonSet[0]).toMatchObject({
+      reasons: ['non_positive_net_expectancy:-0.2000'],
+      count: 2,
+      bestByNetAvgSpread: {
+        lookbackHours: 168,
+        signals: 25,
+        netAvgSpread: -0.1,
+      },
+      bestBySignalCount: {
+        lookbackHours: 168,
+        signals: 25,
+      },
+    })
+  })
+
+  it('aligns assets by common tail length before cross-sectional evaluation', () => {
+    const aligned = alignAssetsByTailLength([
+      {
+        symbol: 'A-USDT',
+        candles: [
+          candle(1, 101),
+          candle(2, 102),
+          candle(3, 103),
+          candle(4, 104),
+        ],
+      },
+      {
+        symbol: 'B-USDT',
+        candles: [
+          candle(3, 203),
+          candle(4, 204),
+        ],
+      },
+    ])
+
+    expect(aligned).toEqual([
+      {
+        symbol: 'A-USDT',
+        candles: [
+          candle(3, 103),
+          candle(4, 104),
+        ],
+      },
+      {
+        symbol: 'B-USDT',
+        candles: [
+          candle(3, 203),
+          candle(4, 204),
+        ],
+      },
+    ])
+  })
+
+  it('evaluates optimizer candidates with the same top/bottom universe shape as paper execution', () => {
+    const result = evaluateConfig(
+      syntheticOptimizerAssets(34, 80),
+      24,
+      48,
+      12,
+      0,
+      0,
+      99,
+      'paper',
+    )
+
+    expect(result).toMatchObject({
+      executionMode: 'paper',
+      topN: 1,
+      bottomN: 1,
+      minUniverseSize: 17,
+    })
+  })
+
   it('emits every scanned config into a complete optimizer trial universe', () => {
     const passed = makeSweepResult({ lookbackHours: 72, hardGateStatus: 'pass', hardGateReasons: [], score: 1 })
     const failed = makeSweepResult({
@@ -160,6 +297,12 @@ describe('optimize_cross_sectional promotion v2 integration', () => {
       schemaVersion: 'cross_sectional_optimizer_sweep.v2',
       candidateCount: 2,
       hardGatePassedCount: 1,
+      summary: {
+        hardGateRejections: {
+          rejectedCount: 1,
+          byReason: [{ reason: 'insufficient_signals:3<10', count: 1 }],
+        },
+      },
       trialUniverse: {
         completeForThisSweep: true,
         rawM: 2,
@@ -200,6 +343,10 @@ function makeSweepResult(overrides: Partial<{
     minSpreadPct: 1,
     maxVolPct: 90,
     forwardHours: 48,
+    executionMode: 'paper',
+    topN: 1,
+    bottomN: 1,
+    minUniverseSize: 17,
     signals: overrides.signals ?? 20,
     winRate: overrides.winRate ?? 55,
     spreadCum: 8,
@@ -222,4 +369,24 @@ function makeSweepResult(overrides: Partial<{
     filteredCount: 0,
     score: overrides.score ?? 1,
   }
+}
+
+function candle(time: number, close: number) {
+  return {
+    time,
+    open: close,
+    high: close,
+    low: close,
+    close,
+    volume: 1,
+  }
+}
+
+function syntheticOptimizerAssets(assetCount: number, candleCount: number) {
+  return Array.from({ length: assetCount }, (_, assetIndex) => ({
+    symbol: `S${assetIndex}-USDT`,
+    candles: Array.from({ length: candleCount }, (_, index) =>
+      candle(1_700_000_000_000 + index * 3_600_000, 100 + index * 0.01 + assetIndex * 0.1),
+    ),
+  }))
 }

@@ -4,6 +4,7 @@ import { Contract, Order, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import { MaxPositionSizeGuard } from './max-position-size.js'
 import { CooldownGuard } from './cooldown.js'
 import { SymbolWhitelistGuard } from './symbol-whitelist.js'
+import { GovernanceActionStatusGuard } from './governance-action-status.js'
 import { createGuardPipeline } from './guard-pipeline.js'
 import { resolveGuards, registerGuard } from './registry.js'
 import type { GuardContext, OperationGuard } from './types.js'
@@ -343,5 +344,58 @@ describe('registerGuard', () => {
     const guards = resolveGuards([{ type: 'test-custom' }])
     expect(guards).toHaveLength(1)
     expect(guards[0].name).toBe('test-custom')
+  })
+
+  describe('GovernanceActionStatusGuard', () => {
+    it('allows placeOrder when no governance metadata', () => {
+      const guard = new GovernanceActionStatusGuard({})
+      const op: Operation = { action: 'placeOrder', contract: makeContract(), order: new Order() }
+      expect(guard.check(makeContext({ operation: op }))).toBeNull()
+    })
+
+    it('allows placeOrder with non-blocking actionStatus', () => {
+      const guard = new GovernanceActionStatusGuard({})
+      const op: Operation = {
+        action: 'placeOrder', contract: makeContract(), order: new Order(),
+        governance: { actionStatus: 'attack', evaluatedAt: new Date().toISOString() },
+      }
+      expect(guard.check(makeContext({ operation: op }))).toBeNull()
+    })
+
+    it('rejects placeOrder with no-trade actionStatus', () => {
+      const guard = new GovernanceActionStatusGuard({})
+      const op: Operation = {
+        action: 'placeOrder', contract: makeContract(), order: new Order(),
+        governance: { actionStatus: 'no-trade', evaluatedAt: new Date().toISOString() },
+      }
+      const result = guard.check(makeContext({ operation: op }))
+      expect(result).not.toBeNull()
+      expect(result).toContain('no-trade')
+    })
+
+    it('allows risk-reducing order even with no-trade actionStatus', () => {
+      const guard = new GovernanceActionStatusGuard({})
+      const contract = makeContract({ symbol: 'AAPL' })
+      const order = new Order()
+      order.action = 'SELL'
+      const op: Operation = {
+        action: 'placeOrder', contract, order,
+        governance: { actionStatus: 'no-trade', evaluatedAt: new Date().toISOString() },
+      }
+      const ctx = makeContext({
+        operation: op,
+        positions: [makePosition({ contract, side: 'long', quantity: new Decimal(100), marketPrice: 150, avgCost: 150, marketValue: 15000, unrealizedPnL: 0, realizedPnL: 0 })],
+      })
+      expect(guard.check(ctx)).toBeNull()
+    })
+
+    it('allows closePosition regardless of actionStatus', () => {
+      const guard = new GovernanceActionStatusGuard({})
+      const op: Operation = {
+        action: 'closePosition', contract: makeContract(),
+        governance: { actionStatus: 'no-trade', evaluatedAt: new Date().toISOString() },
+      }
+      expect(guard.check(makeContext({ operation: op }))).toBeNull()
+    })
   })
 })

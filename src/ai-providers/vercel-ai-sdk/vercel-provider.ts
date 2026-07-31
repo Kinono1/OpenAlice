@@ -7,6 +7,7 @@
  */
 
 import type { ModelMessage, Tool } from 'ai'
+import type { SharedV3ProviderOptions } from '@ai-sdk/provider'
 import type { ProviderResult, ProviderEvent, AIProvider, GenerateOpts } from '../types.js'
 import type { SessionEntry } from '../../core/session.js'
 import type { Agent } from './agent.js'
@@ -35,9 +36,7 @@ export class VercelAIProvider implements AIProvider {
     const { model, key, providerName } = await createModelFromConfig(modelOverride)
     const allTools = await this.getTools()
 
-    const providerOptions = providerName === 'openai-compatible'
-      ? { 'openai-compatible': { reasoningEffort: 'xhigh', forceReasoning: true } }
-      : undefined
+    const providerOptions = buildProviderOptions(providerName)
 
     // Per-channel overrides: skip cache and create a fresh agent
     if (disabledTools?.length || modelOverride) {
@@ -106,4 +105,14 @@ export class VercelAIProvider implements AIProvider {
     yield { type: 'done', result: { text: result.text ?? '', media } }
   }
 
+}
+
+function buildProviderOptions(providerName: string): SharedV3ProviderOptions | undefined {
+  if (providerName === 'openai-compatible') {
+    return { 'openai-compatible': { reasoningEffort: 'xhigh', forceReasoning: true } }
+  }
+  if (providerName === 'anthropic') {
+    return { anthropic: { thinking: { type: 'enabled', budgetTokens: 32000 } } }
+  }
+  return undefined
 }

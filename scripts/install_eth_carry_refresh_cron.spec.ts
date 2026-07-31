@@ -21,6 +21,22 @@ describe('install_eth_carry_refresh_cron', () => {
     })
   })
 
+  it('builds a script spec with explicit arguments for shared OpenAlice cron wrapper tasks', () => {
+    const script = buildEthCarryCronScript({
+      repoRoot: '/repo/OpenAlice',
+      approvedScript: '/repo/OpenAlice/scripts/cron_openalice_task.sh',
+      args: ['accumulate_1s_data'],
+      notificationPath: '/repo/OpenAlice/data/runtime/cron_openalice_task/accumulate_1s_data_notification.json',
+    })
+
+    expect(script).toEqual({
+      path: '/repo/OpenAlice/scripts/cron_openalice_task.sh',
+      args: ['accumulate_1s_data'],
+      cwd: '/repo/OpenAlice',
+      notificationPath: '/repo/OpenAlice/data/runtime/cron_openalice_task/accumulate_1s_data_notification.json',
+    })
+  })
+
   it('upserts the ETH carry cron job without creating duplicates', () => {
     const first = upsertCronJobStore(
       { jobs: [] },
@@ -64,6 +80,51 @@ describe('install_eth_carry_refresh_cron', () => {
     expect(second.jobs[0]?.schedule).toEqual({ kind: 'cron', cron: '10 7 * * *' })
   })
 
+  it('removes all duplicate jobs with the same name during upsert', () => {
+    const duplicate = {
+      id: 'duplicate',
+      name: 'market_intel_refresh_15m',
+      enabled: true,
+      kind: 'script' as const,
+      schedule: { kind: 'cron' as const, cron: '1 * * * *' },
+      payload: '',
+      state: { nextRunAtMs: 1, lastRunAtMs: null, lastStatus: null, consecutiveErrors: 0 },
+      createdAt: 1,
+    }
+    const updated = upsertCronJobStore(
+      { jobs: [{ ...duplicate, id: 'first' }, { ...duplicate, id: 'second' }] },
+      {
+        name: 'market_intel_refresh_15m',
+        schedule: { kind: 'cron', cron: '*/15 * * * *' },
+        payload: '',
+        kind: 'script',
+        enabled: true,
+        nowMs: Date.UTC(2026, 6, 17, 0, 0, 0),
+      },
+    )
+
+    expect(updated.jobs.filter(job => job.name === 'market_intel_refresh_15m')).toHaveLength(1)
+    expect(updated.jobs[0]?.id).toBe('first')
+    expect(updated.jobs[0]?.schedule).toEqual({ kind: 'cron', cron: '*/15 * * * *' })
+  })
+
+  it('enables validated P0 shadow jobs while keeping candidate evolution disabled', () => {
+    expect(OPENALICE_SCRIPT_CRON_SPECS.gated_improvement_candidate_daily.enabled).toBe(false)
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_instrument_master_refresh_15m.enabled).toBe(true)
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_public_fast_refresh_1m.enabled).toBe(true)
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_public_broad_refresh_5m.enabled).toBe(true)
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_warehouse_compact_hourly.enabled).toBe(true)
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_depth_universe_daily.enabled).toBe(true)
+  })
+
+  it('defines SSD archive and reminder presets without external schedulers', () => {
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_ssd_presence_archive_probe_15m).toMatchObject({ cronExpr: '7,22,37,52 * * * *', args: ['ssd_probe'] })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_ssd_weekly_reminder_sunday).toMatchObject({ cronExpr: '0 20 * * 0', args: ['ssd_reminder_weekly'] })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_ssd_followup_reminder_mon_wed).toMatchObject({ cronExpr: '0 20 * * 1-3', args: ['ssd_reminder_followup'] })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_ssd_integrity_audit_weekly).toMatchObject({ cronExpr: '30 22 * * 0', args: ['ssd_integrity'] })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_warehouse_retention_daily).toMatchObject({ cronExpr: '35 4 * * *', args: ['retention'] })
+  })
+
   it('defines deterministic single-script presets for paper diagnostics jobs', () => {
     expect(OPENALICE_SCRIPT_CRON_SPECS.paper_policy_shadow_settle_5m).toMatchObject({
       jobName: 'paper_policy_shadow_settle_5m',
@@ -99,6 +160,60 @@ describe('install_eth_carry_refresh_cron', () => {
       cronExpr: '18 * * * *',
       approvedScript: 'scripts/cron_p1_trading_evidence.sh',
       notificationPath: 'data/runtime/p1_trading_evidence_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_public_1h_accumulate_hourly).toMatchObject({
+      jobName: 'okx_public_1h_accumulate_hourly',
+      cronExpr: '3 * * * *',
+      approvedScript: 'scripts/cron_openalice_task.sh',
+      args: ['accumulate_live_data'],
+      notificationPath: 'data/runtime/cron_openalice_task/accumulate_live_data_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_public_5m_accumulate_5m).toMatchObject({
+      jobName: 'okx_public_5m_accumulate_5m',
+      cronExpr: '0-59/5 * * * *',
+      approvedScript: 'scripts/cron_openalice_task.sh',
+      args: ['accumulate_5m_data'],
+      notificationPath: 'data/runtime/cron_openalice_task/accumulate_5m_data_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_public_1s_accumulate_5m).toMatchObject({
+      jobName: 'okx_public_1s_accumulate_5m',
+      cronExpr: '1-59/5 * * * *',
+      approvedScript: 'scripts/cron_openalice_task.sh',
+      args: ['accumulate_1s_data'],
+      notificationPath: 'data/runtime/cron_openalice_task/accumulate_1s_data_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.okx_public_freshness_audit_5m).toMatchObject({
+      jobName: 'okx_public_freshness_audit_5m',
+      cronExpr: '2-59/5 * * * *',
+      approvedScript: 'scripts/cron_openalice_task.sh',
+      args: ['live_data_freshness_audit'],
+      notificationPath: 'data/runtime/cron_openalice_task/live_data_freshness_audit_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.runtime_fee_auth_tick_4h).toMatchObject({
+      jobName: 'runtime_fee_auth_tick_4h',
+      cronExpr: '11 */4 * * *',
+      approvedScript: 'scripts/cron_openalice_task.sh',
+      args: ['runtime_fee_auth_tick'],
+      notificationPath: 'data/runtime/cron_openalice_task/runtime_fee_auth_tick_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.prospective_evidence_tick_hourly).toMatchObject({
+      jobName: 'prospective_evidence_tick_hourly',
+      cronExpr: '9 * * * *',
+      approvedScript: 'scripts/cron_openalice_task.sh',
+      args: ['prospective_evidence_tick'],
+      notificationPath: 'data/runtime/cron_openalice_task/prospective_evidence_tick_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.low_vol_research_daily).toMatchObject({
+      jobName: 'low_vol_research_daily',
+      cronExpr: '0 2 * * *',
+      approvedScript: 'scripts/cron_low_vol_research.sh',
+      notificationPath: 'data/runtime/low_vol_research_daily_notification.json',
+    })
+    expect(OPENALICE_SCRIPT_CRON_SPECS.gated_improvement_candidate_daily).toMatchObject({
+      jobName: 'gated_improvement_candidate_daily',
+      cronExpr: '30 3 * * *',
+      approvedScript: 'scripts/cron_gated_improvement_candidate.sh',
+      enabled: false,
     })
   })
 

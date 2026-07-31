@@ -163,10 +163,10 @@ function parseArgs(argv: string[]): CliArgs {
   return {
     ethFundingPath:
       raw.get('ethFundingPath') ??
-      'data/research/derivatives_history/binance_ETH_USDT_USDT_funding_history.json',
+      'data/research/derivatives_history/okx_ETH_USDT_USDT_funding_history.json',
     btcFundingPath:
       raw.get('btcFundingPath') ??
-      'data/research/derivatives_history/binance_BTC_USDT_USDT_funding_history.json',
+      'data/research/derivatives_history/okx_BTC_USDT_USDT_funding_history.json',
     lookbackBars: parseIntArg(raw.get('lookbackBars'), 6000, 'lookbackBars'),
     trainBars: parseIntArg(raw.get('trainBars'), 3600, 'trainBars'),
     testBars: parseIntArg(raw.get('testBars'), 1200, 'testBars'),

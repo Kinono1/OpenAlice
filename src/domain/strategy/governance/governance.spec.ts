@@ -33,6 +33,22 @@ describe('strategy governance', () => {
     expect(breakdown.totalScore).toBe(84)
   })
 
+  it('fails closed to no-trade when data is stale', () => {
+    const result = evaluateSignalGovernance(
+      {
+        sourceTier: 'L1',
+        useType: 'U1',
+        decisionStrength: 'D1',
+        sentiment: 'S0',
+      },
+      { staleData: true },
+    )
+
+    expect(result.baseActionStatus).toBe('attack-lite')
+    expect(result.actionStatus).toBe('no-trade')
+    expect(result.staleDataApplied).toBe(true)
+  })
+
   it('maps high-confidence signals to attack by default', () => {
     const result = evaluateSignalGovernance({
       sourceTier: 'L1',
@@ -104,6 +120,20 @@ describe('strategy governance', () => {
     expect(holdResult.actionStatus).toBe('hold')
     expect(reduceResult.baseActionStatus).toBe('reduce')
     expect(reduceResult.actionStatus).toBe('reduce')
+  })
+
+  it('keeps marginal 55-64 point signals below probe after threshold hardening', () => {
+    const result = evaluateSignalGovernance({
+      sourceTier: 'L2',
+      useType: 'U4',
+      decisionStrength: 'D4',
+      sentiment: 'S0',
+    })
+
+    expect(result.breakdown.totalScore).toBeGreaterThanOrEqual(55)
+    expect(result.breakdown.totalScore).toBeLessThan(65)
+    expect(result.baseActionStatus).toBe('hold')
+    expect(result.actionStatus).toBe('hold')
   })
 
   it('drops weak signals to no-trade', () => {

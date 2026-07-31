@@ -18,6 +18,15 @@ import { createSnapshotScheduler, type SnapshotScheduler } from './scheduler.js'
 import type { UTASnapshot, SnapshotIndex } from './types.js'
 import '../contract-ext.js'
 
+vi.mock('../../../runtime/release_gate_status.js', () => ({
+  loadReleaseGateStatus: vi.fn().mockResolvedValue({
+    version: 1, generatedAt: new Date().toISOString(),
+    allowPaperTrading: true, allowLiveTrading: true,
+    failedChecks: [], warningChecks: [],
+  }),
+  isReleaseGateStatusBlocking: vi.fn().mockReturnValue({ blocking: false }),
+}))
+
 // ==================== Helpers ====================
 
 function createUTA(broker?: MockBroker, options?: UnifiedTradingAccountOptions) {
@@ -513,6 +522,28 @@ describe('Snapshot Scheduler', () => {
     await new Promise(r => setTimeout(r, 50))
 
     expect(mockService.takeAllSnapshots).toHaveBeenCalledWith('scheduled')
+    expect(job.state.lastStatus).toBe('ok')
+    expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+      jobId: job.id,
+      jobName: '__snapshot__',
+    })
+  })
+
+  it('reports snapshot scheduler failures to CronEngine', async () => {
+    ;(mockService.takeAllSnapshots as any).mockRejectedValueOnce(new Error('snapshot backend unavailable'))
+    await scheduler.start()
+    const job = cronEngine.list().find(j => j.name === '__snapshot__')!
+
+    await cronEngine.runNow(job.id)
+    await vi.waitFor(() => expect(job.state.lastStatus).toBe('error'))
+
+    expect(job.state.lastErrorClass).toBe('snapshot_error')
+    expect(eventLog.recent({ type: 'cron.error' })[0].payload).toMatchObject({
+      jobId: job.id,
+      jobName: '__snapshot__',
+      error: 'snapshot backend unavailable',
+      errorClass: 'snapshot_error',
+    })
   })
 
   // #29

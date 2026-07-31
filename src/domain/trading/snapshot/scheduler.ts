@@ -37,13 +37,44 @@ export function createSnapshotScheduler(deps: {
   async function handleFire(entry: EventLogEntry): Promise<void> {
     const payload = entry.payload as CronFirePayload
     if (payload.jobName !== SNAPSHOT_JOB_NAME) return
-    if (processing) return
+    if (processing) {
+      await eventLog.append('cron.done', {
+        jobId: payload.jobId,
+        jobName: payload.jobName,
+        sourceFireSeq: entry.seq,
+        durationMs: 0,
+        delivered: false,
+        parsedStatus: 'CRON_SKIP',
+        parsedReason: 'snapshot_already_processing',
+      })
+      return
+    }
 
     processing = true
+    const startMs = Date.now()
     try {
       await snapshotService.takeAllSnapshots('scheduled')
+      await eventLog.append('cron.done', {
+        jobId: payload.jobId,
+        jobName: payload.jobName,
+        sourceFireSeq: entry.seq,
+        durationMs: Date.now() - startMs,
+        delivered: false,
+        parsedStatus: 'CRON_SKIP',
+        parsedReason: 'snapshot_complete',
+      })
     } catch (err) {
-      console.warn('snapshot-scheduler: error:', err instanceof Error ? err.message : err)
+      const error = err instanceof Error ? err.message : String(err)
+      console.warn('snapshot-scheduler: error:', error)
+      await eventLog.append('cron.error', {
+        jobId: payload.jobId,
+        jobName: payload.jobName,
+        sourceFireSeq: entry.seq,
+        error,
+        errorClass: 'snapshot_error',
+        permanent: false,
+        durationMs: Date.now() - startMs,
+      })
     } finally {
       processing = false
     }

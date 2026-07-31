@@ -1591,6 +1591,9 @@ export function evaluateGateExpiry(gate: GateResult, now: Date = new Date()): st
 }
 
 export function isGateEffectivelyPass(gate: GateResult, now: Date = new Date()): boolean {
+  if (gate.status === 'fail') {
+    return false
+  }
   return gate.status === 'pass' && evaluateGateExpiry(gate, now).length === 0;
 }
 

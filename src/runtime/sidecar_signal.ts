@@ -1,4 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import type { EventLog } from "../core/event-log.js";
@@ -24,6 +23,9 @@ import {
   type PromotionReadinessV2LoadResult,
   type PromotionReadinessV2ValidatedLoadResult,
 } from "./promotion_v2_artifacts.js";
+import { writeJsonAtomic } from "./atomic_write.js";
+
+export const DEFAULT_MAX_ENVELOPE_AGE_MS = 2 * 60 * 60 * 1000 // 2 hours
 
 const supportedSources = ["tradingagents", "alphaswarm", "cryptotrade", "currencypurchases"] as const;
 
@@ -42,6 +44,81 @@ export const normalizedSidecarSignalSchema = z.object({
 });
 
 export type NormalizedSidecarSignal = z.infer<typeof normalizedSidecarSignalSchema>;
+
+// ── V5 sidecar envelope schemas ────────────────────────────────────
+
+export const cryptoDlSignalV1Schema = z.object({
+  source: z.literal('cryptotrade'),
+  strategy_id: z.string().min(1),
+  symbol: z.string().min(1),
+  as_of: z.string().datetime(),
+  target_position_bps: z.number().int(),
+  confidence_bps: z.number().int().min(0).max(10000),
+  model_id: z.string().min(1),
+  thesis: z.string().min(1),
+  label_horizon_bars: z.number().int().positive(),
+  bar_interval_ms: z.number().int().positive(),
+  target_start_delay_bars: z.number().int().nonnegative(),
+  target_start_at: z.string().datetime(),
+  target_end_at: z.string().datetime(),
+})
+
+export type CryptoDlSignalV1 = z.infer<typeof cryptoDlSignalV1Schema>
+
+export const cryptoDlSidecarEnvelopeV1Schema = z.object({
+  schema_version: z.literal(1),
+  slot_id: z.string().min(1),
+  run_id: z.string().min(1),
+  generated_at: z.string().datetime(),
+  ttl_ms: z.number().int().positive(),
+  signals: z.array(cryptoDlSignalV1Schema),
+  producer: z.string().min(1),
+  model_metadata: z.record(z.string(), z.unknown()).optional(),
+})
+
+export type CryptoDlSidecarEnvelopeV1 = z.infer<typeof cryptoDlSidecarEnvelopeV1Schema>
+
+export const cryptoDlSidecarStatusV1Schema = z.object({
+  status: z.string(),
+  slot_id: z.string(),
+  run_id: z.string(),
+  started_at: z.string().datetime(),
+  finished_at: z.string().datetime().nullable(),
+  ready: z.boolean(),
+  signals_count: z.number().int().nonnegative(),
+  errorClass: z.string().optional(),
+  errorMessage: z.string().optional(),
+})
+
+export type CryptoDlSidecarStatusV1 = z.infer<typeof cryptoDlSidecarStatusV1Schema>
+
+export const signalHealthV1Schema = z.object({
+  status: z.enum(['pending', 'warmup', 'healthy', 'decayed', 'blocked']),
+  model_id: z.string(),
+  signal_id: z.string(),
+  target_end_at: z.string().datetime(),
+  as_of: z.string().datetime(),
+  label_horizon_bars: z.number().int().positive(),
+  bar_interval_ms: z.number().int().positive(),
+  rank_ic: z.number().optional(),
+  direction_accuracy: z.number().optional(),
+  signal_decay: z.number().optional(),
+  blocked_reason: z.string().optional(),
+})
+
+export type SignalHealthV1 = z.infer<typeof signalHealthV1Schema>
+
+export const executionTopOfBookEvidenceV1Schema = z.object({
+  bid: z.number(),
+  ask: z.number(),
+  mid: z.number(),
+  spread_bps: z.number().int(),
+  snapshot_source: z.string(),
+  snapshot_at: z.string().datetime(),
+  snapshot_age_ms: z.number().int().nonnegative(),
+})
+
+export type ExecutionTopOfBookEvidenceV1 = z.infer<typeof executionTopOfBookEvidenceV1Schema>
 
 export interface SidecarSignalIntakeOptions {
   signal: unknown;
@@ -395,8 +472,7 @@ function summarizeProposedDelta(
 }
 
 async function writeJsonArtifact(path: string, payload: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  writeJsonAtomic(path, payload);
 }
 
 function uniqueSymbols(symbols: string[]): string[] {
@@ -405,4 +481,57 @@ function uniqueSymbols(symbols: string[]): string[] {
       symbols.map(symbol => symbol.trim()).filter(Boolean),
     ),
   );
+}
+
+// ── V5 slot and envelope validation ─────────────────────────────────
+
+export function computeCurrentSlotId(now?: Date): string {
+  const d = now ?? new Date()
+  const year = d.getUTCFullYear()
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  const hourSlot = Math.floor(d.getUTCHours() / 4) * 4
+  const hour = String(hourSlot).padStart(2, '0')
+  return `slot-${year}${month}${day}-${hour}`
+}
+
+export function validateSidecarEnvelope(envelope: unknown, opts?: { maxAgeMs?: number }): { valid: boolean; reason?: string } {
+  try {
+    const parsed = cryptoDlSidecarEnvelopeV1Schema.parse(envelope)
+
+    // Validate TTL (not expired)
+    const generatedAt = new Date(parsed.generated_at).getTime()
+    const now = Date.now()
+    if (!Number.isFinite(generatedAt)) {
+      return { valid: false, reason: 'invalid generated_at timestamp' }
+    }
+    if (generatedAt + parsed.ttl_ms < now) {
+      return { valid: false, reason: 'envelope TTL expired' }
+    }
+
+    const maxAgeMs = opts?.maxAgeMs ?? DEFAULT_MAX_ENVELOPE_AGE_MS
+    if (now - generatedAt > maxAgeMs) {
+      return { valid: false, reason: `envelope too old: ${now - generatedAt}ms > ${maxAgeMs}ms max` }
+    }
+
+    // Validate slot matching
+    const currentSlot = computeCurrentSlotId()
+    if (parsed.slot_id !== currentSlot) {
+      return { valid: false, reason: `slot_id mismatch: expected ${currentSlot}, got ${parsed.slot_id}` }
+    }
+
+    // Validate horizon metadata complete
+    for (const signal of parsed.signals) {
+      if (typeof signal.label_horizon_bars !== 'number' || signal.label_horizon_bars <= 0) {
+        return { valid: false, reason: `signal ${signal.model_id} missing valid label_horizon_bars` }
+      }
+      if (typeof signal.bar_interval_ms !== 'number' || signal.bar_interval_ms <= 0) {
+        return { valid: false, reason: `signal ${signal.model_id} missing valid bar_interval_ms` }
+      }
+    }
+
+    return { valid: true }
+  } catch (err) {
+    return { valid: false, reason: err instanceof Error ? err.message : 'schema validation failed' }
+  }
 }

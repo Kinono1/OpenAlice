@@ -26,4 +26,28 @@ export interface PositionSizingDecision {
   recommendedPctOfEquity: number
   method: PositionSizingMethod
   reasons: string[]
+  /** Portfolio-level risk overlay result, if applied. */
+  portfolioRiskOverlay?: OverlayResult
+}
+
+// ── Portfolio Risk Overlay ─────────────────────────────────────────────
+
+export interface PortfolioRiskOverlayConfig {
+  enabled: boolean
+  maxGrossExposurePctOfEquity: number
+  maxNetExposurePctOfEquity: number
+  maxSingleAssetPctOfEquity: number
+}
+
+export interface PortfolioPositionSummary {
+  symbol: string
+  side: 'long' | 'short'
+  notional: number
+}
+
+export interface OverlayResult {
+  cappedPct: number
+  originalPct: number
+  capped: boolean
+  reasons: string[]
 }

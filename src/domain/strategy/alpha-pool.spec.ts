@@ -1,4 +1,6 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   evaluateAlphaFactorAdmission,
@@ -8,8 +10,10 @@ import {
 
 describe('strategy alpha pool', () => {
   it('returns null for missing artifacts', () => {
-    const artifact = readAlphaPoolArtifactSync('/tmp/openalice-missing-alpha-pool.json')
-    const summary = summarizeAlphaPoolArtifact(artifact, '/tmp/openalice-missing-alpha-pool.json')
+    const dir = mkdtempSync(join(tmpdir(), 'openalice-alpha-pool-'))
+    const missingPath = join(dir, 'missing.json')
+    const artifact = readAlphaPoolArtifactSync(missingPath)
+    const summary = summarizeAlphaPoolArtifact(artifact, missingPath)
 
     expect(artifact).toBeNull()
     expect(summary.available).toBe(false)
@@ -20,10 +24,8 @@ describe('strategy alpha pool', () => {
   })
 
   it('reads and summarizes a valid alpha pool artifact', () => {
-    const dir = '/tmp/openalice-alpha-pool-test'
-    const path = `${dir}/latest.json`
-    rmSync(dir, { recursive: true, force: true })
-    mkdirSync(dir, { recursive: true })
+    const dir = mkdtempSync(join(tmpdir(), 'openalice-alpha-pool-'))
+    const path = join(dir, 'latest.json')
     writeFileSync(
       path,
       JSON.stringify(

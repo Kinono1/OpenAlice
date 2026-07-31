@@ -827,8 +827,25 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   async getOrder(orderId: string): Promise<OpenOrder | null> {
     this.ensureInit()
 
-    const ccxtSymbol = this.orderSymbolCache.get(orderId)
-    if (!ccxtSymbol) return null
+    let ccxtSymbol = this.orderSymbolCache.get(orderId)
+    if (!ccxtSymbol) {
+      // Cache miss (e.g. after restart). Try to find order by checking recent
+      // open orders across all markets — but limit to avoid excessive API calls.
+      const marketSymbols = Object.keys(this.markets).slice(0, 10)
+      for (const symbol of marketSymbols) {
+        if (!symbol) continue
+        try {
+          const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
+          const order = await fetch(this.exchange, orderId, symbol)
+          if (order) {
+            this.orderSymbolCache.set(orderId, symbol)
+            return this.convertCcxtOrder(order)
+          }
+        } catch { continue }
+      }
+      console.warn(`[CcxtBroker] order ${orderId} not found in any known market`)
+      return null
+    }
 
     const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
     try {
@@ -875,7 +892,11 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     order.totalQuantity = new Decimal(o.amount ?? 0)
     order.orderType = (o.type ?? 'market').toUpperCase()
     if (o.price != null) order.lmtPrice = o.price
-    order.orderId = parseInt(o.id, 10) || 0
+    const parsedId = parseInt(o.id, 10)
+    if (isNaN(parsedId)) {
+      console.warn(`[CcxtBroker] order ${o.id} has non-numeric ID — cannot convert to number, using 0`)
+    }
+    order.orderId = parsedId || 0
 
     const tp = o.takeProfitPrice
     const sl = o.stopLossPrice

@@ -160,24 +160,28 @@ export class SessionStore implements ISessionStore {
   /** Read all entries from the session file (including system/compact entries). */
   async readAll(): Promise<SessionEntry[]> {
     try {
-      const raw = await readFile(this.filePath, 'utf-8')
-      const entries: SessionEntry[] = []
+      // Read inside the append lock to avoid racing with concurrent writes
+      return await this.withAppendLock(async () => {
+        const raw = await readFile(this.filePath, 'utf-8')
+        const entries: SessionEntry[] = []
 
-      for (const line of raw.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
+        for (const line of raw.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
 
-        try {
-          const parsed = JSON.parse(trimmed) as unknown
-          if (isSessionEntry(parsed) && (parsed.type === 'user' || parsed.type === 'assistant' || parsed.type === 'system')) {
-            entries.push(parsed)
+          try {
+            const parsed = JSON.parse(trimmed) as unknown
+            if (isSessionEntry(parsed) && (parsed.type === 'user' || parsed.type === 'assistant' || parsed.type === 'system')) {
+              entries.push(parsed)
+            }
+          } catch {
+            console.warn(`[session] malformed JSON line in ${this.filePath}, skipping`)
+            continue
           }
-        } catch {
-          continue
         }
-      }
 
-      return entries
+        return entries
+      })
     } catch (err: unknown) {
       if (hasErrorCode(err, 'ENOENT')) {
         return []

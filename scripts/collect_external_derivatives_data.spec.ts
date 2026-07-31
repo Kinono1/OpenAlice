@@ -824,6 +824,42 @@ describe('collect_external_derivatives_data', () => {
     })
   })
 
+  it('classifies nested undici connect timeouts for network triage', async () => {
+    const root = await tempRoot()
+    const outputPath = join(root, 'events.jsonl')
+    const timeoutFetch: FetchLike = async () => {
+      const cause = new Error('Connect Timeout Error')
+      cause.name = 'ConnectTimeoutError'
+      ;(cause as Error & { code?: string }).code = 'UND_ERR_CONNECT_TIMEOUT'
+      throw new TypeError('fetch failed', { cause })
+    }
+
+    const report = await collectExternalDerivativesData({
+      symbols: ['BTCUSDT'],
+      endpoints: ['premiumIndex'],
+      period: '5m',
+      outputPath,
+      fetchTimeoutMs: 1_000,
+      maxRetries: 0,
+      dryRun: true,
+      json: true,
+    }, timeoutFetch)
+
+    expect(report.errorSummary).toEqual({ timeout: 1 })
+    expect(report.errors[0]).toMatchObject({
+      symbol: 'BTCUSDT',
+      endpoint: 'premiumIndex',
+      errorClass: 'timeout',
+    })
+    expect(report.errors[0].error).toContain('fetch failed')
+    expect(report.errors[0].error).toContain('UND_ERR_CONNECT_TIMEOUT')
+    expect(report.endpointDiagnostics[0].attemptErrors).toEqual([{
+      attempt: 1,
+      error: report.errors[0].error,
+      errorClass: 'timeout',
+    }])
+  })
+
   it('redacts credentials and token-like query parameters in attempt diagnostics', async () => {
     const root = await tempRoot()
     const outputPath = join(root, 'events.jsonl')

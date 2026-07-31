@@ -44,6 +44,7 @@ export interface LastInteraction {
 
 export class ConnectorCenter {
   private connectors = new Map<string, Connector>()
+  private channelStatuses = new Map<string, { status: 'ready' | 'degraded' | 'stopped'; detail?: string }>()
   private lastInteraction: LastInteraction | null = null
 
   constructor(eventLog?: EventLog) {
@@ -56,7 +57,19 @@ export class ConnectorCenter {
   /** Register a Connector instance. Replaces any existing registration for this channel. */
   register(connector: Connector): () => void {
     this.connectors.set(connector.channel, connector)
-    return () => { this.connectors.delete(connector.channel) }
+    this.setChannelStatus(connector.channel, 'ready')
+    return () => {
+      this.connectors.delete(connector.channel)
+      this.setChannelStatus(connector.channel, 'stopped')
+    }
+  }
+
+  setChannelStatus(channel: string, status: 'ready' | 'degraded' | 'stopped', detail?: string): void {
+    this.channelStatuses.set(channel, { status, ...(detail ? { detail } : {}) })
+  }
+
+  getChannelStatuses(): Record<string, { status: 'ready' | 'degraded' | 'stopped'; detail?: string }> {
+    return Object.fromEntries(this.channelStatuses)
   }
 
   /** Record that the user just interacted via this channel. */
@@ -89,12 +102,32 @@ export class ConnectorCenter {
    * Falls back to the first registered connector if no interaction yet.
    */
   async notify(text: string, opts?: NotifyOpts): Promise<NotifyResult> {
-    const target = this.resolveTarget()
-    if (!target) return { delivered: false }
+    const targets = this.resolveTargets()
+    if (targets.length === 0) return { delivered: false, reason: 'no_push_connector' }
 
     const payload = this.buildPayload(text, opts)
-    const result = await target.send(payload)
-    return { ...result, channel: target.channel }
+    let last: NotifyResult = { delivered: false, reason: 'connector_not_ready' }
+    for (const target of targets) {
+      try {
+        const result = await target.send(payload)
+        last = {
+          ...result,
+          delivered: result.delivered,
+          reason: result.delivered ? 'delivered' : (result.reason ?? 'connector_not_ready'),
+          channel: target.channel,
+        }
+        if (result.delivered) return last
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        last = {
+          delivered: false,
+          reason: /timeout|timed out/i.test(message) ? 'send_timeout' : 'remote_rejected',
+          error: message,
+          channel: target.channel,
+        }
+      }
+    }
+    return last
   }
 
   /**
@@ -143,7 +176,8 @@ export class ConnectorCenter {
       try {
         const result = await connector.send(payload)
         results.push({ ...result, channel: connector.channel })
-      } catch {
+      } catch (err) {
+        console.warn(`[connector-center] broadcast failed for channel "${connector.channel}": ${err instanceof Error ? err.message : err}`)
         results.push({ delivered: false, channel: connector.channel })
       }
     }
@@ -166,6 +200,14 @@ export class ConnectorCenter {
     // Channel was unregistered since — fall back to first available
     const first = this.connectors.values().next()
     return first.done ? null : first.value
+  }
+
+  private resolveTargets(): Connector[] {
+    const pushable = this.list().filter(connector => connector.capabilities.push)
+    if (pushable.length === 0) return []
+    const preferred = this.resolveTarget()
+    if (!preferred?.capabilities.push) return pushable
+    return [preferred, ...pushable.filter(connector => connector.channel !== preferred.channel)]
   }
 
   /** Build a SendPayload from text + options. */

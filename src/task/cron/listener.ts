@@ -18,9 +18,10 @@ import { SessionStore } from '../../core/session.js'
 import type { ConnectorCenter } from '../../core/connector-center.js'
 import type { CronFirePayload } from './engine.js'
 import { execFile } from 'node:child_process'
-import { readFile, stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { decideCronNotification } from './notification-policy.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -40,11 +41,15 @@ export interface CronScriptRunResult {
 }
 
 export type CronScriptRunner = (scriptPath: string, args: string[], opts: { cwd?: string }) => Promise<CronScriptRunResult>
+export type MacosNotificationSender = (text: string) => Promise<{ attempted: boolean; delivered: boolean; reason: string }>
 
 interface CronNotification {
   shouldNotify: boolean
   text: string
   reason: string
+  macosFallback?: boolean
+  deliveryReceiptPath?: string
+  receiptContext?: Record<string, unknown>
 }
 
 const ALLOWLISTED_SCRIPT_PATHS = [
@@ -57,7 +62,11 @@ const ALLOWLISTED_SCRIPT_PATHS = [
   resolve('scripts/cron_dirty_worktree_audit.sh'),
   resolve('scripts/cron_scheduler_security_audit.sh'),
   resolve('scripts/cron_external_derivatives_data_collect.sh'),
+  resolve('scripts/cron_low_vol_research.sh'),
+  resolve('scripts/cron_gated_improvement_candidate.sh'),
   resolve('scripts/cron_p1_trading_evidence.sh'),
+  resolve('scripts/cron_openalice_task.sh'),
+  resolve('scripts/cron_okx_warehouse_task.sh'),
 ] as const
 
 /**
@@ -105,6 +114,8 @@ export interface CronListenerOpts {
   session?: SessionStore
   /** Optional: inject script execution for tests. */
   scriptRunner?: CronScriptRunner
+  /** Optional: inject Notification Center delivery for tests. */
+  macosNotificationSender?: MacosNotificationSender
 }
 
 export interface CronListener {
@@ -118,9 +129,10 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   const { connectorCenter, eventLog, agentCenter } = opts
   const session = opts.session ?? new SessionStore('cron/default')
   const scriptRunner = opts.scriptRunner ?? defaultScriptRunner
+  const macosNotificationSender = opts.macosNotificationSender ?? sendMacosNotification
 
   let unsubscribe: (() => void) | null = null
-  let processing = false
+  let agentProcessing = false
 
   async function handleFire(entry: EventLogEntry): Promise<void> {
     const payload = entry.payload as CronFirePayload
@@ -128,8 +140,16 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     // Guard: internal jobs (__heartbeat__, __snapshot__, etc.) have dedicated handlers
     if (isInternalJob(payload.jobName)) return
 
-    // Guard: skip if already processing (serial execution)
-    if (processing) {
+    if ((payload.kind ?? 'agent') === 'script') {
+      // Script jobs own independent wrapper/collector locks. Running unrelated
+      // jobs concurrently prevents a long market-data collector from delaying
+      // health, archive, paper, and evidence tasks behind one global queue.
+      await handleScriptFire(payload, Date.now(), entry.seq)
+      return
+    }
+
+    // Guard: keep AI-routed cron jobs serial, without blocking allowlisted script jobs.
+    if (agentProcessing) {
       console.warn(`cron-listener: skipping job ${payload.jobId} (already processing)`)
       await eventLog.append('cron.dropped', {
         jobId: payload.jobId,
@@ -141,15 +161,10 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
       return
     }
 
-    processing = true
+    agentProcessing = true
     const startMs = Date.now()
 
     try {
-      if ((payload.kind ?? 'agent') === 'script') {
-        await handleScriptFire(payload, startMs, entry.seq)
-        return
-      }
-
       // Ask the AI engine with the cron payload
       const result = await agentCenter.askWithSession(payload.payload, session, {
         historyPreamble: 'The following is the recent cron session conversation. This is an automated cron job execution.',
@@ -201,16 +216,19 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     } catch (err) {
       console.error(`cron-listener: error processing job ${payload.jobId}:`, err)
 
+      const errorText = err instanceof Error ? err.message : String(err)
+
       // Log error
       await eventLog.append('cron.error', {
         jobId: payload.jobId,
         jobName: payload.jobName,
         sourceFireSeq: entry.seq,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorText,
+        ...classifyCronError(errorText),
         durationMs: Date.now() - startMs,
       })
     } finally {
-      processing = false
+      agentProcessing = false
     }
   }
 
@@ -222,6 +240,8 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         jobName: payload.jobName,
         sourceFireSeq,
         error: 'script cron job missing script.path',
+        errorClass: 'invalid_job_contract',
+        permanent: true,
         durationMs: Date.now() - startMs,
       })
       return
@@ -234,6 +254,8 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         jobName: payload.jobName,
         sourceFireSeq,
         error: `unsupported script cron job: ${scriptPath}`,
+        errorClass: 'invalid_job_contract',
+        permanent: true,
         durationMs: Date.now() - startMs,
       })
       return
@@ -245,7 +267,14 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         ? await readCronNotification(script.notificationPath, { minMtimeMs: startMs })
         : null
       const notificationText = notification?.text ?? ''
-      const delivered = await deliverScriptNotification(payload.jobId, notification)
+      const policy = decideCronNotification({
+        jobName: payload.jobName,
+        outcome: 'success',
+        requested: notification?.shouldNotify === true,
+        text: notificationText,
+        previousConsecutiveErrors: payload.notificationState?.previousConsecutiveErrors,
+      })
+      const delivery = await deliverScriptNotification(payload.jobId, notification, policy)
 
       await eventLog.append('cron.done', {
         jobId: payload.jobId,
@@ -253,7 +282,14 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         sourceFireSeq,
         reply: notificationText || result.stdout.trim() || 'STATUS: CRON_SKIP',
         durationMs: Date.now() - startMs,
-        delivered,
+        delivered: delivery.delivered,
+        deliveryReason: delivery.reason,
+        deliveryChannel: delivery.channel,
+        primaryDelivered: delivery.primaryDelivered,
+        fallbackDelivered: delivery.fallbackDelivered,
+        notificationPolicyReason: policy.reason,
+        notificationClass: policy.notificationClass,
+        previousConsecutiveErrors: payload.notificationState?.previousConsecutiveErrors ?? 0,
         scriptPath,
         scriptKind: 'allowlisted',
         notificationPath: script.notificationPath,
@@ -274,15 +310,34 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         error: errorText,
       })
       const notificationText = notification?.text ?? ''
-      const delivered = await deliverScriptNotification(payload.jobId, notification)
+      const policy = decideCronNotification({
+        jobName: payload.jobName,
+        outcome: 'failure',
+        requested: notification?.shouldNotify === true,
+        text: notificationText,
+        error: errorText,
+        previousConsecutiveErrors: payload.notificationState?.previousConsecutiveErrors,
+        previousErrorFingerprint: payload.notificationState?.previousErrorFingerprint,
+        circuitOpenAfter: payload.notificationState?.circuitOpenAfter,
+      })
+      const delivery = await deliverScriptNotification(payload.jobId, notification, policy)
       await eventLog.append('cron.error', {
         jobId: payload.jobId,
         jobName: payload.jobName,
         sourceFireSeq,
         error: errorText,
+        ...classifyCronError(errorText),
         durationMs: Date.now() - startMs,
         scriptPath,
-        delivered,
+        delivered: delivery.delivered,
+        deliveryReason: delivery.reason,
+        deliveryChannel: delivery.channel,
+        primaryDelivered: delivery.primaryDelivered,
+        fallbackDelivered: delivery.fallbackDelivered,
+        notificationPolicyReason: policy.reason,
+        notificationClass: policy.notificationClass,
+        errorFingerprint: policy.errorFingerprint,
+        failureCount: policy.failureCount,
         notificationPath: script.notificationPath,
         reply: notificationText,
         parsedStatus: notification?.shouldNotify ? 'CRON_NOTIFY' : 'CRON_SKIP',
@@ -295,20 +350,55 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   async function deliverScriptNotification(
     jobId: string,
     notification: CronNotification | null,
-  ): Promise<boolean> {
-    const notificationText = notification?.text ?? ''
-    if (!notification?.shouldNotify || !notificationText) {
-      return false
+    policy?: ReturnType<typeof decideCronNotification>,
+  ): Promise<{ delivered: boolean; reason: string; channel: string | null; primaryDelivered: boolean; fallbackDelivered: boolean }> {
+    const notificationText = policy?.text ?? notification?.text ?? ''
+    const shouldNotify = policy?.shouldNotify ?? notification?.shouldNotify ?? false
+    if (!shouldNotify || !notificationText) {
+      return {
+        delivered: false,
+        reason: policy ? `suppressed:${policy.reason}` : 'suppressed',
+        channel: null,
+        primaryDelivered: false,
+        fallbackDelivered: false,
+      }
     }
+    let primary = { delivered: false, reason: 'no_push_connector', channel: undefined as string | undefined }
     try {
       const notifyResult = await connectorCenter.notify(notificationText, {
         source: 'cron',
       })
-      return notifyResult.delivered
+      primary = { delivered: notifyResult.delivered, reason: notifyResult.reason ?? (notifyResult.delivered ? 'delivered' : 'connector_not_ready'), channel: notifyResult.channel }
     } catch (sendErr) {
       console.warn(`cron-listener: send failed for script job ${jobId}:`, sendErr)
-      return false
+      primary = { delivered: false, reason: /timeout/i.test(String(sendErr)) ? 'send_timeout' : 'remote_rejected', channel: undefined }
     }
+    let fallback = { attempted: false, delivered: false, reason: 'not_requested' }
+    if (!primary.delivered && notification?.macosFallback) {
+      fallback = await macosNotificationSender(notificationText)
+    }
+    const delivered = primary.delivered || fallback.delivered
+    const channel = primary.delivered ? (primary.channel ?? 'push_connector') : fallback.delivered ? 'macos_notification_center' : (primary.channel ?? null)
+    const reason = primary.delivered ? primary.reason : fallback.delivered ? 'fallback_delivered' : `${primary.reason};fallback=${fallback.reason}`
+    if (notification?.deliveryReceiptPath) {
+      try {
+        const receiptPath = resolve(notification.deliveryReceiptPath)
+        await mkdir(dirname(receiptPath), { recursive: true })
+        await appendFile(receiptPath, `${JSON.stringify({
+          generatedAt: new Date().toISOString(),
+          jobId,
+          primary: { channel: primary.channel ?? null, delivered: primary.delivered, reason: primary.reason },
+          fallback,
+          delivered,
+          reason,
+          channel,
+          ...(notification.receiptContext ?? {}),
+        })}\n`, 'utf-8')
+      } catch (receiptError) {
+        console.warn(`cron-listener: delivery receipt write failed for ${jobId}:`, receiptError)
+      }
+    }
+    return { delivered, reason, channel, primaryDelivered: primary.delivered, fallbackDelivered: fallback.delivered }
   }
 
   return {
@@ -335,39 +425,66 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   async function replayUnmatchedStartupFires(uptoSeq: number): Promise<void> {
     if (uptoSeq <= 0) return
 
-    const fires = (await eventLog.read({ type: 'cron.fire' }))
+    // Startup recovery must stay bounded. EventLog.read() scans persistent SQLite
+    // synchronously, and a multi-year/high-frequency event log can otherwise block
+    // the main event loop before Web/MCP plugins have a chance to listen.
+    // The in-memory ring is restored from the durable tail at EventLog startup and
+    // is sufficient to recover only the most recent unmatched scheduler fires.
+    const recent = eventLog.recent({ limit: 500 })
+    const fires = recent
+      .filter((entry) => entry.type === 'cron.fire')
       .filter((entry) => entry.seq <= uptoSeq)
     if (fires.length === 0) return
 
-    const completions = [
-      ...await eventLog.read({ type: 'cron.done' }),
-      ...await eventLog.read({ type: 'cron.error' }),
-      ...await eventLog.read({ type: 'cron.dropped' }),
-    ].filter((entry) => entry.seq <= uptoSeq)
+    const completions = recent.filter((entry) =>
+      (entry.type === 'cron.done' || entry.type === 'cron.error' || entry.type === 'cron.dropped') &&
+      entry.seq <= uptoSeq,
+    )
 
-    for (let idx = 0; idx < fires.length; idx += 1) {
-      const fire = fires[idx]
-      const nextFire = findNextFireForSameJob(fire, fires.slice(idx + 1))
-      if (hasCronCompletion(fire, completions, nextFire?.seq)) continue
+    // Cron schedules are state-based, not an at-least-once backlog. Replaying
+    // every unmatched historical tick after a restart can create a recovery
+    // storm (especially for one-minute jobs). Keep only the newest fire for
+    // each job; wrapper locks and normal next-schedule execution protect the
+    // current interval without reconstructing missed historical runs.
+    const latestFireByJobId = new Map<string, EventLogEntry>()
+    for (const fire of fires) {
+      const payload = fire.payload as { jobId?: unknown; jobName?: unknown; kind?: unknown }
+      if (typeof payload?.jobId !== 'string') continue
+      if (typeof payload.jobName === 'string' && isInternalJob(payload.jobName)) continue
+      // Periodic script jobs deliberately resume at their next normal Cron
+      // schedule. Their wrappers already own locks/checkpoints, and replaying a
+      // pre-restart tick would violate next-schedule retry semantics.
+      if (payload.kind === 'script') continue
+      latestFireByJobId.set(payload.jobId, fire)
+    }
+
+    const latestFires = [...latestFireByJobId.values()].sort((a, b) => a.seq - b.seq)
+    for (const fire of latestFires) {
+      if (hasCronCompletion(fire, completions)) continue
       await handleFire(fire)
     }
   }
 }
 
-function findNextFireForSameJob(fire: EventLogEntry, laterFires: EventLogEntry[]): EventLogEntry | null {
-  const firePayload = fire.payload as { jobId?: unknown }
-  const fireJobId = typeof firePayload?.jobId === 'string' ? firePayload.jobId : null
-  if (!fireJobId) return null
-  return laterFires.find((candidate) => {
-    const payload = candidate.payload as { jobId?: unknown }
-    return payload.jobId === fireJobId
-  }) ?? null
+function classifyCronError(error: string): { errorClass: string; permanent: boolean } {
+  if (/HTTP\s+(?:401|403|451)\b/i.test(error)) {
+    return { errorClass: 'remote_permanent', permanent: true }
+  }
+  if (/HTTP\s+429\b/i.test(error)) {
+    return { errorClass: 'rate_limited', permanent: false }
+  }
+  if (/HTTP\s+5\d\d\b/i.test(error)) {
+    return { errorClass: 'remote_server_error', permanent: false }
+  }
+  if (/timeout|timed out|ECONNRESET|ENETUNREACH|EAI_AGAIN|fetch failed/i.test(error)) {
+    return { errorClass: 'transient_network', permanent: false }
+  }
+  return { errorClass: 'script_error', permanent: false }
 }
 
 function hasCronCompletion(
   fire: EventLogEntry,
   completions: EventLogEntry[],
-  nextSameJobFireSeq?: number,
 ): boolean {
   const firePayload = fire.payload as { jobId?: unknown }
   const fireJobId = typeof firePayload?.jobId === 'string' ? firePayload.jobId : null
@@ -376,9 +493,7 @@ function hasCronCompletion(
   return completions.some((completion) => {
     const payload = completion.payload as { jobId?: unknown; sourceFireSeq?: unknown; fireSeq?: unknown }
     if (payload.sourceFireSeq === fire.seq || payload.fireSeq === fire.seq) return true
-    return payload.jobId === fireJobId &&
-      completion.seq > fire.seq &&
-      (nextSameJobFireSeq === undefined || completion.seq < nextSameJobFireSeq)
+    return payload.jobId === fireJobId && completion.seq > fire.seq
   })
 }
 
@@ -438,8 +553,30 @@ async function readCronNotification(
     const reason = typeof raw.headline === 'string'
       ? raw.headline
       : deliveryDecision || (shouldNotify ? 'notification requested' : 'notification suppressed')
-    return { shouldNotify, text, reason }
+    return {
+      shouldNotify,
+      text,
+      reason,
+      macosFallback: raw.macosFallback === true,
+      deliveryReceiptPath: typeof raw.deliveryReceiptPath === 'string' ? raw.deliveryReceiptPath : undefined,
+      receiptContext: isRecord(raw.receiptContext) ? raw.receiptContext : undefined,
+    }
   } catch {
     return null
   }
+}
+
+async function sendMacosNotification(text: string): Promise<{ attempted: boolean; delivered: boolean; reason: string }> {
+  if (process.platform !== 'darwin') return { attempted: true, delivered: false, reason: 'unsupported_platform' }
+  const safe = text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', ' ')
+  try {
+    await execFileAsync('/usr/bin/osascript', ['-e', `display notification "${safe}" with title "OpenAlice"`], { timeout: 5_000 })
+    return { attempted: true, delivered: true, reason: 'delivered' }
+  } catch (error) {
+    return { attempted: true, delivered: false, reason: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

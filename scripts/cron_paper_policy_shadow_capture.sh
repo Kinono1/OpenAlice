@@ -20,10 +20,37 @@ trap 'openalice_release_cron_lock "$LOCK_DIR"' EXIT
 mkdir -p "$LOG_DIR" "$(dirname "$NOTIFICATION_PATH")"
 cd "$REPO_ROOT"
 
+run_pnpm() {
+  if command -v corepack >/dev/null 2>&1; then
+    corepack pnpm "$@"
+    return
+  fi
+
+  local corepack_candidate
+  for corepack_candidate in \
+    /opt/homebrew/Cellar/node/*/bin/corepack \
+    /usr/local/Cellar/node/*/bin/corepack \
+    /opt/pkg/env/active/bin/corepack \
+    /opt/pmk/env/global/bin/corepack; do
+    if [[ -x "$corepack_candidate" ]]; then
+      "$corepack_candidate" pnpm "$@"
+      return
+    fi
+  done
+
+  if command -v pnpm >/dev/null 2>&1; then
+    pnpm "$@"
+    return
+  fi
+
+  echo "corepack or pnpm is required for cron_paper_policy_shadow_capture.sh but was not found in PATH or known Node install locations" >&2
+  return 127
+}
+
 CAPTURE_EXIT=0
 {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] start paper policy shadow capture"
-  if corepack pnpm paper:policy-shadow:capture -- --json true --outputPath "$REPORT_PATH"; then
+  if run_pnpm paper:policy-shadow:capture -- --json true --outputPath "$REPORT_PATH"; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] done paper policy shadow capture"
   else
     CAPTURE_EXIT=$?

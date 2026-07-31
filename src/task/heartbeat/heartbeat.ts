@@ -115,7 +115,18 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
     if (payload.jobName !== HEARTBEAT_JOB_NAME) return
 
     // Guard: skip if already processing
-    if (processing) return
+    if (processing) {
+      await eventLog.append('cron.done', {
+        jobId: payload.jobId,
+        jobName: payload.jobName,
+        sourceFireSeq: entry.seq,
+        durationMs: 0,
+        delivered: false,
+        parsedStatus: 'CRON_SKIP',
+        parsedReason: 'heartbeat_already_processing',
+      })
+      return
+    }
 
     processing = true
     const startMs = now()
@@ -126,6 +137,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
       if (!isWithinActiveHours(config.activeHours, now())) {
         console.log('heartbeat: skipped (outside active hours)')
         await eventLog.append('heartbeat.skip', { reason: 'outside-active-hours' })
+        await appendCronDone(payload, entry, startMs, 'outside-active-hours')
         return
       }
 
@@ -134,6 +146,23 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
         historyPreamble: 'The following is the recent heartbeat conversation history.',
       })
       const durationMs = now() - startMs
+
+      if (isProviderErrorResponse(result.text)) {
+        const error = result.text.replace(/^\s*\[error\]\s*/i, '').trim()
+        console.warn(`heartbeat: AI provider error (${durationMs}ms): ${error}`)
+        await eventLog.append('heartbeat.error', {
+          error,
+          errorClass: 'ai_provider',
+          durationMs,
+          deliveryAttempted: false,
+          connectorStatuses: connectorCenter.getChannelStatuses(),
+        })
+        // Provider availability is tracked by heartbeat.error, independently
+        // from Cron scheduler health. The heartbeat cycle handled the degraded
+        // plugin state successfully and must not create a scheduler retry storm.
+        await appendCronDone(payload, entry, startMs, 'degraded_ai_provider')
+        return
+      }
 
       // 3. Parse structured response
       const parsed = parseHeartbeatResponse(result.text)
@@ -144,6 +173,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
           reason: 'ack',
           parsedReason: parsed.reason,
         })
+        await appendCronDone(payload, entry, startMs, parsed.reason || 'heartbeat_ack')
         return
       }
 
@@ -152,6 +182,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
       if (!text.trim()) {
         console.log(`heartbeat: skipped (empty content) (${durationMs}ms)`)
         await eventLog.append('heartbeat.skip', { reason: 'empty' })
+        await appendCronDone(payload, entry, startMs, 'empty_content')
         return
       }
 
@@ -159,17 +190,24 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
       if (dedup.isDuplicate(text, now())) {
         console.log(`heartbeat: skipped (duplicate) (${durationMs}ms)`)
         await eventLog.append('heartbeat.skip', { reason: 'duplicate' })
+        await appendCronDone(payload, entry, startMs, 'duplicate')
         return
       }
 
       // 5. Send notification
       let delivered = false
+      let deliveryChannel: string | undefined
+      let deliveryReason: string | undefined
+      let deliveryError: string | undefined
       try {
         const result2 = await connectorCenter.notify(text, {
           media: result.media,
           source: 'heartbeat',
         })
         delivered = result2.delivered
+        deliveryChannel = result2.channel
+        deliveryReason = result2.reason
+        deliveryError = result2.error
         if (delivered) dedup.record(text, now())
       } catch (sendErr) {
         console.warn('heartbeat: send failed:', sendErr)
@@ -183,16 +221,43 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
         reason: parsed.reason,
         durationMs,
         delivered,
+        deliveryChannel,
+        deliveryReason,
+        deliveryError,
+        connectorStatuses: connectorCenter.getChannelStatuses(),
       })
+      await appendCronDone(payload, entry, startMs, deliveryReason ?? (delivered ? 'delivered' : 'delivery_failed'))
     } catch (err) {
       console.error('heartbeat: error:', err)
+      const error = err instanceof Error ? err.message : String(err)
       await eventLog.append('heartbeat.error', {
-        error: err instanceof Error ? err.message : String(err),
+        error,
+        errorClass: 'ai_provider',
         durationMs: now() - startMs,
+        deliveryAttempted: false,
+        connectorStatuses: connectorCenter.getChannelStatuses(),
       })
+      await appendCronDone(payload, entry, startMs, 'degraded_ai_provider')
     } finally {
       processing = false
     }
+  }
+
+  async function appendCronDone(
+    payload: CronFirePayload,
+    entry: EventLogEntry,
+    startMs: number,
+    reason: string,
+  ): Promise<void> {
+    await eventLog.append('cron.done', {
+      jobId: payload.jobId,
+      jobName: payload.jobName,
+      sourceFireSeq: entry.seq,
+      durationMs: Math.max(0, now() - startMs),
+      delivered: false,
+      parsedStatus: 'CRON_SKIP',
+      parsedReason: reason,
+    })
   }
 
   /** Ensure the cron job and event listener exist (idempotent). */
@@ -251,6 +316,10 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
       return enabled
     },
   }
+}
+
+function isProviderErrorResponse(text: string): boolean {
+  return /^\s*\[error\]\s+/i.test(text)
 }
 
 // ==================== Response Parser ====================

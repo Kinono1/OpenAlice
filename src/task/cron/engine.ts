@@ -24,11 +24,23 @@ export type CronSchedule =
   | { kind: 'every'; every: string }
   | { kind: 'cron'; cron: string; timezone?: 'local' | 'UTC' }
 
+export interface CronRetryPolicy {
+  mode: 'next-schedule' | 'bounded-backoff'
+  /** Number of retry attempts between regular scheduled runs. */
+  maxAttempts: number
+  /** Open the circuit after this many consecutive failed executions. Zero disables the circuit. */
+  circuitOpenAfter: number
+}
+
 export interface CronJobState {
   nextRunAtMs: number | null
   lastRunAtMs: number | null
-  lastStatus: 'fired' | 'ok' | 'error' | null
+  lastSuccessAtMs?: number | null
+  lastStatus: 'fired' | 'ok' | 'error' | 'blocked' | null
   consecutiveErrors: number
+  circuitOpenedAtMs?: number | null
+  lastErrorClass?: string | null
+  lastErrorFingerprint?: string | null
 }
 
 export type CronJobKind = 'agent' | 'script'
@@ -48,6 +60,7 @@ export interface CronJob {
   schedule: CronSchedule
   payload: string
   script?: CronScriptSpec
+  retryPolicy?: CronRetryPolicy
   state: CronJobState
   createdAt: number
 }
@@ -58,6 +71,11 @@ export interface CronFirePayload {
   kind?: CronJobKind
   payload: string
   script?: CronScriptSpec
+  notificationState?: {
+    previousConsecutiveErrors: number
+    previousErrorFingerprint?: string | null
+    circuitOpenAfter: number
+  }
 }
 
 // ==================== CRUD Types ====================
@@ -69,6 +87,7 @@ export interface CronJobCreate {
   kind?: CronJobKind
   script?: CronScriptSpec
   enabled?: boolean
+  retryPolicy?: CronRetryPolicy
 }
 
 export interface CronJobPatch {
@@ -78,6 +97,7 @@ export interface CronJobPatch {
   kind?: CronJobKind
   script?: CronScriptSpec
   enabled?: boolean
+  retryPolicy?: CronRetryPolicy
 }
 
 // ==================== Engine Interface ====================
@@ -121,7 +141,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     try {
       const raw = await readFile(storePath, 'utf-8')
       const data = JSON.parse(raw)
-      jobs = Array.isArray(data.jobs) ? data.jobs : []
+      jobs = Array.isArray(data.jobs) ? data.jobs.map(normalizeLoadedJob) : []
     } catch (err: unknown) {
       if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         jobs = []
@@ -178,7 +198,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     if (stopped) return
 
     const nextMs = jobs
-      .filter((j) => j.enabled && j.state.nextRunAtMs !== null)
+      .filter((j) => j.enabled && j.state.circuitOpenedAtMs == null && j.state.nextRunAtMs !== null)
       .reduce<number | null>((min, j) => {
         const n = j.state.nextRunAtMs!
         return min === null ? n : Math.min(min, n)
@@ -197,7 +217,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
 
     const currentMs = now()
     const dueJobs = jobs.filter(
-      (j) => j.enabled && j.state.nextRunAtMs !== null && j.state.nextRunAtMs <= currentMs,
+      (j) => j.enabled && j.state.circuitOpenedAtMs == null && j.state.nextRunAtMs !== null && j.state.nextRunAtMs <= currentMs,
     )
 
     for (const job of dueJobs) {
@@ -211,6 +231,12 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   }
 
   async function fireJob(job: CronJob, currentMs: number): Promise<void> {
+    const retryPolicy = normalizeRetryPolicy(job.retryPolicy)
+    const notificationState: NonNullable<CronFirePayload['notificationState']> = {
+      previousConsecutiveErrors: job.state.consecutiveErrors,
+      previousErrorFingerprint: job.state.lastErrorFingerprint ?? null,
+      circuitOpenAfter: retryPolicy.circuitOpenAfter,
+    }
     job.state.lastRunAtMs = currentMs
     job.state.lastStatus = 'fired'
     let fireAppendFailed = false
@@ -222,6 +248,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         kind: job.kind ?? 'agent',
         payload: job.payload,
         script: job.script,
+        notificationState,
       } satisfies CronFirePayload)
     } catch (err) {
       job.state.lastStatus = 'error'
@@ -235,7 +262,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       job.enabled = false
       job.state.nextRunAtMs = null
     } else if (fireAppendFailed || job.state.lastStatus === 'error') {
-      job.state.nextRunAtMs = currentMs + errorBackoffMs(job.state.consecutiveErrors)
+      scheduleAfterFailure(job, currentMs, { permanent: false })
     } else {
       job.state.nextRunAtMs = computeNextRun(job.schedule, currentMs)
     }
@@ -256,7 +283,12 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   }
 
   async function handleCompletionEvent(entry: EventLogEntry, status: 'ok' | 'error'): Promise<void> {
-    const payload = entry.payload as { jobId?: unknown }
+    const payload = entry.payload as {
+      jobId?: unknown
+      errorClass?: unknown
+      permanent?: unknown
+      errorFingerprint?: unknown
+    }
     const jobId = typeof payload?.jobId === 'string' ? payload.jobId : null
     if (!jobId) return
 
@@ -267,11 +299,20 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     if (status === 'ok') {
       job.state.lastStatus = 'ok'
       job.state.consecutiveErrors = 0
+      job.state.lastSuccessAtMs = entry.ts
+      job.state.circuitOpenedAtMs = null
+      job.state.lastErrorClass = null
+      job.state.lastErrorFingerprint = null
+      if (job.enabled && job.schedule.kind !== 'at') {
+        job.state.nextRunAtMs = computeNextRun(job.schedule, entry.ts)
+      }
     } else {
       job.state.lastStatus = 'error'
       job.state.consecutiveErrors += 1
+      job.state.lastErrorClass = typeof payload.errorClass === 'string' ? payload.errorClass : 'execution_error'
+      job.state.lastErrorFingerprint = typeof payload.errorFingerprint === 'string' ? payload.errorFingerprint : null
       if (job.enabled && job.schedule.kind !== 'at') {
-        job.state.nextRunAtMs = entry.ts + errorBackoffMs(job.state.consecutiveErrors)
+        scheduleAfterFailure(job, entry.ts, { permanent: payload.permanent === true })
         if (timer) { clearTimeout(timer); timer = null }
         armTimer()
       }
@@ -295,6 +336,20 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       const currentMs = now()
       for (const job of jobs) {
         if (!job.enabled) continue
+        if (job.state.circuitOpenedAtMs != null) {
+          job.state.lastStatus = 'blocked'
+          job.state.nextRunAtMs = null
+          continue
+        }
+        if (job.state.lastStatus === 'fired') {
+          // Any in-flight attempt was interrupted by the process restart.
+          // Script jobs resume on their next normal schedule; recoverable agent
+          // jobs may subsequently replace this state when the listener replays
+          // only their latest fire. Preserve the prior success timestamp while
+          // making the interrupted attempt explicit to health consumers.
+          job.state.lastStatus = 'blocked'
+          job.state.lastErrorClass = 'interrupted_restart'
+        }
         if (job.state.nextRunAtMs === null || job.state.nextRunAtMs < currentMs) {
           job.state.nextRunAtMs = computeNextRun(job.schedule, currentMs)
           if (job.schedule.kind === 'at' && job.state.nextRunAtMs === null) {
@@ -326,11 +381,16 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         schedule: params.schedule,
         payload: params.payload,
         script: params.script,
+        retryPolicy: normalizeRetryPolicy(params.retryPolicy),
         state: {
-          nextRunAtMs: computeNextRun(params.schedule, currentMs),
+          nextRunAtMs: params.enabled === false ? null : computeNextRun(params.schedule, currentMs),
           lastRunAtMs: null,
           lastStatus: null,
           consecutiveErrors: 0,
+          lastSuccessAtMs: null,
+          circuitOpenedAtMs: null,
+          lastErrorClass: null,
+          lastErrorFingerprint: null,
         },
         createdAt: currentMs,
       }
@@ -350,17 +410,30 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     async update(id, patch) {
       const job = jobs.find((j) => j.id === id)
       if (!job) throw new Error(`cron job not found: ${id}`)
+      const wasEnabled = job.enabled
 
       if (patch.name !== undefined) job.name = patch.name
       if (patch.payload !== undefined) job.payload = patch.payload
       if (patch.kind !== undefined) job.kind = patch.kind
       if (patch.script !== undefined) job.script = patch.script
       if (patch.enabled !== undefined) job.enabled = patch.enabled
+      if (patch.retryPolicy !== undefined) job.retryPolicy = normalizeRetryPolicy(patch.retryPolicy)
 
       if (patch.schedule !== undefined) {
         job.schedule = patch.schedule
         job.state.nextRunAtMs = computeNextRun(patch.schedule, now())
         job.state.consecutiveErrors = 0
+        job.state.circuitOpenedAtMs = null
+        job.state.lastErrorClass = null
+        job.state.lastErrorFingerprint = null
+      } else if (patch.enabled === true && !wasEnabled) {
+        job.state.nextRunAtMs = computeNextRun(job.schedule, now())
+        job.state.consecutiveErrors = 0
+        job.state.circuitOpenedAtMs = null
+        job.state.lastErrorClass = null
+        job.state.lastErrorFingerprint = null
+      } else if (patch.enabled === false) {
+        job.state.nextRunAtMs = null
       }
 
       await saveQueued()
@@ -559,4 +632,56 @@ const ERROR_BACKOFF_MS = [30_000, 60_000, 300_000, 900_000, 3_600_000] as const
 function errorBackoffMs(consecutiveErrors: number): number {
   const idx = Math.min(consecutiveErrors - 1, ERROR_BACKOFF_MS.length - 1)
   return ERROR_BACKOFF_MS[Math.max(0, idx)]
+}
+
+const DEFAULT_RETRY_POLICY: CronRetryPolicy = {
+  mode: 'next-schedule',
+  maxAttempts: 0,
+  circuitOpenAfter: 0,
+}
+
+function normalizeRetryPolicy(policy: CronRetryPolicy | undefined): CronRetryPolicy {
+  if (!policy) return { ...DEFAULT_RETRY_POLICY }
+  return {
+    mode: policy.mode === 'bounded-backoff' ? 'bounded-backoff' : 'next-schedule',
+    maxAttempts: Math.max(0, Math.floor(policy.maxAttempts ?? 0)),
+    circuitOpenAfter: Math.max(0, Math.floor(policy.circuitOpenAfter ?? 0)),
+  }
+}
+
+function normalizeLoadedJob(job: CronJob): CronJob {
+  return {
+    ...job,
+    retryPolicy: normalizeRetryPolicy(job.retryPolicy),
+    state: {
+      ...job.state,
+      lastSuccessAtMs: job.state.lastSuccessAtMs ?? (job.state.lastStatus === 'ok' ? job.state.lastRunAtMs : null),
+      circuitOpenedAtMs: job.state.circuitOpenedAtMs ?? null,
+      lastErrorClass: job.state.lastErrorClass ?? null,
+      lastErrorFingerprint: job.state.lastErrorFingerprint ?? null,
+    },
+  }
+}
+
+function scheduleAfterFailure(
+  job: CronJob,
+  failedAtMs: number,
+  options: { permanent: boolean },
+): void {
+  const policy = normalizeRetryPolicy(job.retryPolicy)
+  if (policy.circuitOpenAfter > 0 && job.state.consecutiveErrors >= policy.circuitOpenAfter) {
+    job.state.lastStatus = 'blocked'
+    job.state.circuitOpenedAtMs = failedAtMs
+    job.state.nextRunAtMs = null
+    return
+  }
+
+  const mayRetry =
+    !options.permanent &&
+    policy.mode === 'bounded-backoff' &&
+    job.state.consecutiveErrors <= policy.maxAttempts
+
+  job.state.nextRunAtMs = mayRetry
+    ? failedAtMs + errorBackoffMs(job.state.consecutiveErrors)
+    : computeNextRun(job.schedule, failedAtMs)
 }

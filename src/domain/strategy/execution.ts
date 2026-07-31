@@ -124,7 +124,7 @@ export function buildStrategyExecutionDecision(input: {
     )
   }
 
-  if (actionStatus === 'no-trade' || actionStatus === 'exit') {
+  if (actionStatus === 'no-trade' || actionStatus === 'exit' || actionStatus === 'reduce') {
     const blockReason = `strategy action status ${actionStatus} blocks new opens`
     return withReason(
       {

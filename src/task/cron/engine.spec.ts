@@ -87,6 +87,11 @@ describe('cron engine', () => {
           path: '/repo/OpenAlice/scripts/cron_eth_carry_refresh_pipeline.sh',
           cwd: '/repo/OpenAlice',
         },
+        notificationState: {
+          previousConsecutiveErrors: 0,
+          previousErrorFingerprint: null,
+          circuitOpenAfter: 0,
+        },
       })
     })
 
@@ -129,6 +134,35 @@ describe('cron engine', () => {
 
       const after = engine.get(id)!.state.nextRunAtMs
       expect(after).not.toBe(before)
+    })
+
+    it('should recompute nextRunAtMs when enabling a disabled recurring job', async () => {
+      const id = await engine.add({
+        name: 'enable-later',
+        schedule: { kind: 'cron', cron: '*/5 * * * *' },
+        payload: 'x',
+        enabled: false,
+      })
+      expect(engine.get(id)!.state.nextRunAtMs).toBeNull()
+
+      await engine.update(id, { enabled: true })
+
+      expect(engine.get(id)!.enabled).toBe(true)
+      expect(engine.get(id)!.state.nextRunAtMs).toBeGreaterThan(clock)
+    })
+
+    it('should clear nextRunAtMs when disabling a recurring job', async () => {
+      const id = await engine.add({
+        name: 'disable-now',
+        schedule: { kind: 'every', every: '1h' },
+        payload: 'x',
+      })
+      expect(engine.get(id)!.state.nextRunAtMs).not.toBeNull()
+
+      await engine.update(id, { enabled: false })
+
+      expect(engine.get(id)!.enabled).toBe(false)
+      expect(engine.get(id)!.state.nextRunAtMs).toBeNull()
     })
 
     it('should remove a job', async () => {
@@ -219,7 +253,7 @@ describe('cron engine', () => {
       expect(job.state.consecutiveErrors).toBe(0)
     })
 
-    it('marks a fired job error and backs off after cron.error', async () => {
+    it('keeps a fixed-schedule job on its normal schedule after cron.error', async () => {
       const id = await engine.add({
         name: 'error-check',
         schedule: { kind: 'every', every: '1h' },
@@ -237,8 +271,62 @@ describe('cron engine', () => {
       const job = engine.get(id)!
       expect(job.state.lastStatus).toBe('error')
       expect(job.state.consecutiveErrors).toBe(1)
-      expect(job.state.nextRunAtMs).toBeGreaterThan(clock)
-      expect(job.state.nextRunAtMs).toBeLessThanOrEqual(clock + 30_000 + 2_000)
+      expect(job.state.nextRunAtMs).toBeGreaterThanOrEqual(clock + 60 * 60 * 1000)
+      expect(job.state.nextRunAtMs).toBeLessThan(clock + 60 * 60 * 1000 + 1_000)
+      expect(job.state.lastErrorClass).toBe('execution_error')
+    })
+
+    it('uses bounded backoff and opens a circuit after the configured failure count', async () => {
+      const id = await engine.add({
+        name: 'network-check',
+        schedule: { kind: 'cron', cron: '7 */8 * * *', timezone: 'UTC' },
+        payload: 'x',
+        retryPolicy: { mode: 'bounded-backoff', maxAttempts: 2, circuitOpenAfter: 3 },
+      })
+
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await engine.runNow(id)
+        await eventLog.append('cron.error', {
+          jobId: id,
+          jobName: 'network-check',
+          error: 'fetch timed out',
+          errorClass: 'transient_network',
+          errorFingerprint: 'timeout-fingerprint',
+          permanent: false,
+          durationMs: 5,
+        })
+      }
+
+      const job = engine.get(id)!
+      expect(job.state.lastStatus).toBe('blocked')
+      expect(job.state.consecutiveErrors).toBe(3)
+      expect(job.state.circuitOpenedAtMs).toBeGreaterThanOrEqual(clock)
+      expect(job.state.circuitOpenedAtMs).toBeLessThan(clock + 1_000)
+      expect(job.state.nextRunAtMs).toBeNull()
+      expect(job.state.lastErrorFingerprint).toBe('timeout-fingerprint')
+    })
+
+    it('does not back off permanent failures between normal cron runs', async () => {
+      const id = await engine.add({
+        name: 'permanent-check',
+        schedule: { kind: 'cron', cron: '7 */8 * * *', timezone: 'UTC' },
+        payload: 'x',
+        retryPolicy: { mode: 'bounded-backoff', maxAttempts: 2, circuitOpenAfter: 3 },
+      })
+
+      await engine.runNow(id)
+      await eventLog.append('cron.error', {
+        jobId: id,
+        jobName: 'permanent-check',
+        error: 'HTTP 451',
+        errorClass: 'remote_permanent',
+        permanent: true,
+        durationMs: 5,
+      })
+
+      const job = engine.get(id)!
+      expect(job.state.lastStatus).toBe('error')
+      expect(job.state.nextRunAtMs).toBe(nextCronFire('7 */8 * * *', clock, 'UTC'))
     })
 
     it('treats cron.dropped as an execution error', async () => {
@@ -290,6 +378,35 @@ describe('cron engine', () => {
       expect(jobs).toHaveLength(1)
       expect(jobs[0].name).toBe('persist-me')
 
+      engine2.stop()
+    })
+
+    it('marks a pre-restart fired job as interrupted and keeps its next schedule', async () => {
+      const id = await engine.add({
+        name: 'script-interrupted-by-restart',
+        kind: 'script',
+        schedule: { kind: 'every', every: '1h' },
+        payload: '',
+        script: { path: '/repo/OpenAlice/scripts/cron_okx_warehouse_task.sh', args: ['fast'] },
+      })
+      const persisted = JSON.parse(await readFile(storePath, 'utf-8')) as { jobs: any[] }
+      const persistedJob = persisted.jobs.find((job) => job.id === id)
+      persistedJob.state.lastRunAtMs = clock - 1_000
+      persistedJob.state.lastStatus = 'fired'
+      persistedJob.state.lastSuccessAtMs = clock - 60_000
+      persistedJob.state.nextRunAtMs = clock + 30_000
+      await writeFile(storePath, `${JSON.stringify(persisted, null, 2)}\n`, 'utf-8')
+
+      const engine2 = createCronEngine({ eventLog, storePath, now: () => clock })
+      await engine2.start()
+
+      expect(engine2.get(id)?.state).toMatchObject({
+        lastStatus: 'blocked',
+        lastErrorClass: 'interrupted_restart',
+        lastSuccessAtMs: clock - 60_000,
+        nextRunAtMs: clock + 30_000,
+        consecutiveErrors: 0,
+      })
       engine2.stop()
     })
 

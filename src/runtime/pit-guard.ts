@@ -20,6 +20,11 @@ export class PITViolationError extends Error {
  * this is the production defense against data pipeline join/resample bugs.
  */
 export function assertPIT(features: TimedFactorValue[], decisionTime: Date): void {
+  if (!(decisionTime instanceof Date) || isNaN(decisionTime.getTime())) {
+    throw new PITViolationError(
+      `PIT: invalid decisionTime: "${decisionTime}"`
+    )
+  }
   for (const f of features) {
     const avail = new Date(f.available_time)
     if (isNaN(avail.getTime())) {
@@ -46,5 +51,10 @@ export function computeEmbargo(
   featureAvailabilityLagHours: number,
   executionLagHours: number,
 ): number {
+  for (const [name, val] of [['forwardHorizonHours', forwardHorizonHours], ['featureAvailabilityLagHours', featureAvailabilityLagHours], ['executionLagHours', executionLagHours]] as const) {
+    if (!Number.isFinite(val) || val < 0) {
+      throw new Error(`PIT: invalid ${name}: ${val} (must be finite and >= 0)`)
+    }
+  }
   return forwardHorizonHours + featureAvailabilityLagHours + executionLagHours
 }

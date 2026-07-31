@@ -45,13 +45,13 @@ export interface VolumeBreakoutSignal {
 }
 
 export const DEFAULT_VB_CONFIG: VolumeBreakoutConfig = {
-  volumeLookbackBars: 24, // 2 hours
-  volumeMultiplier: 2.5,
-  rangeLookbackBars: 12, // 1 hour
-  holdBars: 4, // 20 minutes
-  stopLossPct: 0.005, // 0.5%
+  volumeLookbackBars: 12, // 1 hour
+  volumeMultiplier: 0.8,
+  rangeLookbackBars: 3, // 15 minutes
+  holdBars: 2, // 10 minutes
+  stopLossPct: 0.02, // 2.0%
   minVolumeUsd: 100_000,
-  minBreakQuality: 0.35,
+  minBreakQuality: 0.01,
   maxSpreadBps: 40,
 }
 
