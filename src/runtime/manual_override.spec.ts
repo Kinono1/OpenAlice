@@ -1,65 +1,137 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { resolveManualOverrideSecret } from '../core/manual-override-secret.js'
 import {
+  DEFAULT_MANUAL_OVERRIDE,
   loadManualOverride,
-  normalizeManualOverride,
-} from "./manual_override.js";
+  signManualOverridePayload,
+  type SignedManualOverride,
+} from './manual_override.js'
 
-describe("manual_override", () => {
-  it("returns default config when override file is missing", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "manual-override-"));
-    const value = await loadManualOverride(join(tempDir, "missing.json"));
-    expect(value).toEqual({ pauseNewOpens: false });
-  });
+function fixtureSecret(): string {
+  return `fixture-${'a'.repeat(40)}`
+}
 
-  it("normalizes typed fields from a loose payload", () => {
-    const normalized = normalizeManualOverride({
-      pauseNewOpens: 1,
-      ignoreReleaseGate: 1,
-      ignoreRegimeShift: 0,
-      forceCapitalRampStage: " 25% ",
-      forceVolatilityQuantile: 0.9,
-      forceDailyLossPct: -4,
-      forceCvarDailyLossPct: -2.8,
-      forceConsecutiveLossDays: 2.7,
-      forceConsecutiveLossPct: -3.2,
-      note: " test ",
-      updatedAt: "2026-02-22T00:00:00.000Z",
-    });
+function signedFixture(
+  overrides: Partial<SignedManualOverride> = {},
+): SignedManualOverride {
+  const issuedAt = '2026-07-31T00:00:00.000Z'
+  const unsigned: SignedManualOverride = {
+    pauseNewOpens: true,
+    reason: 'fixture',
+    issuedBy: 'operator-a',
+    issuedAt,
+    expiresAt: '2026-07-31T00:30:00.000Z',
+    signature: '',
+    ...overrides,
+  }
+  return {
+    ...unsigned,
+    signature: signManualOverridePayload(fixtureSecret(), unsigned),
+  }
+}
 
-    expect(normalized).toEqual({
-      pauseNewOpens: true,
-      ignoreReleaseGate: true,
-      ignoreRegimeShift: false,
-      forceCapitalRampStage: "25%",
-      forceVolatilityQuantile: 0.9,
-      forceDailyLossPct: -4,
-      forceCvarDailyLossPct: -2.8,
-      forceConsecutiveLossDays: 2,
-      forceConsecutiveLossPct: -3.2,
-      note: "test",
-      updatedAt: "2026-02-22T00:00:00.000Z",
-    });
-  });
+describe('manual override secret resolution', () => {
+  it('reads a protected external file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-secret-'))
+    const path = join(dir, 'hmac')
+    await writeFile(path, fixtureSecret(), { mode: 0o600 })
+    await chmod(path, 0o600)
 
-  it("loads override config from disk", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "manual-override-load-"));
-    const file = join(tempDir, "manual_override.json");
-    await writeFile(
-      file,
-      JSON.stringify({
-        pauseNewOpens: true,
-        ignoreReleaseGate: true,
-        forceCapitalRampStage: "10%",
+    expect(
+      resolveManualOverrideSecret({
+        ALICE_MANUAL_OVERRIDE_SECRET_FILE: path,
       }),
-      "utf-8"
-    );
+    ).toBe(fixtureSecret())
+  })
 
-    const loaded = await loadManualOverride(file);
-    expect(loaded.pauseNewOpens).toBe(true);
-    expect(loaded.ignoreReleaseGate).toBe(true);
-    expect(loaded.forceCapitalRampStage).toBe("10%");
-  });
-});
+  it('rejects an external file readable by group or others', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-permissions-'))
+    const path = join(dir, 'hmac')
+    await writeFile(path, fixtureSecret(), { mode: 0o644 })
+    await chmod(path, 0o644)
+
+    expect(
+      resolveManualOverrideSecret({
+        ALICE_MANUAL_OVERRIDE_SECRET_FILE: path,
+      }),
+    ).toBeNull()
+  })
+
+  it('allows the legacy inline variable only in tests', () => {
+    expect(
+      resolveManualOverrideSecret({
+        NODE_ENV: 'production',
+        ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret(),
+      }),
+    ).toBeNull()
+    expect(
+      resolveManualOverrideSecret({
+        NODE_ENV: 'test',
+        ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret(),
+      }),
+    ).toBe(fixtureSecret())
+  })
+})
+
+describe('manual override loading', () => {
+  it('preserves the legacy string path and fails closed when missing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-missing-'))
+    await expect(loadManualOverride(join(dir, 'missing.json'))).resolves.toEqual(
+      DEFAULT_MANUAL_OVERRIDE,
+    )
+  })
+
+  it('rejects an unsigned legacy payload', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-unsigned-'))
+    const path = join(dir, 'override.json')
+    await writeFile(path, JSON.stringify({ pauseNewOpens: true }), 'utf-8')
+
+    await expect(
+      loadManualOverride({
+        filePath: path,
+        env: { NODE_ENV: 'test', ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret() },
+        now: new Date('2026-07-31T00:10:00.000Z'),
+      }),
+    ).resolves.toEqual(DEFAULT_MANUAL_OVERRIDE)
+  })
+
+  it('accepts a valid bounded signed pause', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-valid-'))
+    const path = join(dir, 'override.json')
+    await writeFile(path, JSON.stringify(signedFixture()), 'utf-8')
+
+    await expect(
+      loadManualOverride({
+        filePath: path,
+        env: { NODE_ENV: 'test', ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret() },
+        now: new Date('2026-07-31T00:10:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ pauseNewOpens: true })
+  })
+
+  it('requires two distinct approvals for a high-risk field', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-approval-'))
+    const path = join(dir, 'override.json')
+    await writeFile(
+      path,
+      JSON.stringify(
+        signedFixture({
+          ignoreReleaseGate: true,
+          approvedBy: ['operator-a'],
+        }),
+      ),
+      'utf-8',
+    )
+
+    await expect(
+      loadManualOverride({
+        filePath: path,
+        env: { NODE_ENV: 'test', ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret() },
+        now: new Date('2026-07-31T00:10:00.000Z'),
+      }),
+    ).resolves.toEqual(DEFAULT_MANUAL_OVERRIDE)
+  })
+})

@@ -34,13 +34,19 @@ packages/ibkr/ref/CMakeLists.txt
 
 # Local research artifacts
 research/cache/
-research/**/__pycache__/
-scripts/**/__pycache__/
+**/__pycache__/
+*.py[cod]
 
 # Local planning scratch files
 task_plan.md
 findings.md
 progress.md
+
+# Local session artifacts
+STARTUP_PROMPT.md
+_review/
+docs/openalice_data_download_status.md
+scripts/run_fast_binance_spot_klines_backfill.sh
 
 # Generated monitoring / capture artifacts
 data/media/

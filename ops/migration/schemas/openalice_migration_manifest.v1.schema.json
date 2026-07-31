@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openalice.local/schemas/openalice_migration_manifest.v1.schema.json",
+  "title": "OpenAlice Architecture v2 Migration Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "source",
+    "policy",
+    "counts",
+    "entries"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "openalice_migration_manifest.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "branch",
+        "commit",
+        "dirtyStateHash"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "dirtyStateHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "policy": {
+      "type": "object"
+    },
+    "counts": {
+      "type": "object"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "porcelain",
+          "statusKinds",
+          "protocolClass",
+          "action",
+          "reason",
+          "fileKind",
+          "sourceSha256",
+          "secretScanRuleIds"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "originalPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "porcelain": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2
+          },
+          "statusKinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "protocolClass": {
+            "enum": [
+              "A",
+              "B",
+              "C",
+              "D"
+            ]
+          },
+          "action": {
+            "enum": [
+              "port",
+              "supersede",
+              "retain-original",
+              "secret-isolate",
+              "retire"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fileKind": {
+            "enum": [
+              "regular",
+              "symlink",
+              "directory",
+              "special",
+              "missing"
+            ]
+          },
+          "sourceMode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceSha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "secretScanRuleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
