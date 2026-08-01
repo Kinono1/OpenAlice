@@ -96,6 +96,7 @@ export async function activateRelease(options: {
   releaseRoot: string
   releaseId: string
   credentialRotationReceiptPath?: string
+  credentialRotationReceiptScope?: CredentialRotationReceiptV1['scope']
   receiptDir?: string
   now?: Date
 }): Promise<ReleaseSwitchReceiptV1> {
@@ -108,6 +109,7 @@ export async function activateRelease(options: {
     }
     credentialRotation = await loadCredentialRotationReceiptBinding(
       options.credentialRotationReceiptPath,
+      options.credentialRotationReceiptScope ?? 'production',
     )
     const manifest = await verifyReleaseDirectory(options.releaseRoot, options.releaseId)
     fromCommit = await readReleasePointer(options.releaseRoot, 'current')
@@ -265,6 +267,7 @@ interface CredentialRotationReceiptBinding {
 
 export async function loadCredentialRotationReceiptBinding(
   path: string,
+  requiredScope: CredentialRotationReceiptV1['scope'] = 'production',
 ): Promise<CredentialRotationReceiptBinding> {
   const resolvedPath = resolve(path)
   const stat = await lstat(resolvedPath)
@@ -276,7 +279,10 @@ export async function loadCredentialRotationReceiptBinding(
     if (!openedStat.isFile()) throw new Error('credential_rotation_receipt_not_regular_file')
     const raw = await handle.readFile()
     return {
-      receipt: assertPrimaryCredentialRotationReady(JSON.parse(raw.toString('utf8'))),
+      receipt: assertPrimaryCredentialRotationReady(
+        JSON.parse(raw.toString('utf8')),
+        requiredScope,
+      ),
       receiptHash: createHash('sha256').update(raw).digest('hex'),
     }
   } finally {

@@ -56,6 +56,26 @@ describe('stable current release launcher', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       status: 'pass',
       sourceCommit: commit,
+      runtimeRole: 'primary',
+      liveExecutionArmed: false,
+    })
+
+    const canary = await execFileAsync('/bin/bash', [
+      resolve('ops/release/launch_canary.sh'),
+      '--verify-only',
+    ], {
+      env: {
+        ...process.env,
+        HOME: root,
+        OPENALICE_ENV_FILE: '',
+        OPENALICE_RELEASE_DIR: root,
+        OPENALICE_CANARY_ROOT: join(root, 'canary-state'),
+      },
+    })
+    expect(JSON.parse(canary.stdout)).toMatchObject({
+      status: 'pass',
+      sourceCommit: commit,
+      runtimeRole: 'canary',
       liveExecutionArmed: false,
     })
   })

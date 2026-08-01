@@ -42,10 +42,18 @@ describe('CredentialRotationReceiptV1', () => {
       'credential_rotation_receipt_scope_missing',
     )
   })
+
+  it('does not let isolated-test evidence authorize production activation', () => {
+    const receipt = buildCredentialRotationReceipt({ ...makeCore(), scope: 'isolated_test' })
+    expect(() => assertPrimaryCredentialRotationReady(receipt)).toThrow(
+      'credential_rotation_receipt_scope_mismatch',
+    )
+  })
 })
 
 function makeCore(): CredentialRotationReceiptCore {
   return {
+    scope: 'production',
     credentialNames: ['OKX_SECRET_KEY', 'DEEPSEEK_API_KEY'],
     rotatedAt: '2026-08-01T12:00:00.000Z',
     newCredentialStored: true,

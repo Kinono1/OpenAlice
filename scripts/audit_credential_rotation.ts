@@ -129,6 +129,7 @@ async function main(): Promise<void> {
 
   const scans = { argvScan, plistScan, logScan, apiScan, gitScan, artifactScan, fixtureScan }
   const receipt = buildCredentialRotationReceipt({
+    scope: 'production',
     credentialNames: args.credentialNames,
     rotatedAt: args.rotatedAt,
     newCredentialStored: storage.stored,

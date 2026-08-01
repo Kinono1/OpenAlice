@@ -75,11 +75,19 @@ PIPELINE_IO_OVERRIDES: dict[str, dict[str, list[str]]] = {
         ],
         "outputs": ["runtime/security/credential_rotation"],
     },
+    "scripts/run_canary_rollback_drill.ts": {
+        "inputs": [
+            "src/runtime/canary_governance.ts",
+            "src/runtime/release_manager.ts",
+        ],
+        "outputs": ["runtime/canary-drills"],
+    },
 }
 PIPELINE_SAFETY_OVERRIDES = {
     # The audit is read-only with respect to operational state, but it appends an
     # immutable evidence receipt and therefore needs the normal artifact lock.
     "scripts/audit_credential_rotation.ts": "artifact_write",
+    "scripts/run_canary_rollback_drill.ts": "artifact_write",
 }
 READ_MARKERS = (
     "audit_",

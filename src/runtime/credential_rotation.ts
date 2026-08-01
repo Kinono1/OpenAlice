@@ -17,6 +17,7 @@ export const PRIMARY_CREDENTIAL_ROTATION_NAMES = [
 export const credentialRotationReceiptV1Schema = z.object({
   schemaVersion: z.literal('credential_rotation_receipt.v1'),
   receiptId: z.string().regex(SHA256_RE),
+  scope: z.enum(['production', 'isolated_test']),
   credentialNames: z.array(z.string().trim().min(1).max(300)).min(1),
   rotatedAt: z.string().datetime(),
   newCredentialStored: z.boolean(),
@@ -104,8 +105,12 @@ export function assertCredentialRotationReady(
 
 export function assertPrimaryCredentialRotationReady(
   input: unknown,
+  requiredScope: CredentialRotationReceiptV1['scope'] = 'production',
 ): CredentialRotationReceiptV1 {
   const receipt = assertCredentialRotationReady(input)
+  if (receipt.scope !== requiredScope) {
+    throw new Error('credential_rotation_receipt_scope_mismatch')
+  }
   const present = new Set(receipt.credentialNames)
   const missing = PRIMARY_CREDENTIAL_ROTATION_NAMES.filter((name) => !present.has(name))
   if (missing.length > 0) {

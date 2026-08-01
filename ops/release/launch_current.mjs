@@ -48,6 +48,7 @@ async function main() {
       releasePath,
       sourceCommit: manifest.sourceCommit,
       manifestHash: manifest.manifestHash,
+      runtimeRole: process.env.OPENALICE_RUNTIME_ROLE,
       liveExecutionArmed: false,
     })}\n`)
     return

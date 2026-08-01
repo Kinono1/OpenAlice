@@ -110,6 +110,7 @@ async function createCredentialRotationReceipt(
 ): Promise<string> {
   const path = join(root, ready ? 'credential-pass.json' : 'credential-blocked.json')
   const receipt = buildCredentialRotationReceipt({
+    scope: 'production',
     credentialNames: [...PRIMARY_CREDENTIAL_ROTATION_NAMES],
     rotatedAt: '2026-08-01T12:00:00.000Z',
     newCredentialStored: ready,

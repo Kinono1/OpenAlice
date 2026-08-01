@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 616,
+  "entryCount": 617,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -9884,6 +9884,33 @@
       "timeoutSeconds": 900,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_run_canary_rollback_drill_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/run_canary_rollback_drill.ts",
+      "compatibilityAliases": [
+        "canary:rollback-drill"
+      ],
+      "inputs": [
+        "src/runtime/canary_governance.ts",
+        "src/runtime/release_manager.ts"
+      ],
+      "outputs": [
+        "runtime/canary-drills"
+      ],
+      "safetyLevel": "artifact_write",
+      "lock": {
+        "policy": "required",
+        "key": "pipeline:pipeline.scripts_run_canary_rollback_drill_ts"
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
       "schedulerOwner": "manual",
       "cronTaskIds": []
     },
