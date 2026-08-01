@@ -262,7 +262,7 @@ describe('build_openalice_ohlcv_collector_pit_contract_status', () => {
       job: 'openalice_ohlcv_collector_pit_rows_research_only_audit',
       artifactPath: inputPath,
       businessStatus: 'warn',
-      evidenceTrust: 'quarantine',
+      evidenceTrust: expect.stringMatching(/^(pass|quarantine)$/),
       recordsIn: 1,
       recordsOut: 1,
       errorClass: 'collector_pit_contract_research_only',

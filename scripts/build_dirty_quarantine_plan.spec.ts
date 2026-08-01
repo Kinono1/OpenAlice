@@ -186,6 +186,12 @@ describe('build_dirty_quarantine_plan', () => {
         startedAt: '2026-05-02T00:00:00.000Z',
         finishedAt: '2026-05-02T00:00:01.000Z',
         exitCode: 0,
+        gitSnapshot: {
+          commit: 'abc',
+          dirty: true,
+          dirtyFilesCount: audit.counts.total,
+          dirtyHash: 'dirty',
+        },
         artifactHash: 'wrong-hash',
       }),
     })

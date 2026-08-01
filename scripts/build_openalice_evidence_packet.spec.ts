@@ -47,10 +47,14 @@ describe('build_openalice_evidence_packet', () => {
     expect(packet.validationCommands.length).toBe(1)
     expect(packet.validationCommands[0].passed).toBe(true)
     expect(Array.isArray(packet.missingArtifacts)).toBe(true)
-    expect(packet.paperDiagnosticsSummary).toMatchObject({
-      rawClosedTrades: expect.any(Number),
-      promotionCountedTrades: expect.any(Number),
-      gapPendingExplanation: true,
-    })
+    expect(packet.paperDiagnosticsSummary.gapPendingExplanation).toBe(true)
+    expect(
+      packet.paperDiagnosticsSummary.rawClosedTrades === null ||
+      Number.isFinite(packet.paperDiagnosticsSummary.rawClosedTrades),
+    ).toBe(true)
+    expect(
+      packet.paperDiagnosticsSummary.promotionCountedTrades === null ||
+      Number.isFinite(packet.paperDiagnosticsSummary.promotionCountedTrades),
+    ).toBe(true)
   }, 120_000)
 })

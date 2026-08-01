@@ -17,7 +17,10 @@ function runFinalize(outDir: string): Promise<{ code: number | null; stdout: str
         "--outDir",
         outDir,
       ],
-      { cwd: process.cwd() }
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, NODE_NO_WARNINGS: "1" },
+      }
     );
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

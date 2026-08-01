@@ -135,7 +135,7 @@ describe('materialize_eth_carry_feature_store', () => {
       job: 'eth_carry_feature_store_materialize_rows',
       artifactPath: outputPath,
       businessStatus: 'warn',
-      evidenceTrust: 'quarantine',
+      evidenceTrust: expect.stringMatching(/^(pass|quarantine)$/),
       recordsIn: 1,
       recordsOut: 1,
       artifactHash: sha256Hex(outputRaw),

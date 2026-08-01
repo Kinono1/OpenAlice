@@ -14,6 +14,21 @@ import { UnifiedTradingAccount } from '../../UnifiedTradingAccount.js'
 import { MockBroker } from '../../brokers/mock/index.js'
 import '../../contract-ext.js'
 
+// This suite exercises the in-memory broker lifecycle. Release/admission
+// enforcement is covered independently; keep this harness deterministic and
+// free of machine-local runtime artifacts.
+vi.mock('../../../../runtime/release_gate_status.js', () => ({
+  loadReleaseGateStatus: vi.fn().mockResolvedValue({
+    version: 1,
+    generatedAt: '2026-08-01T00:00:00.000Z',
+    allowPaperTrading: true,
+    allowLiveTrading: false,
+    failedChecks: [],
+    warningChecks: [],
+  }),
+  isReleaseGateStatusBlocking: vi.fn().mockReturnValue({ blocking: false }),
+}))
+
 let broker: MockBroker
 let uta: UnifiedTradingAccount
 

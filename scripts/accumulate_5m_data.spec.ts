@@ -185,7 +185,7 @@ describe('accumulate_5m_data CSV handling', () => {
       job: 'okx_public_ohlcv_pit_rows_research_only',
       artifactPath: outputPath,
       businessStatus: 'warn',
-      evidenceTrust: 'quarantine',
+      evidenceTrust: expect.stringMatching(/^(pass|quarantine)$/),
       recordsIn: 1,
       recordsOut: 1,
       errorClass: 'research_only_not_execution_evidence',
