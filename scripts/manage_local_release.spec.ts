@@ -16,10 +16,13 @@ describe('manage_local_release', () => {
       '/tmp/b.json',
       '--requiredChecks',
       'typescript,pipeline_registry',
+      '--credentialRotationReceiptPath',
+      '/tmp/credential-rotation.json',
     ])
     expect(build.command).toBe('build')
     expect(build.receiptPaths).toEqual(['/tmp/a.json', '/tmp/b.json'])
     expect(build.requiredChecks).toEqual(['typescript', 'pipeline_registry'])
+    expect(build.credentialRotationReceiptPath).toBe('/tmp/credential-rotation.json')
     expect(build.drill).toBe(false)
 
     expect(parseArgs(['rollback', '--drill', 'true']).drill).toBe(true)

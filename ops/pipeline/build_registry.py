@@ -48,6 +48,7 @@ WRITE_MARKERS = (
 PIPELINE_IO_OVERRIDES: dict[str, dict[str, list[str]]] = {
     "scripts/manage_local_release.ts": {
         "inputs": [
+            "runtime/security/credential_rotation/<receipt>.json",
             "ops/pipeline/pipeline_registry.v1.json",
             "ops/release/strategy_release_config.v1.json",
             "pnpm-lock.yaml",
@@ -60,6 +61,25 @@ PIPELINE_IO_OVERRIDES: dict[str, dict[str, list[str]]] = {
             "runtime/releases/receipts",
         ],
     },
+    "scripts/audit_credential_rotation.ts": {
+        "inputs": [
+            "<external-env-file>",
+            "<process-table>",
+            "<launch-agent-plists>",
+            "logs",
+            "src/connectors/web",
+            "ui/src",
+            "runtime/control-plane",
+            "src/sidecar/fixtures",
+            "<git-diff>",
+        ],
+        "outputs": ["runtime/security/credential_rotation"],
+    },
+}
+PIPELINE_SAFETY_OVERRIDES = {
+    # The audit is read-only with respect to operational state, but it appends an
+    # immutable evidence receipt and therefore needs the normal artifact lock.
+    "scripts/audit_credential_rotation.ts": "artifact_write",
 }
 READ_MARKERS = (
     "audit_",
@@ -181,6 +201,8 @@ def infer_lifecycle(path: str, aliases: list[str]) -> str:
 
 
 def infer_safety(path: str) -> str:
+    if path in PIPELINE_SAFETY_OVERRIDES:
+        return PIPELINE_SAFETY_OVERRIDES[path]
     lower = path.lower()
     if any(
         marker in lower

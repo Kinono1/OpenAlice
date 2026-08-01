@@ -35,6 +35,7 @@ export interface LocalReleaseCliArgs {
   command: Command
   releaseRoot: string
   releaseId?: string
+  credentialRotationReceiptPath?: string
   receiptPaths: string[]
   requiredChecks: string[]
   admissionDecisionPath: string
@@ -70,6 +71,9 @@ export function parseArgs(argv: string[]): LocalReleaseCliArgs {
     command,
     releaseRoot: resolve(get('releaseRoot') ?? 'runtime/releases'),
     releaseId: get('releaseId'),
+    credentialRotationReceiptPath: get('credentialRotationReceiptPath')
+      ? resolve(get('credentialRotationReceiptPath')!)
+      : undefined,
     receiptPaths: list('receipt').map((path) => resolve(path)),
     requiredChecks: list('requiredChecks'),
     admissionDecisionPath: resolve(
@@ -119,6 +123,7 @@ async function main(): Promise<void> {
     const receipt = await activateRelease({
       releaseRoot: args.releaseRoot,
       releaseId,
+      credentialRotationReceiptPath: args.credentialRotationReceiptPath,
     })
     console.log(JSON.stringify(receipt, null, 2))
     if (receipt.status !== 'pass') process.exitCode = 1

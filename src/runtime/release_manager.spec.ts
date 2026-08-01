@@ -4,6 +4,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildReleaseManifest } from './release_manifest.js'
 import {
+  buildCredentialRotationReceipt,
+  PRIMARY_CREDENTIAL_ROTATION_NAMES,
+} from './credential_rotation.js'
+import {
   activateRelease,
   readReleasePointer,
   rollbackRelease,
@@ -21,12 +25,21 @@ describe('local release manager', () => {
     const root = await mkdtemp(join(tmpdir(), 'openalice-release-'))
     await createRelease(root, COMMIT_A)
     await createRelease(root, COMMIT_B)
+    const credentialRotationReceiptPath = await createCredentialRotationReceipt(root)
 
-    const first = await activateRelease({ releaseRoot: root, releaseId: COMMIT_A })
+    const first = await activateRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_A,
+      credentialRotationReceiptPath,
+    })
     expect(first.status).toBe('pass')
     expect(await readReleasePointer(root, 'current')).toBe(COMMIT_A)
 
-    const second = await activateRelease({ releaseRoot: root, releaseId: COMMIT_B })
+    const second = await activateRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_B,
+      credentialRotationReceiptPath,
+    })
     expect(second.status).toBe('pass')
     expect(await readReleasePointer(root, 'current')).toBe(COMMIT_B)
     expect(await readReleasePointer(root, 'previous')).toBe(COMMIT_A)
@@ -40,12 +53,17 @@ describe('local release manager', () => {
   it('blocks activation when a release artifact was tampered', async () => {
     const root = await mkdtemp(join(tmpdir(), 'openalice-release-tamper-'))
     await createRelease(root, COMMIT_A)
+    const credentialRotationReceiptPath = await createCredentialRotationReceipt(root)
     await writeFile(join(root, COMMIT_A, 'dist/main.js'), 'tampered\n')
 
     await expect(verifyReleaseDirectory(root, COMMIT_A)).rejects.toThrow(
       'release_artifact_hash_mismatch',
     )
-    const receipt = await activateRelease({ releaseRoot: root, releaseId: COMMIT_A })
+    const receipt = await activateRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_A,
+      credentialRotationReceiptPath,
+    })
     expect(receipt.status).toBe('blocked')
     expect(await readReleasePointer(root, 'current')).toBeNull()
   })
@@ -62,7 +80,54 @@ describe('local release manager', () => {
       'utf8',
     ))).toEqual(manifest)
   })
+
+  it('blocks activation without a passing credential rotation receipt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-release-credential-block-'))
+    await createRelease(root, COMMIT_A)
+
+    const missing = await activateRelease({ releaseRoot: root, releaseId: COMMIT_A })
+    expect(missing).toMatchObject({
+      status: 'blocked',
+      reasonCodes: ['credential_rotation_receipt_missing'],
+    })
+    expect(await readReleasePointer(root, 'current')).toBeNull()
+
+    const blockedPath = await createCredentialRotationReceipt(root, false)
+    const blocked = await activateRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_A,
+      credentialRotationReceiptPath: blockedPath,
+    })
+    expect(blocked.status).toBe('blocked')
+    expect(blocked.reasonCodes).toContain('credential_rotation_receipt_blocked')
+    expect(await readReleasePointer(root, 'current')).toBeNull()
+  })
 })
+
+async function createCredentialRotationReceipt(
+  root: string,
+  ready = true,
+): Promise<string> {
+  const path = join(root, ready ? 'credential-pass.json' : 'credential-blocked.json')
+  const receipt = buildCredentialRotationReceipt({
+    credentialNames: [...PRIMARY_CREDENTIAL_ROTATION_NAMES],
+    rotatedAt: '2026-08-01T12:00:00.000Z',
+    newCredentialStored: ready,
+    oldCredentialRevoked: ready ? 'yes' : 'unknown',
+    argvScan: 'pass',
+    plistScan: 'pass',
+    logScan: 'pass',
+    apiScan: 'pass',
+    gitScan: 'pass',
+    artifactScan: 'pass',
+    fixtureScan: 'pass',
+    evidenceRefs: [
+      'credential_revocation:external_receipt:sha256:' + '8'.repeat(64),
+    ],
+  })
+  await writeFile(path, `${JSON.stringify(receipt)}\n`)
+  return path
+}
 
 async function createRelease(root: string, commit: string) {
   const path = join(root, commit)

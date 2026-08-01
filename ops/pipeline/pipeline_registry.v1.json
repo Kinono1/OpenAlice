@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 614,
+  "entryCount": 616,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -515,6 +515,60 @@
       },
       "timeoutSeconds": 300,
       "networkPolicy": "readonly_public",
+      "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_audit_credential_rotation_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/audit_credential_rotation.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_audit_credential_rotation_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/audit_credential_rotation.ts",
+      "compatibilityAliases": [
+        "audit:credential-rotation"
+      ],
+      "inputs": [
+        "<external-env-file>",
+        "<git-diff>",
+        "<launch-agent-plists>",
+        "<process-table>",
+        "logs",
+        "runtime/control-plane",
+        "src/connectors/web",
+        "src/sidecar/fixtures",
+        "ui/src"
+      ],
+      "outputs": [
+        "runtime/security/credential_rotation"
+      ],
+      "safetyLevel": "artifact_write",
+      "lock": {
+        "policy": "required",
+        "key": "pipeline:pipeline.scripts_audit_credential_rotation_ts"
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
       "evidenceTtlSeconds": 86400,
       "schedulerOwner": "manual",
       "cronTaskIds": []
@@ -7732,7 +7786,8 @@
         "ops/pipeline/pipeline_registry.v1.json",
         "ops/release/strategy_release_config.v1.json",
         "pnpm-lock.yaml",
-        "runtime/control-plane/receipts"
+        "runtime/control-plane/receipts",
+        "runtime/security/credential_rotation/<receipt>.json"
       ],
       "outputs": [
         "runtime/releases/<sourceCommit>",

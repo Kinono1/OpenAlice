@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   readlink,
   realpath,
@@ -12,6 +14,10 @@ import {
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { sha256Canonical } from '../sidecar/contracts.js'
+import {
+  assertPrimaryCredentialRotationReady,
+  type CredentialRotationReceiptV1,
+} from './credential_rotation.js'
 import {
   validateReleaseManifest,
   type ReleaseManifestV1,
@@ -32,6 +38,8 @@ export const releaseSwitchReceiptV1Schema = z.object({
   currentCommit: z.string().regex(COMMIT_RE).nullable(),
   previousCommit: z.string().regex(COMMIT_RE).nullable(),
   manifestHash: z.string().regex(SHA256_RE).nullable(),
+  credentialRotationReceiptId: z.string().regex(SHA256_RE).nullable().optional(),
+  credentialRotationReceiptHash: z.string().regex(SHA256_RE).nullable().optional(),
   reasonCodes: z.array(z.string().trim().min(1)),
 }).strict()
 
@@ -87,12 +95,20 @@ export async function writeImmutableReleaseManifest(
 export async function activateRelease(options: {
   releaseRoot: string
   releaseId: string
+  credentialRotationReceiptPath?: string
   receiptDir?: string
   now?: Date
 }): Promise<ReleaseSwitchReceiptV1> {
   const now = options.now ?? new Date()
   let fromCommit: string | null = null
+  let credentialRotation: CredentialRotationReceiptBinding | null = null
   try {
+    if (!options.credentialRotationReceiptPath) {
+      throw new Error('credential_rotation_receipt_missing')
+    }
+    credentialRotation = await loadCredentialRotationReceiptBinding(
+      options.credentialRotationReceiptPath,
+    )
     const manifest = await verifyReleaseDirectory(options.releaseRoot, options.releaseId)
     fromCommit = await readReleasePointer(options.releaseRoot, 'current')
     if (fromCommit && fromCommit !== options.releaseId) {
@@ -108,6 +124,8 @@ export async function activateRelease(options: {
       currentCommit: options.releaseId,
       previousCommit: fromCommit && fromCommit !== options.releaseId ? fromCommit : null,
       manifestHash: manifest.manifestHash,
+      credentialRotationReceiptId: credentialRotation.receipt.receiptId,
+      credentialRotationReceiptHash: credentialRotation.receiptHash,
       reasonCodes: [],
     })
     await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
@@ -122,6 +140,8 @@ export async function activateRelease(options: {
       currentCommit: await readReleasePointer(options.releaseRoot, 'current'),
       previousCommit: await readReleasePointer(options.releaseRoot, 'previous'),
       manifestHash: null,
+      credentialRotationReceiptId: credentialRotation?.receipt.receiptId ?? null,
+      credentialRotationReceiptHash: credentialRotation?.receiptHash ?? null,
       reasonCodes: [error instanceof Error ? error.message : String(error)],
     })
     await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
@@ -153,6 +173,8 @@ export async function rollbackRelease(options: {
       currentCommit: toCommit,
       previousCommit: fromCommit,
       manifestHash: manifest.manifestHash,
+      credentialRotationReceiptId: null,
+      credentialRotationReceiptHash: null,
       reasonCodes: [],
     })
     await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
@@ -167,6 +189,8 @@ export async function rollbackRelease(options: {
       currentCommit: await readReleasePointer(options.releaseRoot, 'current'),
       previousCommit: await readReleasePointer(options.releaseRoot, 'previous'),
       manifestHash: null,
+      credentialRotationReceiptId: null,
+      credentialRotationReceiptHash: null,
       reasonCodes: [error instanceof Error ? error.message : String(error)],
     })
     await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
@@ -231,6 +255,32 @@ export async function loadValidationReceiptBinding(options: {
     executedAt: requiredString(value.executedAt, 'executedAt'),
     expiresAt,
     status: 'pass',
+  }
+}
+
+interface CredentialRotationReceiptBinding {
+  receipt: CredentialRotationReceiptV1
+  receiptHash: string
+}
+
+export async function loadCredentialRotationReceiptBinding(
+  path: string,
+): Promise<CredentialRotationReceiptBinding> {
+  const resolvedPath = resolve(path)
+  const stat = await lstat(resolvedPath)
+  if (stat.isSymbolicLink()) throw new Error('credential_rotation_receipt_symlink_forbidden')
+  if (!stat.isFile()) throw new Error('credential_rotation_receipt_not_regular_file')
+  const handle = await open(resolvedPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const openedStat = await handle.stat()
+    if (!openedStat.isFile()) throw new Error('credential_rotation_receipt_not_regular_file')
+    const raw = await handle.readFile()
+    return {
+      receipt: assertPrimaryCredentialRotationReady(JSON.parse(raw.toString('utf8'))),
+      receiptHash: createHash('sha256').update(raw).digest('hex'),
+    }
+  } finally {
+    await handle.close()
   }
 }
 
