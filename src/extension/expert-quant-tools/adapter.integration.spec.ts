@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { IAnalysisContext } from "../analysis-tools/interfaces.js";
 import type { IMarketDataProvider, MarketData, NewsItem } from "../analysis-kit/data/interfaces.js";
 import { createExpertQuantTools } from "./adapter.js";
+import { admissionDecisionId } from "../../runtime/admission.js";
 
 function makeCandles(count: number): MarketData[] {
   const out: MarketData[] = [];
@@ -103,6 +104,7 @@ describe("expert-quant-tools adapter integration", () => {
     const experimentVerdictPath = join(tempDir, "experiment_verdict.v2.json");
     const releaseGateStatusPath = join(tempDir, "release_gate_status.json");
     const championRegistryPath = join(tempDir, "paper_champion_registry.json");
+    const admissionDecisionPath = join(tempDir, "admission_decision.v1.json");
 
     await writeFile(
       validationRunsPath,
@@ -169,6 +171,39 @@ describe("expert-quant-tools adapter integration", () => {
         2,
       ),
     );
+    const admissionCore = {
+      candidateId: "S1",
+      evaluatedAt: "2026-02-22T12:00:00.000Z",
+      expiresAt: "2026-02-22T12:05:00.000Z",
+      sourceCommit: "a".repeat(40),
+      dirtyStateHash: "b".repeat(64),
+      releaseManifestHash: "c".repeat(64),
+      stage: "paper_allowed" as const,
+      paperTradingAllowed: true,
+      liveTradingAllowed: false,
+      liveExecutionArmed: false,
+      gateResults: [
+        {
+          gateId: "promotion_v2_6",
+          status: "pass" as const,
+          evidenceRefs: ["d".repeat(64)],
+          reasonCodes: [],
+        },
+      ],
+      blockingReasons: [],
+      evidenceRefs: ["d".repeat(64)],
+      approvalRefs: [],
+      accountScope: [],
+      assetScope: ["BTC/USD"],
+    };
+    await writeFile(
+      admissionDecisionPath,
+      JSON.stringify({
+        schemaVersion: "admission_decision.v1",
+        decisionId: admissionDecisionId(admissionCore),
+        ...admissionCore,
+      }),
+    );
 
     const tools = createExpertQuantTools(ctx);
     const result = await (tools.expertQuantDecision as any).execute({
@@ -180,6 +215,7 @@ describe("expert-quant-tools adapter integration", () => {
       experimentVerdictPath,
       releaseGateStatusPath,
       championRegistryPath,
+      admissionDecisionPath,
       paperBasisEquityUsd: 1_000,
       paperMaxTurnoverPct: 1,
       policy: {
