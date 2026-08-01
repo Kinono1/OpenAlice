@@ -610,6 +610,76 @@ describe('cron engine', () => {
         unlink(managedStorePath),
       ])
     })
+
+    it('binds managed script fires to the canonical pipeline registry context', async () => {
+      const definitionPath = tempPath('definitions.json')
+      const pipelineRegistryPath = tempPath('pipeline-registry.json')
+      const dynamicDefinitionPath = tempPath('dynamic-definitions.json')
+      const managedStorePath = tempPath('managed-state.json')
+      await writeFile(definitionPath, `${JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        schedulerOwner: 'openalice_cron_engine',
+        jobs: [{
+          id: 'managed1',
+          name: 'managed-script',
+          enabled: true,
+          initialState: 'scheduled',
+          kind: 'script',
+          schedule: { kind: 'every', every: '2h' },
+          payload: '',
+          entrypoint: 'scripts/cron_openalice_task.sh',
+          args: ['scheduler-health'],
+          cwd: '.',
+          notificationArtifact: 'data/runtime/scheduler_health.latest.json',
+        }],
+      }, null, 2)}\n`, 'utf-8')
+      await writeFile(pipelineRegistryPath, `${JSON.stringify({
+        schemaVersion: 'pipeline_registry.v1',
+        entries: [{
+          id: 'pipeline.scripts_cron_openalice_task_sh',
+          owner: 'runtime-operations',
+          entrypoint: 'scripts/cron_openalice_task.sh',
+          safetyLevel: 'artifact_write',
+          networkPolicy: 'denied',
+          timeoutSeconds: 300,
+          lock: { policy: 'required', key: 'pipeline:cron-openalice' },
+          inputs: [],
+          outputs: ['data/runtime/scheduler_health.latest.json'],
+        }],
+      }, null, 2)}\n`, 'utf-8')
+
+      const managed = createCronEngine({
+        eventLog,
+        storePath: managedStorePath,
+        definitionPath,
+        pipelineRegistryPath,
+        dynamicDefinitionPath,
+        now: () => clock,
+      })
+      await managed.start()
+      await managed.runNow('managed1')
+
+      const fire = eventLog.recent({ type: 'cron.fire' }).at(-1)
+      expect(fire?.payload).toMatchObject({
+        pipelineContext: {
+          schemaVersion: 'pipeline_run_context.v1',
+          registryHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          registryEntryId: 'pipeline.scripts_cron_openalice_task_sh',
+          owner: 'runtime-operations',
+          timeoutSeconds: 300,
+          lock: { policy: 'required', key: 'pipeline:cron-openalice' },
+          outputs: ['data/runtime/scheduler_health.latest.json'],
+        },
+      })
+
+      managed.stop()
+      await Promise.all([
+        unlink(definitionPath),
+        unlink(dynamicDefinitionPath),
+        unlink(managedStorePath),
+        unlink(pipelineRegistryPath),
+      ])
+    })
   })
 
   // ==================== one-shot (at) ====================

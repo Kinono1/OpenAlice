@@ -27,29 +27,34 @@ jobs:
 
       - run: pnpm test:release
 
-      - name: Hard release governance gate
+      - name: Engineering release evidence gate
         run: |
-          pnpm decision:validate
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          pnpm pipeline:registry:check
+          pnpm audit:admission-authority
+          pnpm control:run
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          pnpm release:build \
+            --releaseId "$SOURCE_COMMIT" \
+            --skipBuild true \
+            --requiredChecks control_plane_unit,migration_inventory_unit,pipeline_registry,runtime_boundaries,typescript
+          pnpm release:verify --releaseId "$SOURCE_COMMIT"
+
+      - name: Keep trading admission outside CI
+        run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
 
-          verdict = json.loads(Path("decision_packet/verdict.json").read_text())
-          release_gate = json.loads(Path("decision_packet/release_gate_status.json").read_text())
-          replay = json.loads(Path("decision_packet/replay_report.json").read_text())
-
-          errors = []
-          if verdict.get("verdict") != "GO":
-              errors.append(f"decision_packet verdict is {verdict.get('verdict')!r}, expected 'GO'")
-          if release_gate.get("allowLiveTrading") is not True:
-              errors.append("release_gate_status.allowLiveTrading is not true")
-          if replay.get("valid") is not True:
-              errors.append("replay_report.valid is not true")
-
-          if errors:
-              for error in errors:
-                  print(f"::error::{error}")
-              raise SystemExit(1)
+          commit = __import__("subprocess").check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          manifest = json.loads(
+              Path("runtime/releases", commit, "release_manifest.v1.json").read_text()
+          )
+          if manifest.get("liveExecutionArmed") is not False:
+              raise SystemExit("engineering release must keep liveExecutionArmed=false")
+          print("engineering release is separate from paper/live admission")
           PY
 
   release:

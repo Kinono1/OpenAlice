@@ -30,10 +30,6 @@ describe('install_openalice_launchd', () => {
       errorLogPath: '/repo/OpenAlice/logs/openalice_main.launchd.err.log',
       pathEnv: '/opt/homebrew/bin:/usr/bin:/bin',
       homeEnv: '/Users/kino',
-      httpProxy: 'http://127.0.0.1:7892',
-      httpsProxy: 'http://127.0.0.1:7892',
-      allProxy: 'socks5://127.0.0.1:7891',
-      noProxy: 'localhost,127.0.0.1',
       nodeExtraCaCerts: '/etc/ssl/cert.pem',
       nodeUseSystemCa: '1',
     })
@@ -68,6 +64,28 @@ describe('install_openalice_launchd', () => {
     expect(plist).not.toContain('sk-live-secret')
   })
 
+  it('does not copy proxy credentials or provider secrets from process env into plist', () => {
+    process.env.HTTP_PROXY = 'http://proxy-user:proxy-password@127.0.0.1:7892'
+    process.env.HTTPS_PROXY = process.env.HTTP_PROXY
+    process.env.DEEPSEEK_API_KEY = 'sk-live-secret'
+    process.env.OKX_SECRET_KEY = 'okx-secret'
+    process.env.TELEGRAM_BOT_TOKEN = 'telegram-secret'
+
+    const config = buildLaunchdConfig({
+      label: 'ai.openalice.main',
+      scriptPath: '/repo/runtime/bin/launch_openalice_current.sh',
+      logPath: '/tmp/openalice.log',
+      errorLogPath: '/tmp/openalice.err.log',
+    })
+    const plist = renderLaunchdPlist(config)
+
+    expect(plist).not.toContain('proxy-user')
+    expect(plist).not.toContain('proxy-password')
+    expect(plist).not.toContain('sk-live-secret')
+    expect(plist).not.toContain('okx-secret')
+    expect(plist).not.toContain('telegram-secret')
+  })
+
   it('defaults launchd to env-file based secret loading', () => {
     delete process.env.OPENALICE_ENV_FILE
     delete process.env.OPENALICE_LLM_API_KEY_ENV
@@ -95,6 +113,7 @@ describe('install_openalice_launchd', () => {
     expect(args.plistPath).toContain('/Library/LaunchAgents/ai.openalice.paper-monitor.plist')
     expect(args.dryRun).toBe(true)
     expect(args.launch).toBe(false)
+    expect(args.scriptPath).toContain('/runtime/bin/launch_openalice_current.sh')
   })
 
   it('requires explicit flags before writing and launching the agent', () => {

@@ -14,8 +14,12 @@
 
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { EventLog, EventLogEntry } from '../../core/event-log.js'
+import {
+  pipelineRunContextV1Schema,
+  type PipelineRunContextV1,
+} from './pipeline-receipt.js'
 
 // ==================== Types ====================
 
@@ -103,6 +107,7 @@ export interface CronFirePayload {
     previousErrorFingerprint?: string | null
     circuitOpenAfter: number
   }
+  pipelineContext?: PipelineRunContextV1
 }
 
 // ==================== CRUD Types ====================
@@ -148,6 +153,8 @@ export interface CronEngineOpts {
    * persisted as runtime state only and definitions are reconciled by stable ID.
    */
   definitionPath?: string
+  /** Pipeline registry used to bind every managed script run to policy and lineage metadata. */
+  pipelineRegistryPath?: string
   /** Mutable definitions for user-created agent reminders, separate from state. */
   dynamicDefinitionPath?: string
   /** Inject clock for testing. */
@@ -160,6 +167,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   const { eventLog } = opts
   const storePath = opts.storePath ?? 'data/cron/jobs.json'
   const definitionPath = opts.definitionPath
+  const pipelineRegistryPath = opts.pipelineRegistryPath
   const dynamicDefinitionPath = opts.dynamicDefinitionPath ?? `${storePath}.definitions.local.v1.json`
   const now = opts.now ?? Date.now
   const managedDefinitions = definitionPath !== undefined
@@ -174,6 +182,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   const staticDefinitionIds = new Set<string>()
   const forcedDisabledIds = new Set<string>()
   const dynamicDefinitions = new Map<string, CronJobDefinition>()
+  const pipelineContextsByJobId = new Map<string, PipelineRunContextV1>()
   let orphanedRuntimeRecords: CronRuntimeRecord[] = []
 
   // ---------- persistence ----------
@@ -210,6 +219,20 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
 
   async function loadManaged(): Promise<void> {
     const staticDefinitions = await readDefinitionRegistry(definitionPath!)
+    pipelineContextsByJobId.clear()
+    if (pipelineRegistryPath) {
+      const contexts = await readPipelineRegistry(pipelineRegistryPath)
+      for (const definition of staticDefinitions) {
+        if (!definition.script?.path) continue
+        const context = contexts.get(definition.script.path)
+        if (!context) {
+          throw new Error(
+            `cron_pipeline_registry_entry_missing:${definition.id}:${definition.script.path}`,
+          )
+        }
+        pipelineContextsByJobId.set(definition.id, context)
+      }
+    }
     for (const definition of staticDefinitions) {
       staticDefinitionIds.add(definition.id)
       if (definition.forcedDisabled) forcedDisabledIds.add(definition.id)
@@ -415,6 +438,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         payload: job.payload,
         script: job.script,
         notificationState,
+        pipelineContext: pipelineContextsByJobId.get(job.id),
       } satisfies CronFirePayload)
     } catch (err) {
       job.state.lastStatus = 'error'
@@ -1030,6 +1054,51 @@ async function readDefinitionRegistry(path: string): Promise<CronJobDefinition[]
     })
   }
   return definitions
+}
+
+async function readPipelineRegistry(path: string): Promise<Map<string, PipelineRunContextV1>> {
+  const rawBytes = await readFile(path)
+  const raw = JSON.parse(rawBytes.toString('utf8')) as {
+    schemaVersion?: unknown
+    entries?: unknown
+  }
+  if (raw.schemaVersion !== 'pipeline_registry.v1' || !Array.isArray(raw.entries)) {
+    throw new Error(`invalid pipeline registry: ${path}`)
+  }
+  const registryHash = createHash('sha256').update(rawBytes).digest('hex')
+  const contexts = new Map<string, PipelineRunContextV1>()
+  const ids = new Set<string>()
+  for (const value of raw.entries) {
+    if (!value || typeof value !== 'object') {
+      throw new Error(`invalid pipeline registry entry: ${path}`)
+    }
+    const item = value as Record<string, unknown>
+    const entrypoint = item.entrypoint
+    const registryEntryId = item.id
+    if (
+      typeof entrypoint !== 'string'
+      || typeof registryEntryId !== 'string'
+      || contexts.has(entrypoint)
+      || ids.has(registryEntryId)
+    ) {
+      throw new Error(`invalid or duplicate pipeline registry entry: ${String(entrypoint)}`)
+    }
+    ids.add(registryEntryId)
+    contexts.set(entrypoint, pipelineRunContextV1Schema.parse({
+      schemaVersion: 'pipeline_run_context.v1',
+      registryHash,
+      registryEntryId,
+      entrypoint,
+      owner: item.owner,
+      safetyLevel: item.safetyLevel,
+      networkPolicy: item.networkPolicy,
+      timeoutSeconds: item.timeoutSeconds,
+      lock: item.lock,
+      inputs: item.inputs,
+      outputs: item.outputs,
+    }))
+  }
+  return contexts
 }
 
 async function readDynamicDefinitions(path: string): Promise<CronJobDefinition[]> {

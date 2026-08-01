@@ -14,6 +14,9 @@
  *     "issuedBy": "ops-team",
  *     "issuedAt": "2026-06-01T12:00:00.000Z",
  *     "expiresAt": "2026-06-01T12:30:00.000Z",
+ *     "candidateId": "candidate-v2",
+ *     "sourceCommit": "0123456789abcdef0123456789abcdef01234567",
+ *     "releaseManifestHash": "<sha256>",
  *     "pauseNewOpens": true,
  *     "forceDailyLossPct": 5,
  *     "approvedBy": ["alice", "bob"]
@@ -54,6 +57,9 @@ const OVERRIDE_SCHEMA = z
     expiresAt: z.string().datetime({ offset: true }),
     signature: z.string().optional(),
     approvedBy: z.array(z.string().min(1).max(200)).optional(),
+    candidateId: z.string().min(1).max(300).nullable().optional(),
+    sourceCommit: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+    releaseManifestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   })
   .strict()
 

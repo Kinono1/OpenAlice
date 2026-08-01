@@ -1,10 +1,11 @@
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { resolveManualOverrideSecret } from '../core/manual-override-secret.js'
 import {
   DEFAULT_MANUAL_OVERRIDE,
+  applyMonotonicManualOverride,
   loadManualOverride,
   signManualOverridePayload,
   type SignedManualOverride,
@@ -133,5 +134,111 @@ describe('manual override loading', () => {
         now: new Date('2026-07-31T00:10:00.000Z'),
       }),
     ).resolves.toEqual(DEFAULT_MANUAL_OVERRIDE)
+  })
+
+  it('parses legacy bypass flags but rejects their permissive effect', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-legacy-rejected-'))
+    const path = join(dir, 'override.json')
+    const eventLog = { append: vi.fn().mockResolvedValue(undefined) }
+    await writeFile(
+      path,
+      JSON.stringify(signedFixture({
+        ignoreReleaseGate: true,
+        ignoreRegimeShift: true,
+        approvedBy: ['operator-a', 'operator-b'],
+      })),
+      'utf-8',
+    )
+
+    const result = await loadManualOverride({
+      filePath: path,
+      eventLog: eventLog as never,
+      env: { NODE_ENV: 'test', ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret() },
+      now: new Date('2026-07-31T00:10:00.000Z'),
+    })
+    expect(result.pauseNewOpens).toBe(true)
+    expect(result.ignoreReleaseGate).toBeUndefined()
+    expect(result.ignoreRegimeShift).toBeUndefined()
+    expect(eventLog.append).toHaveBeenCalledWith(
+      'manual_override.legacy_override_rejected',
+      expect.objectContaining({ reasonCode: 'legacy_override_rejected' }),
+    )
+  })
+
+  it('fails closed when a signed override does not match authority binding', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'manual-override-binding-'))
+    const path = join(dir, 'override.json')
+    await writeFile(
+      path,
+      JSON.stringify(signedFixture({
+        candidateId: 'candidate-a',
+        sourceCommit: '1'.repeat(40),
+        releaseManifestHash: '2'.repeat(64),
+      })),
+      'utf-8',
+    )
+
+    await expect(loadManualOverride({
+      filePath: path,
+      env: { NODE_ENV: 'test', ALICE_MANUAL_OVERRIDE_SECRET: fixtureSecret() },
+      now: new Date('2026-07-31T00:10:00.000Z'),
+      expectedCandidateId: 'candidate-b',
+      expectedSourceCommit: '1'.repeat(40),
+      expectedReleaseManifestHash: '2'.repeat(64),
+    })).resolves.toEqual(DEFAULT_MANUAL_OVERRIDE)
+  })
+})
+
+describe('manual override monotonic tightening', () => {
+  it('keeps stricter baselines and accepts only more conservative values', () => {
+    const result = applyMonotonicManualOverride({
+      pauseNewOpens: false,
+      forceCapitalRampStage: '25%',
+      forceVolatilityQuantile: 0.9,
+      forceDailyLossPct: -2,
+      forceCvarDailyLossPct: -6,
+      forceConsecutiveLossDays: 5,
+      forceConsecutiveLossPct: -1,
+    }, {
+      capitalRampStage: '5%',
+      volatilityQuantile: 0.7,
+      dailyLossPct: -10,
+      cvarDailyLossPct: -4,
+      consecutiveLossDays: 3,
+      consecutiveLossPct: -5,
+    })
+
+    expect(result.value).toEqual({
+      capitalRampStage: '5%',
+      volatilityQuantile: 0.9,
+      dailyLossPct: -10,
+      cvarDailyLossPct: -6,
+      consecutiveLossDays: 5,
+      consecutiveLossPct: -5,
+    })
+    expect(result.rejectedFields).toEqual([
+      'forceCapitalRampStage',
+      'forceConsecutiveLossPct',
+      'forceDailyLossPct',
+    ])
+  })
+
+  it('does not let an override manufacture missing risk evidence', () => {
+    const result = applyMonotonicManualOverride({
+      pauseNewOpens: false,
+      forceVolatilityQuantile: 1,
+      forceDailyLossPct: -100,
+      forceConsecutiveLossDays: 365,
+    }, {
+      capitalRampStage: '5%',
+    })
+
+    expect(result.value).toEqual({ capitalRampStage: '5%' })
+    expect(result.appliedFields).toEqual([])
+    expect(result.rejectedFields).toEqual([
+      'forceConsecutiveLossDays',
+      'forceDailyLossPct',
+      'forceVolatilityQuantile',
+    ])
   })
 })

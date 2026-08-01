@@ -36,6 +36,7 @@ WRITE_MARKERS = (
     "collect_",
     "compact_",
     "export_",
+    "manage_",
     "materialize_",
     "publish_",
     "repair_",
@@ -43,6 +44,23 @@ WRITE_MARKERS = (
     "train_",
     "write_",
 )
+
+PIPELINE_IO_OVERRIDES: dict[str, dict[str, list[str]]] = {
+    "scripts/manage_local_release.ts": {
+        "inputs": [
+            "ops/pipeline/pipeline_registry.v1.json",
+            "ops/release/strategy_release_config.v1.json",
+            "pnpm-lock.yaml",
+            "runtime/control-plane/receipts",
+        ],
+        "outputs": [
+            "runtime/releases/<sourceCommit>",
+            "runtime/releases/current",
+            "runtime/releases/previous",
+            "runtime/releases/receipts",
+        ],
+    },
+}
 READ_MARKERS = (
     "audit_",
     "check_",
@@ -233,13 +251,14 @@ def build_pipeline_registry(
         if item_id in seen_ids:
             raise ValueError(f"pipeline id collision: {item_id}")
         seen_ids.add(item_id)
-        inputs: list[str] = []
+        io_override = PIPELINE_IO_OVERRIDES.get(path, {})
+        inputs = sorted(io_override.get("inputs", []))
         outputs = sorted(
             {
                 str(job["notificationArtifact"])
                 for job in jobs
                 if isinstance(job.get("notificationArtifact"), str)
-            }
+            }.union(io_override.get("outputs", []))
         )
         scheduler_owner = "openalice_cron_engine" if jobs else "manual"
         entries.append(

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -26,10 +26,6 @@ interface LaunchdConfig {
   errorLogPath: string
   pathEnv: string
   homeEnv: string
-  httpProxy?: string
-  httpsProxy?: string
-  allProxy?: string
-  noProxy?: string
   nodeExtraCaCerts?: string
   nodeUseSystemCa?: string
   openaliceLlmProvider?: string
@@ -77,6 +73,7 @@ async function main(): Promise<void> {
   await mkdir(dirname(resolve(args.plistPath)), { recursive: true })
   await mkdir(dirname(resolve(args.logPath)), { recursive: true })
   await mkdir(dirname(resolve(args.errorLogPath)), { recursive: true })
+  await materializeStableLaunchWrapper(args.scriptPath)
   await writeFile(resolve(args.plistPath), plist, 'utf-8')
 
   if (args.launch) {
@@ -94,7 +91,7 @@ function parseArgs(argv: string[]): CliArgs {
     label,
     plistPath:
       raw.get('plistPath') ?? `${home}/Library/LaunchAgents/${label}.plist`,
-    scriptPath: raw.get('scriptPath') ?? resolve('scripts/launch_openalice_main.sh'),
+    scriptPath: raw.get('scriptPath') ?? resolve('runtime/bin/launch_openalice_current.sh'),
     logPath: raw.get('logPath') ?? resolve('logs/openalice_main.launchd.log'),
     errorLogPath: raw.get('errorLogPath') ?? resolve('logs/openalice_main.launchd.err.log'),
     launch: parseBoolArg(raw.get('launch'), false),
@@ -144,10 +141,6 @@ function buildLaunchdConfig(input: {
     errorLogPath: resolve(input.errorLogPath),
     pathEnv: process.env.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     homeEnv,
-    httpProxy: process.env.http_proxy ?? process.env.HTTP_PROXY,
-    httpsProxy: process.env.https_proxy ?? process.env.HTTPS_PROXY,
-    allProxy: process.env.ALL_PROXY,
-    noProxy: process.env.no_proxy ?? process.env.NO_PROXY,
     nodeExtraCaCerts: process.env.NODE_EXTRA_CA_CERTS,
     nodeUseSystemCa: process.env.NODE_USE_SYSTEM_CA,
     openaliceLlmProvider: process.env.OPENALICE_LLM_PROVIDER,
@@ -172,10 +165,6 @@ function renderLaunchdPlist(config: LaunchdConfig): string {
   const envEntries = [
     ['PATH', config.pathEnv],
     ['HOME', config.homeEnv],
-    ['http_proxy', config.httpProxy],
-    ['https_proxy', config.httpsProxy],
-    ['ALL_PROXY', config.allProxy],
-    ['no_proxy', config.noProxy],
     ['NODE_EXTRA_CA_CERTS', config.nodeExtraCaCerts],
     ['NODE_USE_SYSTEM_CA', config.nodeUseSystemCa],
     ['OPENALICE_LLM_PROVIDER', config.openaliceLlmProvider],
@@ -194,6 +183,10 @@ function renderLaunchdPlist(config: LaunchdConfig): string {
     ['OPENALICE_PAPER_MONITOR_SKIP_VALIDATION', config.openalicePaperMonitorSkipValidation],
     ['OPENALICE_PAPER_MONITOR_REQUIRE_PROMOTION_V2', config.openalicePaperMonitorRequirePromotionV2],
   ].filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
+
+  for (const [key, value] of envEntries) {
+    assertSafeLaunchdValue(key, value)
+  }
 
   const envBlock = envEntries
     .map(([key, value]) => `    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value)}</string>`)
@@ -229,6 +222,32 @@ ${envBlock}
 `
 }
 
+async function materializeStableLaunchWrapper(scriptPath: string): Promise<void> {
+  const target = resolve(scriptPath)
+  const defaultTarget = resolve('runtime/bin/launch_openalice_current.sh')
+  if (target !== defaultTarget) return
+  const binDir = dirname(target)
+  await mkdir(binDir, { recursive: true })
+  const files = [
+    ['ops/release/launch_current.sh', target],
+    ['ops/release/launch_current.mjs', resolve(binDir, 'launch_current.mjs')],
+    ['scripts/openalice_env.sh', resolve(binDir, 'openalice_env.sh')],
+  ] as const
+  for (const [source, destination] of files) {
+    await copyFile(resolve(source), destination)
+    await chmod(destination, 0o555)
+  }
+}
+
+function assertSafeLaunchdValue(key: string, value: string): void {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    const parsed = new URL(value)
+    if (parsed.username || parsed.password) {
+      throw new Error(`credential-bearing URL forbidden in launchd: ${key}`)
+    }
+  }
+}
+
 function escapeXml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -251,6 +270,7 @@ async function reloadLaunchAgent(label: string, plistPath: string): Promise<void
 
 export {
   buildLaunchdConfig,
+  materializeStableLaunchWrapper,
   parseArgs,
   renderLaunchdPlist,
 }

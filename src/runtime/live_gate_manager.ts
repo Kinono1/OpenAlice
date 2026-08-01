@@ -20,7 +20,11 @@ import {
   buildExecutionRecord,
   estimateRequestedNotionalUsd,
 } from "./live_gate_manager.execution.js";
-import { loadManualOverride } from "./manual_override.js";
+import {
+  applyMonotonicManualOverride,
+  loadManualOverride as loadSignedManualOverride,
+  type ManualOverride,
+} from "./manual_override.js";
 import { RiskBreakerStore } from "./risk_breaker_state.js";
 import { writeDailyGateSummary } from "./daily_gate_summary.js";
 import { detectRegimeShift, type RegimeShiftResult } from "./regime_shift.js";
@@ -240,10 +244,7 @@ export class LiveGateManager {
   async beforePlaceOrder(
     req: CryptoPlaceOrderRequest
   ): Promise<RiskCheckResult | undefined> {
-    const manualOverride = await loadManualOverride({
-      filePath: this.manualOverridePath,
-      eventLog: this.opts.eventLog,
-    });
+    const manualOverride = await this.loadManualOverride();
     if (!req.reduceOnly && manualOverride.pauseNewOpens) {
       return {
         approved: false,
@@ -258,8 +259,7 @@ export class LiveGateManager {
 
     if (
       !req.reduceOnly &&
-      this.config.requireReleaseGatePass &&
-      !manualOverride.ignoreReleaseGate
+      this.config.requireReleaseGatePass
     ) {
       const gateStatus = await this.loadReleaseGateStatus();
       const deployment = this.resolveLiveDeploymentMode(gateStatus);
@@ -304,7 +304,7 @@ export class LiveGateManager {
       }
     }
 
-    if (!req.reduceOnly && !manualOverride.ignoreRegimeShift) {
+    if (!req.reduceOnly) {
       const regime = await this.refreshRegimeShiftSignal();
       if (regime && regime.triggered && regime.severity === "high") {
         return {
@@ -408,10 +408,7 @@ export class LiveGateManager {
   }
 
   async buildRiskContext(): Promise<RiskCheckContext | undefined> {
-    const manualOverride = await loadManualOverride({
-      filePath: this.manualOverridePath,
-      eventLog: this.opts.eventLog,
-    });
+    const manualOverride = await this.loadManualOverride();
     const account = await this.opts.engine.getAccount();
     const consecutive = this.riskBreakerStore.getConsecutiveLossStats();
     const tailLoss = this.riskBreakerStore.getTailLossStats({
@@ -424,18 +421,11 @@ export class LiveGateManager {
         ? (account.totalPnL / account.equity) * 100
         : undefined;
 
-    const volatilityQuantile =
-      manualOverride.forceVolatilityQuantile ??
-      (await this.estimateVolatilityQuantile());
+    const baselineVolatilityQuantile = await this.estimateVolatilityQuantile();
+    const regime = await this.refreshRegimeShiftSignal();
 
-    const regime = manualOverride.ignoreRegimeShift
-      ? null
-      : await this.refreshRegimeShiftSignal();
-
-    let stageLabel =
-      manualOverride.forceCapitalRampStage ??
-      this.rampStore.getCurrentStageLabel();
-    if (!manualOverride.forceCapitalRampStage && regime?.triggered) {
+    let stageLabel = this.rampStore.getCurrentStageLabel();
+    if (regime?.triggered) {
       const reduction =
         regime.severity === "high"
           ? this.config.regimeShift.highStageReduction
@@ -447,16 +437,28 @@ export class LiveGateManager {
       }
     }
 
-    return {
-      dailyLossPct: manualOverride.forceDailyLossPct ?? inferredDailyLossPct,
-      cvarDailyLossPct:
-        manualOverride.forceCvarDailyLossPct ?? tailLoss.cvarPct,
-      consecutiveLossDays:
-        manualOverride.forceConsecutiveLossDays ?? consecutive.days,
-      consecutiveLossPct:
-        manualOverride.forceConsecutiveLossPct ?? consecutive.cumulativePct,
-      volatilityQuantile,
+    const baseline: Parameters<typeof applyMonotonicManualOverride>[1] = {
       capitalRampStage: stageLabel,
+      volatilityQuantile: baselineVolatilityQuantile,
+      dailyLossPct: inferredDailyLossPct,
+      cvarDailyLossPct: tailLoss.cvarPct,
+      consecutiveLossDays: consecutive.days,
+      consecutiveLossPct: consecutive.cumulativePct,
+    };
+    const monotonic = applyMonotonicManualOverride(manualOverride, baseline);
+    if (monotonic.rejectedFields.length > 0) {
+      await this.appendEvent("manual_override.tightening_rejected", {
+        fields: monotonic.rejectedFields,
+      });
+    }
+
+    return {
+      dailyLossPct: monotonic.value.dailyLossPct,
+      cvarDailyLossPct: monotonic.value.cvarDailyLossPct,
+      consecutiveLossDays: monotonic.value.consecutiveLossDays,
+      consecutiveLossPct: monotonic.value.consecutiveLossPct,
+      volatilityQuantile: monotonic.value.volatilityQuantile,
+      capitalRampStage: monotonic.value.capitalRampStage,
     };
   }
 
@@ -484,35 +486,23 @@ export class LiveGateManager {
   }
 
   async buildRuntimePlanningState(): Promise<RuntimePlanningState> {
-    const manualOverride = await loadManualOverride({
-      filePath: this.manualOverridePath,
-      eventLog: this.opts.eventLog,
-    });
+    const manualOverride = await this.loadManualOverride();
     const gateStatus = await this.loadReleaseGateStatus();
     const now = new Date();
     const releaseGateDecision =
-      this.config.requireReleaseGatePass && !manualOverride.ignoreReleaseGate
+      this.config.requireReleaseGatePass
         ? isReleaseGateStatusBlocking(gateStatus, "live", now)
         : { blocking: false as const };
     const paperGateDecision =
-      this.config.requireReleaseGatePass && !manualOverride.ignoreReleaseGate
+      this.config.requireReleaseGatePass
         ? getPaperReleaseGateStatusBlocking(gateStatus, now)
         : { blocking: false as const };
-    const regime = manualOverride.ignoreRegimeShift
-      ? null
-      : await this.refreshRegimeShiftSignal();
+    const regime = await this.refreshRegimeShiftSignal();
     const availableSymbols = this.opts.klineStore.getAvailableSymbols();
-    const deployment = manualOverride.ignoreReleaseGate
-      ? {
-          mode: "normal_cap" as const,
-          reason: "manual_override_ignore_release_gate",
-        }
-      : this.resolveLiveDeploymentMode(gateStatus);
+    const deployment = this.resolveLiveDeploymentMode(gateStatus);
 
-    let capitalRampStage =
-      manualOverride.forceCapitalRampStage ??
-      this.rampStore.getCurrentStageLabel();
-    if (!manualOverride.forceCapitalRampStage && regime?.triggered) {
+    let capitalRampStage = this.rampStore.getCurrentStageLabel();
+    if (regime?.triggered) {
       const reduction =
         regime.severity === "high"
           ? this.config.regimeShift.highStageReduction
@@ -522,6 +512,15 @@ export class LiveGateManager {
       if (reduction > 0) {
         capitalRampStage = this.getReducedStageLabel(reduction);
       }
+    }
+    const monotonic = applyMonotonicManualOverride(manualOverride, {
+      capitalRampStage,
+    });
+    capitalRampStage = monotonic.value.capitalRampStage;
+    if (monotonic.rejectedFields.length > 0) {
+      await this.appendEvent("manual_override.tightening_rejected", {
+        fields: monotonic.rejectedFields,
+      });
     }
 
     return {
@@ -611,15 +610,18 @@ export class LiveGateManager {
       });
     }
 
-    const manualOverride = await loadManualOverride({
-      filePath: this.manualOverridePath,
-      eventLog: this.opts.eventLog,
-    });
+    const manualOverride = await this.loadManualOverride();
     const consecutiveLoss = this.riskBreakerStore.getConsecutiveLossStats();
     const riskBreakerState = this.riskBreakerStore.getState();
-    const stageLabel =
-      manualOverride.forceCapitalRampStage ??
-      this.rampStore.getCurrentStageLabel();
+    const stageResult = applyMonotonicManualOverride(manualOverride, {
+      capitalRampStage: this.rampStore.getCurrentStageLabel(),
+    });
+    const stageLabel = stageResult.value.capitalRampStage;
+    if (stageResult.rejectedFields.length > 0) {
+      await this.appendEvent("manual_override.tightening_rejected", {
+        fields: stageResult.rejectedFields,
+      });
+    }
     let idempotencyEvents: IdempotencyGovernanceSummary | undefined;
     try {
       idempotencyEvents = await summarizeIdempotencyEventsForDate(
@@ -739,6 +741,24 @@ export class LiveGateManager {
     const currentIdx = this.rampStore.getCurrentStageIndex();
     const reducedIdx = Math.max(0, currentIdx - reduction);
     return this.rampStore.getStageLabelByIndex(reducedIdx);
+  }
+
+  private async loadManualOverride(): Promise<ManualOverride> {
+    const authority = await tryLoadAdmissionDecision(
+      this.config.admissionDecisionPath,
+      { now: new Date() },
+    );
+    return loadSignedManualOverride({
+      filePath: this.manualOverridePath,
+      eventLog: this.opts.eventLog,
+      ...(authority.kind === "loaded"
+        ? {
+            expectedCandidateId: authority.decision.candidateId,
+            expectedSourceCommit: authority.decision.sourceCommit,
+            expectedReleaseManifestHash: authority.decision.releaseManifestHash,
+          }
+        : {}),
+    });
   }
 
   private async loadReleaseGateStatus(

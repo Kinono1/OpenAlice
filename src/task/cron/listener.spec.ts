@@ -310,6 +310,15 @@ describe('cron listener', () => {
       })
 
       const notificationPath = tempPath('json')
+      const scriptRunner = vi.fn(async () => {
+        await writeFile(notificationPath, JSON.stringify({
+          shouldNotify: true,
+          deliveryDecision: 'notify',
+          headline: 'ETH carry is actionable again.',
+          fullText: 'ETH carry is actionable again.\nState: ready_to_trade',
+        }), 'utf-8')
+        return { stdout: 'script ok\n', stderr: '' }
+      })
 
       listener.stop()
       listener = createCronListener({
@@ -317,15 +326,7 @@ describe('cron listener', () => {
         eventLog,
         agentCenter: mockEngine as any,
         session,
-        scriptRunner: async () => {
-          await writeFile(notificationPath, JSON.stringify({
-            shouldNotify: true,
-            deliveryDecision: 'notify',
-            headline: 'ETH carry is actionable again.',
-            fullText: 'ETH carry is actionable again.\nState: ready_to_trade',
-          }), 'utf-8')
-          return { stdout: 'script ok\n', stderr: '' }
-        },
+        scriptRunner,
       })
       listener.start()
 
@@ -338,6 +339,19 @@ describe('cron listener', () => {
           path: resolve('scripts/cron_eth_carry_refresh_pipeline.sh'),
           notificationPath,
         },
+        pipelineContext: {
+          schemaVersion: 'pipeline_run_context.v1',
+          registryHash: '1'.repeat(64),
+          registryEntryId: 'pipeline.scripts_cron_eth_carry_refresh_pipeline_sh',
+          entrypoint: 'scripts/cron_eth_carry_refresh_pipeline.sh',
+          owner: 'runtime-operations',
+          safetyLevel: 'artifact_write',
+          networkPolicy: 'readonly_public',
+          timeoutSeconds: 900,
+          lock: { policy: 'required', key: 'pipeline:eth-carry' },
+          inputs: [],
+          outputs: [],
+        },
       } satisfies CronFirePayload)
 
       await vi.waitFor(() => {
@@ -345,6 +359,11 @@ describe('cron listener', () => {
       })
 
       expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+      expect(scriptRunner).toHaveBeenCalledWith(
+        resolve('scripts/cron_eth_carry_refresh_pipeline.sh'),
+        [],
+        { cwd: undefined, timeoutMs: 900_000 },
+      )
       expect(delivered[0]).toBe('ETH carry is actionable again.\nState: ready_to_trade')
       const done = eventLog.recent({ type: 'cron.done' })
       expect(done[0].payload).toMatchObject({
@@ -353,6 +372,13 @@ describe('cron listener', () => {
         delivered: true,
         parsedStatus: 'CRON_NOTIFY',
         parsedReason: 'ETH carry is actionable again.',
+        pipelineReceipt: {
+          schemaVersion: 'pipeline_execution_receipt.v1',
+          receiptId: expect.stringMatching(/^[a-f0-9]{64}$/),
+          registryEntryId: 'pipeline.scripts_cron_eth_carry_refresh_pipeline_sh',
+          owner: 'runtime-operations',
+          artifactLineage: { status: 'complete' },
+        },
       })
     })
 

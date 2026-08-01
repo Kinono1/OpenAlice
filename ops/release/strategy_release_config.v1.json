@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "strategy_release_config.v1",
+  "architecture": "modular_monolith",
+  "executionAuthority": "OpenAlice",
+  "defaultExecutionMode": "paper_only",
+  "marketScope": {
+    "venue": "OKX",
+    "assets": [
+      "BTC/USD",
+      "ETH/USD"
+    ],
+    "instrumentType": "swap"
+  },
+  "sidecars": {
+    "TradingAgents": "research_only",
+    "AlphaSwarm": "research_only"
+  },
+  "engineeringReleasePolicy": {
+    "separateFromTradingAdmission": true,
+    "liveExecutionArmPersistedInRelease": false
+  }
+}

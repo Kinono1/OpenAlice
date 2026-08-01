@@ -22,6 +22,7 @@ import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { decideCronNotification } from './notification-policy.js'
+import { buildPipelineExecutionReceipt } from './pipeline-receipt.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -40,7 +41,11 @@ export interface CronScriptRunResult {
   stderr: string
 }
 
-export type CronScriptRunner = (scriptPath: string, args: string[], opts: { cwd?: string }) => Promise<CronScriptRunResult>
+export type CronScriptRunner = (
+  scriptPath: string,
+  args: string[],
+  opts: { cwd?: string; timeoutMs?: number },
+) => Promise<CronScriptRunResult>
 export type MacosNotificationSender = (text: string) => Promise<{ attempted: boolean; delivered: boolean; reason: string }>
 
 interface CronNotification {
@@ -235,6 +240,7 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   async function handleScriptFire(payload: CronFirePayload, startMs: number, sourceFireSeq: number): Promise<void> {
     const script = payload.script
     if (!script?.path) {
+      const endedMs = Date.now()
       await eventLog.append('cron.error', {
         jobId: payload.jobId,
         jobName: payload.jobName,
@@ -242,13 +248,22 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         error: 'script cron job missing script.path',
         errorClass: 'invalid_job_contract',
         permanent: true,
-        durationMs: Date.now() - startMs,
+        durationMs: endedMs - startMs,
+        ...await pipelineReceiptFields(
+          payload,
+          startMs,
+          endedMs,
+          sourceFireSeq,
+          'fail',
+          ['script_path_missing'],
+        ),
       })
       return
     }
 
     const scriptPath = resolve(script.path)
     if (!isAllowlistedCronScript(scriptPath)) {
+      const endedMs = Date.now()
       await eventLog.append('cron.error', {
         jobId: payload.jobId,
         jobName: payload.jobName,
@@ -256,13 +271,26 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         error: `unsupported script cron job: ${scriptPath}`,
         errorClass: 'invalid_job_contract',
         permanent: true,
-        durationMs: Date.now() - startMs,
+        durationMs: endedMs - startMs,
+        ...await pipelineReceiptFields(
+          payload,
+          startMs,
+          endedMs,
+          sourceFireSeq,
+          'fail',
+          ['script_not_allowlisted'],
+        ),
       })
       return
     }
 
     try {
-      const result = await scriptRunner(scriptPath, script.args ?? [], { cwd: script.cwd })
+      const result = await scriptRunner(scriptPath, script.args ?? [], {
+        cwd: script.cwd,
+        timeoutMs: payload.pipelineContext?.timeoutSeconds
+          ? payload.pipelineContext.timeoutSeconds * 1000
+          : undefined,
+      })
       const notification = script.notificationPath
         ? await readCronNotification(script.notificationPath, { minMtimeMs: startMs })
         : null
@@ -275,13 +303,14 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         previousConsecutiveErrors: payload.notificationState?.previousConsecutiveErrors,
       })
       const delivery = await deliverScriptNotification(payload.jobId, notification, policy)
+      const endedMs = Date.now()
 
       await eventLog.append('cron.done', {
         jobId: payload.jobId,
         jobName: payload.jobName,
         sourceFireSeq,
         reply: notificationText || result.stdout.trim() || 'STATUS: CRON_SKIP',
-        durationMs: Date.now() - startMs,
+        durationMs: endedMs - startMs,
         delivered: delivery.delivered,
         deliveryReason: delivery.reason,
         deliveryChannel: delivery.channel,
@@ -296,6 +325,14 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         parsedStatus: notification?.shouldNotify ? 'CRON_NOTIFY' : 'CRON_SKIP',
         parsedReason: notification?.reason ?? '',
         parsedUnparsed: false,
+        ...await pipelineReceiptFields(
+          payload,
+          startMs,
+          endedMs,
+          sourceFireSeq,
+          'pass',
+          [],
+        ),
       })
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err)
@@ -321,13 +358,14 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         circuitOpenAfter: payload.notificationState?.circuitOpenAfter,
       })
       const delivery = await deliverScriptNotification(payload.jobId, notification, policy)
+      const endedMs = Date.now()
       await eventLog.append('cron.error', {
         jobId: payload.jobId,
         jobName: payload.jobName,
         sourceFireSeq,
         error: errorText,
         ...classifyCronError(errorText),
-        durationMs: Date.now() - startMs,
+        durationMs: endedMs - startMs,
         scriptPath,
         delivered: delivery.delivered,
         deliveryReason: delivery.reason,
@@ -343,7 +381,44 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
         parsedStatus: notification?.shouldNotify ? 'CRON_NOTIFY' : 'CRON_SKIP',
         parsedReason: notification?.reason ?? '',
         parsedUnparsed: false,
+        ...await pipelineReceiptFields(
+          payload,
+          startMs,
+          endedMs,
+          sourceFireSeq,
+          'fail',
+          [classifyCronError(errorText).errorClass],
+        ),
       })
+    }
+  }
+
+  async function pipelineReceiptFields(
+    payload: CronFirePayload,
+    startedMs: number,
+    endedMs: number,
+    sourceFireSeq: number,
+    status: 'pass' | 'fail',
+    reasonCodes: string[],
+  ): Promise<Record<string, unknown>> {
+    if (!payload.pipelineContext) return {}
+    try {
+      return {
+        pipelineReceipt: await buildPipelineExecutionReceipt({
+          context: payload.pipelineContext,
+          jobId: payload.jobId,
+          jobName: payload.jobName,
+          sourceFireSeq,
+          startedAt: new Date(startedMs),
+          endedAt: new Date(endedMs),
+          status,
+          reasonCodes,
+        }),
+      }
+    } catch (error) {
+      return {
+        pipelineReceiptError: error instanceof Error ? error.message : String(error),
+      }
     }
   }
 
@@ -522,9 +597,14 @@ function isAllowlistedCronScript(scriptPath: string): boolean {
   return ALLOWLISTED_SCRIPT_PATHS.includes(resolve(scriptPath))
 }
 
-async function defaultScriptRunner(scriptPath: string, args: string[], opts: { cwd?: string }): Promise<CronScriptRunResult> {
+async function defaultScriptRunner(
+  scriptPath: string,
+  args: string[],
+  opts: { cwd?: string; timeoutMs?: number },
+): Promise<CronScriptRunResult> {
   const result = await execFileAsync('/bin/bash', [scriptPath, ...args], {
     cwd: opts.cwd,
+    timeout: opts.timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
   })
   return { stdout: result.stdout, stderr: result.stderr }

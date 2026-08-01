@@ -42,6 +42,7 @@ export async function startOpenAlice(): Promise<void> {
     eventLog,
     storePath: runtime.cronStateFile,
     definitionPath: join(runtime.repoRoot, 'ops', 'pipeline', 'cron_definitions.v1.json'),
+    pipelineRegistryPath: join(runtime.repoRoot, 'ops', 'pipeline', 'pipeline_registry.v1.json'),
     dynamicDefinitionPath: runtime.cronDefinitionOverlayFile,
   })
   const newsStore = new NewsCollectorStore({

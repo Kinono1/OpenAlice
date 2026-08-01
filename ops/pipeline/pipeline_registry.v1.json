@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 611,
+  "entryCount": 614,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -6816,6 +6816,26 @@
       "cronTaskIds": []
     },
     {
+      "id": "pipeline.scripts_launch_current_release_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/launch_current_release.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
       "id": "pipeline.scripts_launch_low_vol_observer_sh",
       "owner": "runtime-operations",
       "domain": "operations",
@@ -7672,6 +7692,62 @@
       "timeoutSeconds": 900,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_manage_local_release_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/manage_local_release.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_manage_local_release_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/manage_local_release.ts",
+      "compatibilityAliases": [
+        "release:activate",
+        "release:build",
+        "release:rollback",
+        "release:status",
+        "release:verify"
+      ],
+      "inputs": [
+        "ops/pipeline/pipeline_registry.v1.json",
+        "ops/release/strategy_release_config.v1.json",
+        "pnpm-lock.yaml",
+        "runtime/control-plane/receipts"
+      ],
+      "outputs": [
+        "runtime/releases/<sourceCommit>",
+        "runtime/releases/current",
+        "runtime/releases/previous",
+        "runtime/releases/receipts"
+      ],
+      "safetyLevel": "artifact_write",
+      "lock": {
+        "policy": "required",
+        "key": "pipeline:pipeline.scripts_manage_local_release_ts"
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
       "schedulerOwner": "manual",
       "cronTaskIds": []
     },

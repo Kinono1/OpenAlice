@@ -217,7 +217,7 @@ describe("live_gate_manager", () => {
     expect(allowed).toBeUndefined();
   });
 
-  it("buildRiskContext respects manual override forced values", async () => {
+  it("buildRiskContext applies only risk-tightening manual override values", async () => {
     const harness = await createHarness({
       engine: createMockEngine({
         getAccount: vi.fn().mockResolvedValue({
@@ -231,7 +231,6 @@ describe("live_gate_manager", () => {
       }),
       manualOverride: {
         pauseNewOpens: false,
-        ignoreRegimeShift: true,
         forceCapitalRampStage: "25%",
         forceVolatilityQuantile: 0.9,
         forceDailyLossPct: -2,
@@ -246,12 +245,48 @@ describe("live_gate_manager", () => {
 
     const context = await harness.manager.buildRiskContext();
     expect(context).toEqual({
-      dailyLossPct: -2,
+      // Existing -10% daily loss and 5% ramp stage are already more
+      // conservative than the requested -2% and 25%; the override cannot
+      // relax either value.
+      dailyLossPct: -10,
       cvarDailyLossPct: -4,
       consecutiveLossDays: 3,
       consecutiveLossPct: -5,
-      volatilityQuantile: 0.9,
-      capitalRampStage: "25%",
+      // The fixture has no measured volatility baseline. A manual override
+      // cannot manufacture missing evidence, even with a severe value.
+      volatilityQuantile: undefined,
+      capitalRampStage: "5%",
+    });
+  });
+
+  it("does not let legacy ignore flags bypass release or regime gates", async () => {
+    const harness = await createHarness({
+      manualOverride: {
+        ignoreReleaseGate: true,
+        ignoreRegimeShift: true,
+      },
+      releaseGateStatus: {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        allowPaperTrading: false,
+        allowLiveTrading: false,
+        failedChecks: ["release_blocked"],
+        warningChecks: [],
+      },
+      config: {
+        requireReleaseGatePass: true,
+        regimeShift: { enabled: false },
+      },
+    });
+
+    const result = await harness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+    });
+    expect(result).toEqual({
+      approved: false,
+      reason: expect.stringContaining("Release gate blocking new opens"),
     });
   });
 
@@ -728,6 +763,9 @@ function signTestOverride(
     issuedBy: "vitest-harness",
     issuedAt: new Date(now.getTime() - 60_000).toISOString(), // 1 min ago
     expiresAt: new Date(now.getTime() + 1800_000).toISOString(), // +30 min
+    candidateId: "live-gate-test-candidate",
+    sourceCommit: "1".repeat(40),
+    releaseManifestHash: "3".repeat(64),
     signature: "",
     ...override,
   };

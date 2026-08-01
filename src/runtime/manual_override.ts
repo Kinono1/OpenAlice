@@ -5,8 +5,9 @@ import type { EventLog } from '../core/event-log.js'
 import { resolveManualOverrideSecret } from '../core/manual-override-secret.js'
 
 /**
- * Manual override — a control-plane file that can pause new opens, bypass
- * release/regime gates, and inject force-overrides for risk inputs.
+ * Manual override — a control-plane file that can pause new opens and tighten
+ * risk inputs. Legacy release/regime bypass fields remain parse-compatible,
+ * but they never produce a permissive effect.
  *
  * Because the override is a privileged short-circuit around the gate manager,
  * the loader requires the file to be:
@@ -42,6 +43,9 @@ export interface SignedManualOverride extends ManualOverride {
   expiresAt: string
   signature: string
   approvedBy?: string[]
+  candidateId?: string | null
+  sourceCommit?: string
+  releaseManifestHash?: string
 }
 
 export const DEFAULT_MANUAL_OVERRIDE: ManualOverride = {
@@ -65,6 +69,8 @@ export type HighRiskField = (typeof HIGH_RISK_FIELDS)[number]
 export const MANUAL_OVERRIDE_TTL_MAX_MS = 3_600_000
 
 const ISO_DATETIME = z.string().datetime({ offset: true })
+const COMMIT_SHA = z.string().regex(/^[a-f0-9]{40}$/)
+const SHA256 = z.string().regex(/^[a-f0-9]{64}$/)
 
 const SIGNED_OVERRIDE_SCHEMA = z
   .object({
@@ -87,6 +93,9 @@ const SIGNED_OVERRIDE_SCHEMA = z
     expiresAt: ISO_DATETIME,
     signature: z.string().min(1),
     approvedBy: z.array(z.string().min(1).max(200)).optional(),
+    candidateId: z.string().min(1).max(300).nullable().optional(),
+    sourceCommit: COMMIT_SHA.optional(),
+    releaseManifestHash: SHA256.optional(),
   })
   .strict()
 
@@ -95,6 +104,9 @@ export interface LoadManualOverrideOptions {
   eventLog?: EventLog
   env?: NodeJS.ProcessEnv
   now?: Date
+  expectedCandidateId?: string | null
+  expectedSourceCommit?: string
+  expectedReleaseManifestHash?: string
 }
 
 export type LoadManualOverrideInput = LoadManualOverrideOptions | string
@@ -126,6 +138,9 @@ export function canonicalizeManualOverride(parsed: SignedManualOverride): string
     'issuedAt',
     'expiresAt',
     'approvedBy',
+    'candidateId',
+    'sourceCommit',
+    'releaseManifestHash',
   ] as const
   const out: Record<string, unknown> = {}
   for (const k of allowedFields) {
@@ -327,7 +342,20 @@ export async function loadManualOverride(
     return { ...DEFAULT_MANUAL_OVERRIDE }
   }
 
-  // 9) Multi-sig required for high-risk fields
+  // 9) Candidate/release binding. When the caller supplies an authority
+  // binding, the signed override must carry exactly the same values. Missing
+  // bindings are treated as mismatches rather than implicit wildcards.
+  const bindingMismatches = listBindingMismatches(parsed, options)
+  if (bindingMismatches.length > 0) {
+    await recordEvent(eventLog, 'manual_override.binding_mismatch', {
+      filePath,
+      issuedBy: parsed.issuedBy,
+      fields: bindingMismatches,
+    })
+    return { ...DEFAULT_MANUAL_OVERRIDE }
+  }
+
+  // 10) Multi-sig required for high-risk fields
   const setHighRiskFields = listSetHighRiskFields(parsed)
   if (setHighRiskFields.length > 0) {
     const dedupedApprovers = new Set(
@@ -347,7 +375,22 @@ export async function loadManualOverride(
     }
   }
 
-  // 10) Apply
+  // 11) Legacy permissive flags are audit-only. They remain in the signed
+  // payload for compatibility, but are never copied to the effective result.
+  const rejectedLegacyFields = [
+    parsed.ignoreReleaseGate === true ? 'ignoreReleaseGate' : null,
+    parsed.ignoreRegimeShift === true ? 'ignoreRegimeShift' : null,
+  ].filter((field): field is string => field !== null)
+  if (rejectedLegacyFields.length > 0) {
+    await recordEvent(eventLog, 'manual_override.legacy_override_rejected', {
+      filePath,
+      issuedBy: parsed.issuedBy,
+      reasonCode: 'legacy_override_rejected',
+      fields: rejectedLegacyFields,
+    })
+  }
+
+  // 12) Apply only monotonic, risk-tightening fields.
   const effective = normalizeManualOverride(parsed)
   await recordEvent(eventLog, 'manual_override.applied', {
     filePath,
@@ -368,12 +411,6 @@ export function normalizeManualOverride(raw: unknown): ManualOverride {
   const value = raw as Record<string, unknown>
   const out: ManualOverride = {
     pauseNewOpens: Boolean(value.pauseNewOpens),
-  }
-  if (value.ignoreReleaseGate !== undefined) {
-    out.ignoreReleaseGate = Boolean(value.ignoreReleaseGate)
-  }
-  if (value.ignoreRegimeShift !== undefined) {
-    out.ignoreRegimeShift = Boolean(value.ignoreRegimeShift)
   }
   if (
     typeof value.forceCapitalRampStage === 'string' &&
@@ -408,6 +445,169 @@ export function normalizeManualOverride(raw: unknown): ManualOverride {
   return out
 }
 
+export interface ManualRiskBaseline {
+  capitalRampStage: string
+  volatilityQuantile?: number
+  dailyLossPct?: number
+  cvarDailyLossPct?: number
+  consecutiveLossDays?: number
+  consecutiveLossPct?: number
+}
+
+export interface MonotonicManualOverrideResult {
+  value: ManualRiskBaseline
+  appliedFields: string[]
+  rejectedFields: string[]
+}
+
+/**
+ * Merge a verified override into runtime risk inputs without ever making the
+ * result less conservative. Higher volatility/loss-day values, more-negative
+ * loss percentages, and lower capital allocation are the only accepted moves.
+ */
+export function applyMonotonicManualOverride(
+  override: ManualOverride,
+  baseline: ManualRiskBaseline,
+): MonotonicManualOverrideResult {
+  const value: ManualRiskBaseline = { ...baseline }
+  const appliedFields: string[] = []
+  const rejectedFields: string[] = []
+
+  applyHigherSeverityNumber(
+    'forceVolatilityQuantile',
+    override.forceVolatilityQuantile,
+    baseline.volatilityQuantile,
+    (next) => { value.volatilityQuantile = next },
+    appliedFields,
+    rejectedFields,
+  )
+  applyLowerSeverityNumber(
+    'forceDailyLossPct',
+    override.forceDailyLossPct,
+    baseline.dailyLossPct,
+    (next) => { value.dailyLossPct = next },
+    appliedFields,
+    rejectedFields,
+  )
+  applyLowerSeverityNumber(
+    'forceCvarDailyLossPct',
+    override.forceCvarDailyLossPct,
+    baseline.cvarDailyLossPct,
+    (next) => { value.cvarDailyLossPct = next },
+    appliedFields,
+    rejectedFields,
+  )
+  applyHigherSeverityNumber(
+    'forceConsecutiveLossDays',
+    override.forceConsecutiveLossDays,
+    baseline.consecutiveLossDays,
+    (next) => { value.consecutiveLossDays = Math.floor(next) },
+    appliedFields,
+    rejectedFields,
+  )
+  applyLowerSeverityNumber(
+    'forceConsecutiveLossPct',
+    override.forceConsecutiveLossPct,
+    baseline.consecutiveLossPct,
+    (next) => { value.consecutiveLossPct = next },
+    appliedFields,
+    rejectedFields,
+  )
+
+  if (override.forceCapitalRampStage !== undefined) {
+    const currentPct = parseRampStagePct(baseline.capitalRampStage)
+    const requestedPct = parseRampStagePct(override.forceCapitalRampStage)
+    if (
+      currentPct !== null
+      && requestedPct !== null
+      && requestedPct <= currentPct
+      && [5, 10, 25, 50, 100].includes(requestedPct)
+    ) {
+      value.capitalRampStage = `${requestedPct}%`
+      appliedFields.push('forceCapitalRampStage')
+    } else {
+      rejectedFields.push('forceCapitalRampStage')
+    }
+  }
+
+  return {
+    value,
+    appliedFields: sortedUnique(appliedFields),
+    rejectedFields: sortedUnique(rejectedFields),
+  }
+}
+
+function listBindingMismatches(
+  parsed: SignedManualOverride,
+  options: LoadManualOverrideOptions,
+): string[] {
+  const mismatches: string[] = []
+  if (
+    options.expectedCandidateId !== undefined
+    && parsed.candidateId !== options.expectedCandidateId
+  ) {
+    mismatches.push('candidateId')
+  }
+  if (
+    options.expectedSourceCommit !== undefined
+    && parsed.sourceCommit !== options.expectedSourceCommit
+  ) {
+    mismatches.push('sourceCommit')
+  }
+  if (
+    options.expectedReleaseManifestHash !== undefined
+    && parsed.releaseManifestHash !== options.expectedReleaseManifestHash
+  ) {
+    mismatches.push('releaseManifestHash')
+  }
+  return mismatches.sort()
+}
+
+function applyHigherSeverityNumber(
+  field: string,
+  requested: number | undefined,
+  baseline: number | undefined,
+  apply: (value: number) => void,
+  appliedFields: string[],
+  rejectedFields: string[],
+): void {
+  if (requested === undefined) return
+  if (baseline === undefined) {
+    rejectedFields.push(field)
+  } else if (requested >= baseline) {
+    apply(requested)
+    appliedFields.push(field)
+  } else {
+    rejectedFields.push(field)
+  }
+}
+
+function applyLowerSeverityNumber(
+  field: string,
+  requested: number | undefined,
+  baseline: number | undefined,
+  apply: (value: number) => void,
+  appliedFields: string[],
+  rejectedFields: string[],
+): void {
+  if (requested === undefined) return
+  if (baseline === undefined) {
+    rejectedFields.push(field)
+  } else if (requested <= baseline) {
+    apply(requested)
+    appliedFields.push(field)
+  } else {
+    rejectedFields.push(field)
+  }
+}
+
+function parseRampStagePct(value: string): number | null {
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)%$/)
+  if (!match) return null
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function pickDefinedFields(value: ManualOverride): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
@@ -426,4 +626,8 @@ function isEnoent(err: unknown): boolean {
     'code' in err &&
     (err as NodeJS.ErrnoException).code === 'ENOENT'
   )
+}
+
+function sortedUnique(values: string[]): string[] {
+  return [...new Set(values)].sort()
 }
