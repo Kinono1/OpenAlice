@@ -1,0 +1,214 @@
+{
+  "schemaVersion": "openalice_sidecar_contract_fixture.v1",
+  "canonical": {
+    "value": {
+      "z": [0, 0.25, -0.25, 0.6],
+      "a": {
+        "second": 2,
+        "first": 1
+      },
+      "label": "fixture"
+    },
+    "json": "{\"a\":{\"first\":1,\"second\":2},\"label\":\"fixture\",\"z\":[0,0.25,-0.25,0.6]}",
+    "sha256": "253b2beb4f153d7ce6c0a701b73c25f923430a2c057b4d577b32acfb5e1cb628"
+  },
+  "exchanges": {
+    "tradingagents": {
+      "request": {
+        "schemaVersion": "openalice_sidecar_request.v1",
+        "runId": "fixture-tradingagents-1",
+        "source": "tradingagents",
+        "issuedAt": "2026-07-31T07:59:00.000Z",
+        "expiresAt": "2026-07-31T08:04:00.000Z",
+        "allowedAssets": ["BTC/USD", "ETH/USD"],
+        "inputArtifacts": [
+          {
+            "artifactId": "market-window",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "openAliceCommit": "1111111111111111111111111111111111111111",
+        "sidecarCommit": "2222222222222222222222222222222222222222",
+        "mode": "research_only",
+        "payload": {
+          "symbol": "BTC/USD",
+          "marketContext": {
+            "windowStart": "2026-07-31T07:00:00.000Z",
+            "windowEnd": "2026-07-31T08:00:00.000Z",
+            "candles": []
+          },
+          "newsContext": {
+            "items": []
+          },
+          "decisionContext": {
+            "selectedAnalysts": ["market"],
+            "researchDepth": 0,
+            "releaseGateMode": "paper"
+          },
+          "canonicalNumbers": [0, 0.25, -0.25, 0.6],
+          "objectOrder": {
+            "z": 1,
+            "a": 2
+          }
+        },
+        "requestSha256": "a3d30095291e4d71466d046b50bae75dbd54eaf0b4f9159749dfad40211002be"
+      },
+      "bundle": {
+        "result": {
+          "schemaVersion": "openalice_sidecar_result.v1",
+          "runId": "fixture-tradingagents-1",
+          "source": "tradingagents",
+          "status": "ok",
+          "generatedAt": "2026-07-31T08:00:00.000Z",
+          "mode": "research_only",
+          "signals": [
+            {
+              "signalId": "tasig_b2d523ba4d0c1249eff18684",
+              "asset": "BTC/USD",
+              "asOf": "2026-07-31T08:00:00.000Z",
+              "ttlMs": 300000,
+              "targetPositionPct": 0.25,
+              "confidence": 0.6,
+              "thesis": "FINAL TRANSACTION PROPOSAL: **BUY**",
+              "riskNote": "Advisory research output; OpenAlice owns all admission and execution decisions.",
+              "metadata": {
+                "legacySchemaVersion": "tradingagents_sidecar_report.v1",
+                "legacyRating": "BUY"
+              }
+            }
+          ],
+          "provenance": {
+            "openAliceCommit": "1111111111111111111111111111111111111111",
+            "sidecarCommit": "2222222222222222222222222222222222222222",
+            "requestSha256": "a3d30095291e4d71466d046b50bae75dbd54eaf0b4f9159749dfad40211002be"
+          },
+          "runtime": {
+            "name": "TradingAgents",
+            "version": "0.3.1",
+            "language": "python-3.13",
+            "modelVersions": ["offline-deep", "offline-quick"]
+          },
+          "outputPayloadSha256": "91bcabfd8a8a9ab1edf9ed1e826e012701693065210de2c863728f58ac98f9f1",
+          "evidenceManifestSha256": "d072af611ce437e1d21d0bbae40692631783a1de3eaa189173361f899cdcb456",
+          "failure": null
+        },
+        "manifest": {
+          "schemaVersion": "sidecar_evidence_manifest.v1",
+          "runId": "fixture-tradingagents-1",
+          "source": "tradingagents",
+          "mode": "research_only",
+          "createdAt": "2026-07-31T08:00:00.000Z",
+          "openAliceCommit": "1111111111111111111111111111111111111111",
+          "sidecarCommit": "2222222222222222222222222222222222222222",
+          "requestSha256": "a3d30095291e4d71466d046b50bae75dbd54eaf0b4f9159749dfad40211002be",
+          "outputPayloadSha256": "91bcabfd8a8a9ab1edf9ed1e826e012701693065210de2c863728f58ac98f9f1",
+          "inputArtifacts": [
+            {
+              "artifactId": "market-window",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "artifacts": []
+        }
+      }
+    },
+    "alphaswarm": {
+      "request": {
+        "schemaVersion": "openalice_sidecar_request.v1",
+        "runId": "fixture-alphaswarm-1",
+        "source": "alphaswarm",
+        "issuedAt": "2026-07-31T07:59:00.000Z",
+        "expiresAt": "2026-07-31T08:04:00.000Z",
+        "allowedAssets": ["BTC/USD", "ETH/USD"],
+        "inputArtifacts": [
+          {
+            "artifactId": "market-window",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "openAliceCommit": "1111111111111111111111111111111111111111",
+        "sidecarCommit": "3333333333333333333333333333333333333333",
+        "mode": "research_only",
+        "payload": {
+          "symbol": "BTC/USD",
+          "canonicalNumbers": [0, 0.25, -0.25, 0.6],
+          "objectOrder": {
+            "z": 1,
+            "a": 2
+          }
+        },
+        "requestSha256": "b8d3d8c4253d1d0a44ae86470a0fea0c1599ae3a516009b8b60a20492432e47d"
+      },
+      "bundle": {
+        "result": {
+          "schemaVersion": "openalice_sidecar_result.v1",
+          "runId": "fixture-alphaswarm-1",
+          "source": "alphaswarm",
+          "status": "ok",
+          "generatedAt": "2026-07-31T08:00:00.000Z",
+          "mode": "research_only",
+          "signals": [
+            {
+              "signalId": "asig_26c588afc2e45cffa60753a4",
+              "asset": "BTC/USD",
+              "asOf": "2026-07-31T08:00:00.000Z",
+              "ttlMs": 300000,
+              "targetPositionPct": -0.25,
+              "confidence": 0.6,
+              "thesis": "Fixture research-only mean-reversion view.",
+              "metadata": {
+                "strategyId": "fixture_v1",
+                "venueSymbol": "BTC/USDT",
+                "marketKind": "swap",
+                "marketProvenance": {
+                  "input_symbol": "BTC/USDT",
+                  "canonical_asset": "BTC/USD",
+                  "venue_symbol": "BTC/USDT",
+                  "mapping": "venue_alias_to_canonical",
+                  "usd_usdt_equivalence_claimed": false,
+                  "note": "USD and USDT are distinct markets; this alias is routing metadata and does not establish price, liquidity, or execution equivalence."
+                },
+                "trace": {
+                  "fixture": true
+                }
+              },
+              "riskNote": "Fixture carries no execution authority."
+            }
+          ],
+          "provenance": {
+            "openAliceCommit": "1111111111111111111111111111111111111111",
+            "sidecarCommit": "3333333333333333333333333333333333333333",
+            "requestSha256": "b8d3d8c4253d1d0a44ae86470a0fea0c1599ae3a516009b8b60a20492432e47d"
+          },
+          "runtime": {
+            "name": "AlphaSwarm",
+            "version": "0.1.0",
+            "language": "python-3.13",
+            "modelVersions": ["offline-fixture"]
+          },
+          "outputPayloadSha256": "df18b9659b6b892eaad93858e80a3d9a87548702ff117427678abf54e6dd71e4",
+          "evidenceManifestSha256": "1e1fa9092893d1be585e1c6189d7d21f6a1f33b1c3577d620eed8dbdcc3f1c48",
+          "failure": null
+        },
+        "manifest": {
+          "schemaVersion": "sidecar_evidence_manifest.v1",
+          "runId": "fixture-alphaswarm-1",
+          "source": "alphaswarm",
+          "mode": "research_only",
+          "createdAt": "2026-07-31T08:00:00.000Z",
+          "openAliceCommit": "1111111111111111111111111111111111111111",
+          "sidecarCommit": "3333333333333333333333333333333333333333",
+          "requestSha256": "b8d3d8c4253d1d0a44ae86470a0fea0c1599ae3a516009b8b60a20492432e47d",
+          "outputPayloadSha256": "df18b9659b6b892eaad93858e80a3d9a87548702ff117427678abf54e6dd71e4",
+          "inputArtifacts": [
+            {
+              "artifactId": "market-window",
+              "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ],
+          "artifacts": []
+        }
+      }
+    }
+  }
+}
