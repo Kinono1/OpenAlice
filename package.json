@@ -189,6 +189,8 @@
     "external:derivatives:collect": "tsx scripts/collect_okx_external_derivatives_data.ts",
     "external:derivatives:collect:binance-legacy": "tsx scripts/collect_external_derivatives_data.ts",
     "audit:dirty-worktree": "tsx scripts/audit_dirty_worktree.ts",
+    "audit:admission-authority": "tsx scripts/audit_admission_authority.ts",
+    "admission:build": "tsx scripts/build_admission_decision.ts",
     "audit:dirty-quarantine-plan": "tsx scripts/build_dirty_quarantine_plan.ts",
     "research:alpha-hypothesis:registry": "tsx scripts/build_alpha_hypothesis_registry.ts",
     "evidence:validate-trust": "tsx scripts/validate_evidence_trust.ts",

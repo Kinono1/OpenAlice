@@ -24,6 +24,14 @@ import {
   type PromotionReadinessV2ValidatedLoadResult,
 } from "./promotion_v2_artifacts.js";
 import { writeJsonAtomic } from "./atomic_write.js";
+import {
+  gatePassed,
+  tryLoadAdmissionDecision,
+  validateAdmissionDecision,
+  type AdmissionDecisionV1,
+  type AdmissionDecisionLoadResult,
+} from "./admission.js";
+import { resolveDataPath } from "./runtime-paths.js";
 
 export const DEFAULT_MAX_ENVELOPE_AGE_MS = 2 * 60 * 60 * 1000 // 2 hours
 
@@ -132,6 +140,8 @@ export interface SidecarSignalIntakeOptions {
   promotionReadinessV2Path?: string;
   requirePromotionV2?: boolean;
   validatePromotionV2Artifacts?: boolean;
+  admissionDecision?: AdmissionDecisionV1 | null;
+  admissionDecisionPath?: string;
 }
 
 export interface SidecarSignalReadiness {
@@ -271,6 +281,49 @@ export async function runSidecarSignalPaperIntake(
     };
   }
 
+  const admission = await resolveAdmissionDecisionForSidecar(opts, now);
+  const admissionBlock = resolveSidecarAdmissionBlock(
+    admission.decision,
+    admission.loadResult,
+    signal.symbol,
+    now,
+  );
+  if (admissionBlock) {
+    const artifactPath = opts.artifactPath ?? "data/runtime/sidecar_signal_intake.latest.json";
+    await writeJsonArtifact(artifactPath, {
+      signal,
+      admission: admission.summary,
+      generatedAt: now.toISOString(),
+      paperTradingAllowed: false,
+      liveTradingAllowed: false,
+      liveExecutionArmed: false,
+      blockReason: admissionBlock,
+    });
+    const plannedEntry = await opts.eventLog.append("sidecar.signal.paper_blocked", {
+      signal_id: signal.signal_id,
+      symbol: signal.symbol,
+      reason: admissionBlock,
+      admission_decision_id: admission.decision?.decisionId ?? null,
+      artifact_path: artifactPath,
+    });
+    return {
+      signal_id: signal.signal_id,
+      accepted: true,
+      paper_result: "rejected",
+      live_result: "skipped",
+      block_reason: admissionBlock,
+      current_target_position: signal.target_position_pct,
+      proposed_delta: null,
+      audit_refs: {
+        received_seq: receivedEntry.seq,
+        planned_seq: plannedEntry.seq,
+        artifact_path: artifactPath,
+      },
+      paper_gate: null,
+      execution_plan_kind: null,
+    };
+  }
+
   const [account, currentPositions] = await Promise.all([
     opts.engine.getAccount(),
     opts.engine.getPositions(),
@@ -283,31 +336,34 @@ export async function runSidecarSignalPaperIntake(
     now,
   });
   const promotionV2Load = await resolvePromotionReadinessV2ForSidecar(opts);
+  const paperAuthorityAllowed = admission.decision?.paperTradingAllowed === true;
+  const promotionGatePass =
+    paperAuthorityAllowed && gatePassed(admission.decision, "promotion_v2_6");
   const paperGate = evaluatePaperGate({
-    promotionGatePass: true,
-    championRegistryState: "valid",
-    championLoaded: true,
-    policyVersionMatch: true,
-    researchApproved: true,
-    runtimeHealthy: true,
-    dataFresh: true,
-    dataQualityValid: true,
-    connectorHealthy: true,
-    riskLimitsLoaded: true,
-    paperExecutorEnabled: true,
+    promotionGatePass,
+    championRegistryState: paperAuthorityAllowed ? "valid" : "missing",
+    championLoaded: paperAuthorityAllowed,
+    policyVersionMatch: paperAuthorityAllowed,
+    researchApproved: paperAuthorityAllowed,
+    runtimeHealthy: paperAuthorityAllowed,
+    dataFresh: paperAuthorityAllowed,
+    dataQualityValid: paperAuthorityAllowed,
+    connectorHealthy: paperAuthorityAllowed,
+    riskLimitsLoaded: paperAuthorityAllowed,
+    paperExecutorEnabled: paperAuthorityAllowed,
     now,
   });
   const executionPlan = buildPaperExecutionPlan({
-    promotionPass: true,
+    promotionPass: promotionGatePass,
     paperGateAllowsPaperTrading: paperGate.allowPaperTrading,
     paperGateMode: paperGate.mode,
     paperGateAllowsExecution: paperGate.allowPaperExecution,
     paperGateBlockingReasons: paperGate.blockingReasons,
     paperGateFlatOnlyReasons: paperGate.flatOnlyReasons,
     promotionReadinessV2: promotionV2Load.readiness,
-    requirePromotionV2: opts.requirePromotionV2,
-    championRegistryState: "valid",
-    championSetComplete: true,
+    requirePromotionV2: opts.requirePromotionV2 ?? true,
+    championRegistryState: paperAuthorityAllowed ? "valid" : "missing",
+    championSetComplete: paperAuthorityAllowed,
     portfolioTarget,
     currentPositions,
     pricesBySymbol,
@@ -320,6 +376,7 @@ export async function runSidecarSignalPaperIntake(
     paperGate,
     executionPlan,
     promotionV2: promotionV2Load.artifactSummary,
+    admission: admission.summary,
     generatedAt: now.toISOString(),
   };
   await writeJsonArtifact(artifactPath, artifactPayload);
@@ -354,6 +411,127 @@ export async function runSidecarSignalPaperIntake(
     },
     paper_gate: paperGate,
     execution_plan_kind: executionPlan.kind,
+  };
+}
+
+async function resolveAdmissionDecisionForSidecar(
+  opts: SidecarSignalIntakeOptions,
+  now: Date,
+): Promise<{
+  decision: AdmissionDecisionV1 | null;
+  loadResult: AdmissionDecisionLoadResult | null;
+  summary: Record<string, unknown>;
+}> {
+  if (opts.admissionDecision !== undefined) {
+    if (opts.admissionDecision === null) {
+      return {
+        decision: null,
+        loadResult: null,
+        summary: {
+          source: "provided",
+          status: "missing",
+          decisionId: null,
+          paperTradingAllowed: false,
+          liveTradingAllowed: false,
+          liveExecutionArmed: false,
+        },
+      };
+    }
+    try {
+      const decision = validateAdmissionDecision(opts.admissionDecision);
+      const stale = Date.parse(decision.expiresAt) <= now.getTime();
+      return {
+        decision,
+        loadResult: stale
+          ? {
+              kind: "stale",
+              path: "provided",
+              error: "admission_decision_expired",
+              decision,
+            }
+          : null,
+        summary: summarizeAdmissionDecision(decision, stale ? "stale" : "loaded", "provided"),
+      };
+    } catch (error) {
+      return {
+        decision: null,
+        loadResult: {
+          kind: "invalid",
+          path: "provided",
+          error: error instanceof Error ? error.message : String(error),
+        },
+        summary: {
+          source: "provided",
+          status: "invalid",
+          decisionId: null,
+          paperTradingAllowed: false,
+          liveTradingAllowed: false,
+          liveExecutionArmed: false,
+        },
+      };
+    }
+  }
+
+  const path = opts.admissionDecisionPath
+    ?? resolveDataPath("runtime", "admission_decision.v1.json");
+  const loadResult = await tryLoadAdmissionDecision(path, { now });
+  const decision = loadResult.kind === "loaded" ? loadResult.decision : null;
+  return {
+    decision,
+    loadResult,
+    summary: loadResult.kind === "loaded"
+      ? summarizeAdmissionDecision(loadResult.decision, loadResult.kind, path)
+      : {
+          source: path,
+          status: loadResult.kind,
+          error: loadResult.error,
+          decisionId: null,
+          paperTradingAllowed: false,
+          liveTradingAllowed: false,
+          liveExecutionArmed: false,
+        },
+  };
+}
+
+function resolveSidecarAdmissionBlock(
+  decision: AdmissionDecisionV1 | null,
+  loadResult: AdmissionDecisionLoadResult | null,
+  symbol: string,
+  now: Date,
+): string | null {
+  if (loadResult && loadResult.kind !== "loaded") {
+    return loadResult.error;
+  }
+  if (!decision) return "admission_decision_missing";
+  if (Date.parse(decision.expiresAt) <= now.getTime()) {
+    return "admission_decision_expired";
+  }
+  if (!decision.paperTradingAllowed) {
+    return decision.blockingReasons[0] ?? "admission_paper_blocked";
+  }
+  if (!decision.assetScope.includes(symbol)) {
+    return `admission_asset_out_of_scope:${symbol}`;
+  }
+  return null;
+}
+
+function summarizeAdmissionDecision(
+  decision: AdmissionDecisionV1,
+  status: string,
+  source: string,
+): Record<string, unknown> {
+  return {
+    source,
+    status,
+    decisionId: decision.decisionId,
+    stage: decision.stage,
+    evaluatedAt: decision.evaluatedAt,
+    expiresAt: decision.expiresAt,
+    paperTradingAllowed: decision.paperTradingAllowed,
+    liveTradingAllowed: decision.liveTradingAllowed,
+    liveExecutionArmed: decision.liveExecutionArmed,
+    blockingReasons: decision.blockingReasons,
+    evidenceRefs: decision.evidenceRefs,
   };
 }
 

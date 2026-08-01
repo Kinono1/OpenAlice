@@ -24,6 +24,7 @@ import {
   writeRuntimeStatusSnapshot,
 } from "./runtime_status_snapshot.js";
 import type { RuntimeProofTrackingInput } from "./runtime_status_snapshot.js";
+import { tryLoadAdmissionDecision } from "./admission.js";
 
 export interface RuntimeTruthMainlineOptions {
   symbols: string[];
@@ -39,6 +40,7 @@ export interface RuntimeTruthMainlineOptions {
   requirePromotionV2?: boolean;
   validatePromotionV2Artifacts?: boolean;
   proofTracking?: RuntimeProofTrackingInput;
+  admissionDecisionPath?: string;
   now?: Date;
 }
 
@@ -60,6 +62,12 @@ export interface RuntimeTruthMainlineResult {
     error: string | null;
   };
   phaseReadiness: RuntimeTruthPipelineResult["snapshot"]["phaseReadiness"];
+  admission: {
+    path: string;
+    loadStatus: "loaded" | "missing" | "invalid" | "stale";
+    decisionId: string | null;
+    error: string | null;
+  };
 }
 
 const DEFAULT_VALIDATION_RUNS_PATH =
@@ -72,6 +80,8 @@ const DEFAULT_REGISTRY_PATH = "data/runtime/paper_champion_registry.json";
 const DEFAULT_PORTFOLIO_TARGET_PATH = "data/runtime/paper_portfolio_target.json";
 const DEFAULT_RUNTIME_PUBLISH_STATE_PATH =
   "data/runtime/runtime_publish_state.json";
+const DEFAULT_ADMISSION_DECISION_PATH =
+  "data/runtime/admission_decision.v1.json";
 const DEFAULT_SNAPSHOT_BASE_DIR = DEFAULT_RUNTIME_STATUS_SNAPSHOT_BASE_DIR;
 
 export async function refreshRuntimeTruthMainline(
@@ -92,6 +102,7 @@ export async function refreshRuntimeTruthMainline(
     pricesBySymbol,
     runtimePublishStateResult,
     promotionV2Load,
+    admissionLoad,
   ] = await Promise.all([
     readJsonOrNull(opts.validationRunsPath ?? DEFAULT_VALIDATION_RUNS_PATH),
     readJsonOrNull(opts.verdictPath ?? DEFAULT_VERDICT_PATH),
@@ -106,6 +117,10 @@ export async function refreshRuntimeTruthMainline(
       opts.runtimePublishStatePath ?? DEFAULT_RUNTIME_PUBLISH_STATE_PATH,
     ),
     resolvePromotionReadinessV2ForMainline(opts),
+    tryLoadAdmissionDecision(
+      opts.admissionDecisionPath ?? DEFAULT_ADMISSION_DECISION_PATH,
+      { now },
+    ),
   ]);
 
   const runtimeAvailability = resolveRuntimeAvailability(runtimePublishStateResult)
@@ -142,6 +157,8 @@ export async function refreshRuntimeTruthMainline(
           ? promotionV2Load.result.readiness
         : null,
     requirePromotionV2: opts.requirePromotionV2,
+    admissionDecision:
+      admissionLoad.kind === "loaded" ? admissionLoad.decision : null,
     proofTracking: opts.proofTracking,
     now,
   });
@@ -181,6 +198,13 @@ export async function refreshRuntimeTruthMainline(
           : null,
     },
     phaseReadiness: truth.snapshot.phaseReadiness,
+    admission: {
+      path: opts.admissionDecisionPath ?? DEFAULT_ADMISSION_DECISION_PATH,
+      loadStatus: admissionLoad.kind,
+      decisionId:
+        admissionLoad.kind === "loaded" ? admissionLoad.decision.decisionId : null,
+      error: admissionLoad.kind === "loaded" ? null : admissionLoad.error,
+    },
   };
 }
 

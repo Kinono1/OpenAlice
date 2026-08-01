@@ -22,6 +22,7 @@ import {
   type RuntimeStatusSnapshot,
 } from "./runtime_status_snapshot.js";
 import type { RuntimePlanningState } from "./live_gate_manager.js";
+import { gatePassed, type AdmissionDecisionV1 } from "./admission.js";
 
 export interface RuntimeTruthPipelineInput {
   validationRuns: unknown;
@@ -46,6 +47,7 @@ export interface RuntimeTruthPipelineInput {
   turnoverCap?: number;
   promotionReadinessV2?: PromotionReadinessV2 | null;
   requirePromotionV2?: boolean;
+  admissionDecision?: AdmissionDecisionV1 | null;
   proofTracking?: RuntimeProofTrackingInput;
   validationRunsPath?: string;
   verdictPath?: string;
@@ -89,8 +91,18 @@ export function evaluateRuntimeTruthPipeline(
     now: input.now,
   });
 
+  const authorityAllowsPaper = Boolean(
+    input.admissionDecision?.paperTradingAllowed
+    && Date.parse(input.admissionDecision.expiresAt) > (input.now ?? new Date()).getTime()
+    && portfolioSymbols.every((symbol) => input.admissionDecision?.assetScope.includes(symbol)),
+  );
+  const authorityPromotionPass = Boolean(
+    authorityAllowsPaper
+    && gatePassed(input.admissionDecision, "promotion_v2_6"),
+  );
+
   const paperGate = evaluatePaperGate({
-    promotionGatePass: promotionGate.pass,
+    promotionGatePass: promotionGate.pass && authorityPromotionPass,
     championRegistryState: input.championRegistry.kind,
     championLoaded:
       input.championLoaded ??
@@ -103,18 +115,19 @@ export function evaluateRuntimeTruthPipeline(
         validationRuns.ok &&
         registryCoverage?.ok === true),
     researchApproved:
-      input.researchApproved ?? resolveResearchApproved(input.experimentVerdict),
-    runtimeHealthy: input.runtimeHealthy ?? true,
-    dataFresh: input.dataFresh ?? true,
-    dataQualityValid: input.dataQualityValid ?? true,
-    connectorHealthy: input.connectorHealthy ?? true,
-    riskLimitsLoaded: input.riskLimitsLoaded ?? true,
-    paperExecutorEnabled: input.paperExecutorEnabled ?? true,
+      authorityAllowsPaper
+      && (input.researchApproved ?? resolveResearchApproved(input.experimentVerdict)),
+    runtimeHealthy: authorityAllowsPaper && (input.runtimeHealthy ?? true),
+    dataFresh: authorityAllowsPaper && (input.dataFresh ?? true),
+    dataQualityValid: authorityAllowsPaper && (input.dataQualityValid ?? true),
+    connectorHealthy: authorityAllowsPaper && (input.connectorHealthy ?? true),
+    riskLimitsLoaded: authorityAllowsPaper && (input.riskLimitsLoaded ?? true),
+    paperExecutorEnabled: authorityAllowsPaper && (input.paperExecutorEnabled ?? true),
     now: input.now,
   });
 
   const executionPlan = buildPaperExecutionPlan({
-    promotionPass: promotionGate.pass,
+    promotionPass: promotionGate.pass && authorityPromotionPass,
     paperGateAllowsPaperTrading: paperGate.allowPaperTrading,
     paperGateMode: paperGate.mode,
     paperGateAllowsExecution: paperGate.allowPaperExecution,

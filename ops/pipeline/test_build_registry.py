@@ -113,6 +113,16 @@ class PipelineRegistryTest(unittest.TestCase):
         self.assertEqual(job["entrypoint"], "scripts/cron_example.sh")
         self.assertTrue(job["operatorReceiptRequiredToCloseCircuit"])
 
+    def test_authority_audit_does_not_inherit_private_auth_network_policy(self) -> None:
+        self.assertEqual(
+            registry.infer_network_policy("scripts/audit_admission_authority.ts"),
+            "denied",
+        )
+        self.assertEqual(
+            registry.infer_network_policy("scripts/diagnose_okx_private_auth.ts"),
+            "declared_required",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

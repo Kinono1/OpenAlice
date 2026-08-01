@@ -3,6 +3,7 @@ import { buildPortfolioTargetFromWeights } from "../portfolio/target.js";
 import {
   evaluateRuntimeTruthPipeline,
 } from "./runtime_truth_pipeline.js";
+import type { AdmissionDecisionV1 } from "./admission.js";
 
 const portfolioTarget = buildPortfolioTargetFromWeights({
   basisEquityUsd: 1_000,
@@ -13,9 +14,36 @@ const portfolioTarget = buildPortfolioTargetFromWeights({
   maxTurnoverPct: 1,
 });
 
+const paperAdmissionDecision = {
+  schemaVersion: "admission_decision.v1",
+  decisionId: "a".repeat(64),
+  candidateId: "runtime-truth-candidate",
+  evaluatedAt: "2026-03-28T00:00:00.000Z",
+  expiresAt: "2027-03-28T00:00:00.000Z",
+  sourceCommit: "1".repeat(40),
+  dirtyStateHash: "2".repeat(64),
+  releaseManifestHash: "3".repeat(64),
+  stage: "paper_allowed",
+  paperTradingAllowed: true,
+  liveTradingAllowed: false,
+  liveExecutionArmed: false,
+  gateResults: [{
+    gateId: "promotion_v2_6",
+    status: "pass",
+    evidenceRefs: ["4".repeat(64)],
+    reasonCodes: [],
+  }],
+  blockingReasons: ["missing_gate_evidence:tiny_cap_review"],
+  evidenceRefs: ["4".repeat(64)],
+  approvalRefs: [],
+  accountScope: ["paper-main"],
+  assetScope: ["BTC/USD", "ETH/USD"],
+} satisfies AdmissionDecisionV1;
+
 describe("runtime_truth_pipeline", () => {
   it("produces a blocked pipeline result from failing inputs", () => {
     const result = evaluateRuntimeTruthPipeline({
+      admissionDecision: paperAdmissionDecision,
       validationRuns: {
         championSet: [
           { symbol: "BTC/USD", strategyId: "BTC_TREND" },
@@ -93,6 +121,7 @@ describe("runtime_truth_pipeline", () => {
 
   it("produces an active pipeline result from passing inputs", () => {
     const result = evaluateRuntimeTruthPipeline({
+      admissionDecision: paperAdmissionDecision,
       validationRuns: {
         championSet: [
           { symbol: "BTC/USD", strategyId: "BTC_TREND" },
@@ -203,6 +232,7 @@ describe("runtime_truth_pipeline", () => {
 
   it("blocks when dual-symbol portfolio inputs only provide a legacy singleton champion", () => {
     const result = evaluateRuntimeTruthPipeline({
+      admissionDecision: paperAdmissionDecision,
       validationRuns: {
         champion: { strategyId: "BTC_TREND" },
         candidates: [
@@ -274,6 +304,7 @@ describe("runtime_truth_pipeline", () => {
 
   it("keeps live tiny-cap readiness separate from proof-start readiness when proof has not started", () => {
     const result = evaluateRuntimeTruthPipeline({
+      admissionDecision: paperAdmissionDecision,
       validationRuns: {
         championSet: [
           { symbol: "BTC/USD", strategyId: "BTC_TREND" },
@@ -382,6 +413,7 @@ describe("runtime_truth_pipeline", () => {
     });
 
     const result = evaluateRuntimeTruthPipeline({
+      admissionDecision: paperAdmissionDecision,
       validationRuns: {
         championSet: [
           { symbol: "BTC/USD", strategyId: "BTC_TREND" },
@@ -481,6 +513,7 @@ describe("runtime_truth_pipeline", () => {
 
   it("blocks when the champion registry disagrees with the research truth for a portfolio symbol", () => {
     const result = evaluateRuntimeTruthPipeline({
+      admissionDecision: paperAdmissionDecision,
       validationRuns: {
         championSet: [
           { symbol: "BTC/USD", strategyId: "BTC_TREND" },

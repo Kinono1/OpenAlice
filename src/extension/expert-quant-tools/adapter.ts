@@ -30,6 +30,7 @@ import {
   tryLoadPromotionReadinessV2,
   tryLoadValidatedPromotionReadinessV2,
 } from "../../runtime/promotion_v2_artifacts.js";
+import { tryLoadAdmissionDecision } from "../../runtime/admission.js";
 
 const StrategyParamsObjectSchema = z.object({
   allowShort: z.boolean().optional(),
@@ -422,6 +423,9 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         promotionReadinessV2Path: z
           .string()
           .default(DEFAULT_PROMOTION_READINESS_V2_PATH),
+        admissionDecisionPath: z
+          .string()
+          .default("data/runtime/admission_decision.v1.json"),
         paperBasisEquityUsd: z.number().positive().default(1_000),
         paperMaxTurnoverPct: z.number().positive().default(1),
         policy: z
@@ -454,6 +458,7 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
         requirePromotionV2 = false,
         validatePromotionV2Artifacts = true,
         promotionReadinessV2Path = DEFAULT_PROMOTION_READINESS_V2_PATH,
+        admissionDecisionPath = "data/runtime/admission_decision.v1.json",
         paperBasisEquityUsd = 1_000,
         paperMaxTurnoverPct = 1,
         policy,
@@ -561,6 +566,7 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
           experimentVerdict,
           championRegistry,
           promotionV2Load,
+          admissionLoad,
         ] =
           await Promise.all([
             loadReleaseGateStatus(releaseGateStatusPath),
@@ -572,6 +578,7 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
                 ? tryLoadValidatedPromotionReadinessV2(dirname(promotionReadinessV2Path), { now })
                 : tryLoadPromotionReadinessV2(promotionReadinessV2Path)
               : Promise.resolve(null),
+            tryLoadAdmissionDecision(admissionDecisionPath, { now }),
           ]);
         const ensembleScore =
           typeof strategyDecision.indicators?.ensembleScore === "number"
@@ -645,6 +652,8 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
                 ? promotionV2Load.readiness
               : null,
           requirePromotionV2,
+          admissionDecision:
+            admissionLoad.kind === "loaded" ? admissionLoad.decision : null,
           now,
         });
 
@@ -708,6 +717,16 @@ Returns a structured trade decision with confidence, reasons, and suggested expo
                 promotionV2Load && promotionV2Load.kind !== "loaded"
                   ? promotionV2Load.error
                   : null,
+            },
+            admission: {
+              path: admissionDecisionPath,
+              loadStatus: admissionLoad.kind,
+              decisionId:
+                admissionLoad.kind === "loaded"
+                  ? admissionLoad.decision.decisionId
+                  : null,
+              error:
+                admissionLoad.kind === "loaded" ? null : admissionLoad.error,
             },
           },
           decision,

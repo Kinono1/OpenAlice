@@ -28,6 +28,7 @@ import {
   type SchemaMeta,
 } from "./promotion_v2.js";
 import { pctToBps, floatToBps, awayFromZeroRounding } from "../domain/trading/risk.js";
+import { admissionDecisionId, type AdmissionDecisionV1 } from "./admission.js";
 
 class MockEngine implements ICryptoTradingEngine {
   constructor(
@@ -184,6 +185,8 @@ describe("sidecar signal runtime", () => {
       supportedSymbols: ["BTC/USDT", "ETH/USDT"],
       now: new Date("2026-04-02T12:00:30.000Z"),
       artifactPath: "data/test/sidecar_signal_intake.latest.json",
+      admissionDecision: createPaperAllowedDecision(["BTC/USDT"]),
+      requirePromotionV2: false,
     });
 
     expect(result.accepted).toBe(true);
@@ -193,6 +196,27 @@ describe("sidecar signal runtime", () => {
     expect(result.proposed_delta?.symbol).toBe("BTC/USDT");
     expect(result.audit_refs.received_seq).toBeTypeOf("number");
     expect(result.audit_refs.planned_seq).toBeTypeOf("number");
+    await log._resetForTest();
+    await log.close();
+  });
+
+  it("keeps a valid research signal blocked when the authority snapshot is missing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sidecar-admission-missing-"));
+    const log = await createEventLog({ logPath: join(tempDir, "event-log.jsonl") });
+    const result = await runSidecarSignalPaperIntake({
+      signal: baseSignal,
+      engine: createTickerEngine(),
+      eventLog: log,
+      supportedSymbols: ["BTC/USDT"],
+      now: new Date("2026-04-02T12:00:30.000Z"),
+      artifactPath: join(tempDir, "sidecar_signal_intake.latest.json"),
+      admissionDecision: null,
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.paper_result).toBe("rejected");
+    expect(result.block_reason).toBe("admission_decision_missing");
+    expect(result.proposed_delta).toBeNull();
     await log._resetForTest();
     await log.close();
   });
@@ -213,6 +237,7 @@ describe("sidecar signal runtime", () => {
       artifactPath: join(tempDir, "sidecar_signal_intake.latest.json"),
       promotionReadinessV2Path: join(tempDir, "missing_strategy_promotion.latest.json"),
       requirePromotionV2: true,
+      admissionDecision: createPaperAllowedDecision(["BTC/USDT"]),
     });
 
     expect(result.accepted).toBe(true);
@@ -249,6 +274,7 @@ describe("sidecar signal runtime", () => {
       promotionReadinessV2Path: readinessPath,
       requirePromotionV2: true,
       validatePromotionV2Artifacts: false,
+      admissionDecision: createPaperAllowedDecision(["BTC/USDT"]),
     });
 
     expect(result.accepted).toBe(true);
@@ -287,6 +313,39 @@ function createTickerEngine(): ICryptoTradingEngine {
       },
     },
   );
+}
+
+function createPaperAllowedDecision(assetScope: string[]): AdmissionDecisionV1 {
+  const core: Omit<AdmissionDecisionV1, "schemaVersion" | "decisionId"> = {
+    candidateId: "sidecar-paper-candidate",
+    evaluatedAt: "2026-04-02T12:00:00.000Z",
+    expiresAt: "2026-04-02T12:05:00.000Z",
+    sourceCommit: "1".repeat(40),
+    dirtyStateHash: "2".repeat(64),
+    releaseManifestHash: "3".repeat(64),
+    stage: "paper_allowed",
+    paperTradingAllowed: true,
+    liveTradingAllowed: false,
+    liveExecutionArmed: false,
+    gateResults: [
+      {
+        gateId: "promotion_v2_6",
+        status: "pass",
+        evidenceRefs: ["4".repeat(64)],
+        reasonCodes: [],
+      },
+    ],
+    blockingReasons: ["missing_gate_evidence:tiny_cap_review"],
+    evidenceRefs: ["4".repeat(64)],
+    approvalRefs: [],
+    accountScope: ["paper-main"],
+    assetScope,
+  };
+  return {
+    schemaVersion: "admission_decision.v1",
+    decisionId: admissionDecisionId(core),
+    ...core,
+  };
 }
 
 function createPromotionReadiness(): PromotionReadinessV2 {

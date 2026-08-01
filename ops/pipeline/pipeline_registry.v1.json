@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 607,
+  "entryCount": 611,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -432,6 +432,48 @@
       "timeoutSeconds": 900,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_audit_admission_authority_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/audit_admission_authority.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_audit_admission_authority_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/audit_admission_authority.ts",
+      "compatibilityAliases": [
+        "audit:admission-authority"
+      ],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
       "schedulerOwner": "manual",
       "cronTaskIds": []
     },
@@ -1029,6 +1071,48 @@
       "lock": {
         "policy": "required",
         "key": "pipeline:pipeline.scripts_build_account_corruption_gate_status_ts"
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_build_admission_decision_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/build_admission_decision.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_build_admission_decision_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/build_admission_decision.ts",
+      "compatibilityAliases": [
+        "admission:build"
+      ],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "artifact_write",
+      "lock": {
+        "policy": "required",
+        "key": "pipeline:pipeline.scripts_build_admission_decision_ts"
       },
       "timeoutSeconds": 900,
       "networkPolicy": "denied",

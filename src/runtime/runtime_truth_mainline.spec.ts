@@ -9,6 +9,7 @@ import type {
   ICryptoTradingEngine,
 } from "../domain/trading/operation-dispatcher.types.js";
 import { refreshRuntimeTruthMainline } from "./runtime_truth_mainline.js";
+import { admissionDecisionId, type AdmissionDecisionV1 } from "./admission.js";
 import {
   PROMOTION_V2_SCHEMA_VERSION,
   buildPromotionReadinessV2,
@@ -77,6 +78,7 @@ describe("runtime_truth_mainline", () => {
 
   it("uses an explicit portfolio target file when present", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "runtime-truth-mainline-target-"));
+    await writePaperAdmissionDecision(tempDir);
     await writeFile(
       join(tempDir, "strategy_validation_runs.json"),
       JSON.stringify({
@@ -188,6 +190,7 @@ describe("runtime_truth_mainline", () => {
         registryPath: join(tempDir, "paper_champion_registry.json"),
         portfolioTargetPath: join(tempDir, "paper_portfolio_target.json"),
         snapshotBaseDir: tempDir,
+        admissionDecisionPath: join(tempDir, "admission_decision.v1.json"),
         proofTracking: {
           status: "tracking",
           elapsedDays: 7,
@@ -243,6 +246,7 @@ describe("runtime_truth_mainline", () => {
         runtimePublishStatePath: join(tempDir, "runtime_publish_state.json"),
         promotionReadinessV2Path: join(tempDir, "missing_strategy_promotion.latest.json"),
         requirePromotionV2: true,
+        admissionDecisionPath: join(tempDir, "admission_decision.v1.json"),
         snapshotBaseDir: tempDir,
         now: new Date("2026-03-29T00:00:00.000Z"),
       },
@@ -283,6 +287,7 @@ describe("runtime_truth_mainline", () => {
         promotionReadinessV2Path: readinessPath,
         requirePromotionV2: true,
         validatePromotionV2Artifacts: false,
+        admissionDecisionPath: join(tempDir, "admission_decision.v1.json"),
         snapshotBaseDir: tempDir,
         now: new Date("2026-03-29T00:00:00.000Z"),
       },
@@ -409,6 +414,7 @@ describe("runtime_truth_mainline", () => {
 });
 
 async function writePassingMainlineArtifacts(tempDir: string): Promise<void> {
+  await writePaperAdmissionDecision(tempDir);
   await writeFile(
     join(tempDir, "strategy_validation_runs.json"),
     JSON.stringify({
@@ -516,6 +522,40 @@ async function writePassingMainlineArtifacts(tempDir: string): Promise<void> {
         },
       ],
     }),
+  );
+}
+
+async function writePaperAdmissionDecision(tempDir: string): Promise<void> {
+  const core: Omit<AdmissionDecisionV1, "schemaVersion" | "decisionId"> = {
+    candidateId: "runtime-mainline-candidate",
+    evaluatedAt: "2026-03-29T00:00:00.000Z",
+    expiresAt: "2026-03-29T00:05:00.000Z",
+    sourceCommit: "1".repeat(40),
+    dirtyStateHash: "2".repeat(64),
+    releaseManifestHash: "3".repeat(64),
+    stage: "paper_allowed",
+    paperTradingAllowed: true,
+    liveTradingAllowed: false,
+    liveExecutionArmed: false,
+    gateResults: [{
+      gateId: "promotion_v2_6",
+      status: "pass",
+      evidenceRefs: ["4".repeat(64)],
+      reasonCodes: [],
+    }],
+    blockingReasons: ["missing_gate_evidence:tiny_cap_review"],
+    evidenceRefs: ["4".repeat(64)],
+    approvalRefs: [],
+    accountScope: ["paper-main"],
+    assetScope: ["BTC/USD", "ETH/USD"],
+  };
+  await writeFile(
+    join(tempDir, "admission_decision.v1.json"),
+    `${JSON.stringify({
+      schemaVersion: "admission_decision.v1",
+      decisionId: admissionDecisionId(core),
+      ...core,
+    }, null, 2)}\n`,
   );
 }
 

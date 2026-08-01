@@ -186,7 +186,9 @@ def infer_safety(path: str) -> str:
 
 def infer_network_policy(path: str) -> str:
     lower = path.lower()
-    if any(marker in lower for marker in PRIVATE_NETWORK_MARKERS):
+    # "authority" is a governance term, not an authentication dependency.
+    private_scope = lower.replace("authority", "")
+    if any(marker in private_scope for marker in PRIVATE_NETWORK_MARKERS):
         return "declared_required"
     if any(marker in lower for marker in NETWORK_PUBLIC_MARKERS):
         return "readonly_public"
