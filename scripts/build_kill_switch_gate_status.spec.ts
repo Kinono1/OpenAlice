@@ -10,6 +10,11 @@ import {
 } from './build_kill_switch_gate_status.js'
 
 describe('build_kill_switch_gate_status', () => {
+  const passingSources = {
+    killSwitchConfig: { defaultPolicy: 'block_new_only' },
+    riskConfig: { killSwitch: false },
+  }
+
   it('parses defaults and keeps package scripts wired', () => {
     expect(parseKillSwitchGateStatusArgs(['--output', 'null', '--json'])).toEqual({
       outputPath: null,
@@ -22,7 +27,7 @@ describe('build_kill_switch_gate_status', () => {
   })
 
   it('reads kill-switch and risk config and produces correct artifact structure', async () => {
-    const report = await buildKillSwitchGateStatus('2026-05-08T06:00:00.000Z')
+    const report = await buildKillSwitchGateStatus('2026-05-08T06:00:00.000Z', passingSources)
 
     expect(report).toMatchObject({
       schemaVersion: 1,
@@ -47,7 +52,7 @@ describe('build_kill_switch_gate_status', () => {
   })
 
   it('produces consistent verdicts when kill switch is disabled', async () => {
-    const report = await buildKillSwitchGateStatus('2026-05-08T06:00:00.000Z')
+    const report = await buildKillSwitchGateStatus('2026-05-08T06:00:00.000Z', passingSources)
 
     expect(report.status).toBe('pass')
     expect(report.researchOnlyBlockedConsistent).toBe(true)
@@ -62,7 +67,7 @@ describe('build_kill_switch_gate_status', () => {
     const report = await runKillSwitchGateStatus({
       outputPath,
       json: false,
-    })
+    }, passingSources)
 
     expect(report.status).toBe('pass')
     expect(JSON.parse(await readFile(outputPath, 'utf-8'))).toMatchObject({
@@ -81,5 +86,22 @@ describe('build_kill_switch_gate_status', () => {
       recordsIn: 2,
       recordsOut: 1,
     })
+  })
+
+  it('fails closed when the runtime configuration is unavailable', async () => {
+    const report = await buildKillSwitchGateStatus(
+      '2026-05-08T06:00:00.000Z',
+      { killSwitchConfig: null, riskConfig: null },
+    )
+
+    expect(report.status).toBe('fail')
+    expect(report.checks.killSwitchEnabled.verdict).toBe('fail')
+    expect(report.checks.defaultPolicy.verdict).toBe('fail')
+    expect(report.checks.consistentWithState.verdict).toBe('fail')
+    expect(report.blockers).toEqual(expect.arrayContaining([
+      'risk_config_kill_switch_missing',
+      'kill_switch_default_policy_missing',
+      'kill_switch_state_not_verifiably_consistent',
+    ]))
   })
 })

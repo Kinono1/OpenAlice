@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { buildPortfolioTargetFromWeights } from '../src/portfolio/target.js'
+import {
+  admissionDecisionId,
+  type AdmissionDecisionV1,
+} from '../src/runtime/admission.js'
 import { buildRuntimeStatusSnapshotPaths } from '../src/runtime/runtime_status_snapshot.js'
 import {
   buildEthCarryActionabilityNotification,
@@ -82,6 +86,7 @@ describe('refresh_eth_carry_runtime_status', () => {
       const validationRunsPath = join(researchDir, 'strategy_validation_runs.json')
       const verdictPath = join(researchDir, 'experiment_verdict.v2.json')
       const releaseGateStatusPath = join(bundleRuntimeDir, 'release_gate_status.json')
+      const admissionDecisionPath = join(bundleRuntimeDir, 'admission_decision.v1.json')
       const registryPath = join(bundleRuntimeDir, 'paper_champion_registry.json')
       const controlSummaryPath = join(controlArtifactDir, 'eth_carry_summary.json')
       const shadowSummaryPath = join(shadowArtifactDir, 'eth_carry_short_bias_summary.json')
@@ -193,6 +198,38 @@ describe('refresh_eth_carry_runtime_status', () => {
           allowLiveTrading: true,
           failedChecks: [],
           warningChecks: [],
+        }, null, 2)}\n`,
+        'utf-8',
+      )
+      const admissionCore: Omit<AdmissionDecisionV1, 'schemaVersion' | 'decisionId'> = {
+        candidateId: 'ETH_CARRY_SHORT_BIAS_V1',
+        evaluatedAt: '2026-04-15T03:15:00.000Z',
+        expiresAt: '2026-04-15T03:20:00.000Z',
+        sourceCommit: '1'.repeat(40),
+        dirtyStateHash: '2'.repeat(64),
+        releaseManifestHash: '3'.repeat(64),
+        stage: 'paper_allowed',
+        paperTradingAllowed: true,
+        liveTradingAllowed: false,
+        liveExecutionArmed: false,
+        gateResults: [{
+          gateId: 'promotion_v2_6',
+          status: 'pass',
+          evidenceRefs: ['4'.repeat(64)],
+          reasonCodes: [],
+        }],
+        blockingReasons: [],
+        evidenceRefs: ['4'.repeat(64)],
+        approvalRefs: [],
+        accountScope: ['paper-main'],
+        assetScope: ['ETH/USDT:USDT', 'BTC/USDT:USDT'],
+      }
+      await writeFile(
+        admissionDecisionPath,
+        `${JSON.stringify({
+          schemaVersion: 'admission_decision.v1',
+          decisionId: admissionDecisionId(admissionCore),
+          ...admissionCore,
         }, null, 2)}\n`,
         'utf-8',
       )
@@ -369,6 +406,7 @@ describe('refresh_eth_carry_runtime_status', () => {
         validationRunsPath,
         verdictPath,
         releaseGateStatusPath,
+        admissionDecisionPath,
         registryPath,
         portfolioTargetPath: workingTargetPath,
         snapshotBaseDir: statusDir,

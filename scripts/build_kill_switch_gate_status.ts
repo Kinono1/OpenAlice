@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeEvidenceManifestForArtifact } from '../src/runtime/evidence_manifest.js'
 
-type Status = 'pass'
+type Status = 'pass' | 'fail'
 
 interface CheckResult<T = unknown> {
   found: boolean
@@ -49,6 +49,11 @@ interface RiskConfig {
   killSwitch?: boolean
 }
 
+interface KillSwitchGateSources {
+  killSwitchConfig?: KillSwitchConfig | null
+  riskConfig?: RiskConfig | null
+}
+
 async function main(): Promise<void> {
   const args = parseKillSwitchGateStatusArgs(process.argv.slice(2))
   const report = await runKillSwitchGateStatus(args)
@@ -64,9 +69,12 @@ export function parseKillSwitchGateStatusArgs(argv: string[]): CliArgs {
   }
 }
 
-export async function runKillSwitchGateStatus(args: CliArgs): Promise<KillSwitchGateStatus> {
+export async function runKillSwitchGateStatus(
+  args: CliArgs,
+  sources?: KillSwitchGateSources,
+): Promise<KillSwitchGateStatus> {
   const startedAt = new Date()
-  const report = await buildKillSwitchGateStatus(new Date().toISOString())
+  const report = await buildKillSwitchGateStatus(new Date().toISOString(), sources)
   if (args.outputPath) {
     const outputPath = resolve(args.outputPath)
     await mkdir(dirname(outputPath), { recursive: true })
@@ -77,18 +85,25 @@ export async function runKillSwitchGateStatus(args: CliArgs): Promise<KillSwitch
       startedAt,
       finishedAt: new Date(),
       exitCode: 0,
-      businessStatus: 'pass',
+      businessStatus: report.status,
       recordsIn: 2,
       recordsOut: 1,
-      errorClass: null,
+      errorClass: report.status === 'pass' ? null : 'kill_switch_configuration_incomplete',
     })
   }
   return report
 }
 
-export async function buildKillSwitchGateStatus(generatedAt = new Date().toISOString()): Promise<KillSwitchGateStatus> {
-  const killSwitchConfig = await readJsonSafe<KillSwitchConfig>('data/config/kill-switch.json')
-  const riskConfig = await readJsonSafe<RiskConfig>('data/config/risk.json')
+export async function buildKillSwitchGateStatus(
+  generatedAt = new Date().toISOString(),
+  sources?: KillSwitchGateSources,
+): Promise<KillSwitchGateStatus> {
+  const killSwitchConfig = sources && 'killSwitchConfig' in sources
+    ? sources.killSwitchConfig ?? null
+    : await readJsonSafe<KillSwitchConfig>('data/config/kill-switch.json')
+  const riskConfig = sources && 'riskConfig' in sources
+    ? sources.riskConfig ?? null
+    : await readJsonSafe<RiskConfig>('data/config/risk.json')
 
   const killSwitchFound = riskConfig != null && riskConfig.killSwitch !== undefined
   const killSwitchEnabled = killSwitchFound ? Boolean(riskConfig!.killSwitch) : false
@@ -98,23 +113,19 @@ export async function buildKillSwitchGateStatus(generatedAt = new Date().toISOSt
 
   const consistentWithStateFound = killSwitchFound && defaultPolicyFound
   const blockingPolicies = ['block_new_only', 'block_all']
-  let consistentWithState: boolean
-  if (!killSwitchEnabled) {
-    consistentWithState = true
-  } else {
-    consistentWithState = defaultPolicy != null && blockingPolicies.includes(defaultPolicy)
-  }
+  const defaultPolicyValid = defaultPolicy != null && blockingPolicies.includes(defaultPolicy)
+  const consistentWithState = consistentWithStateFound && defaultPolicyValid
 
   const killSwitchCheck: CheckResult<boolean> = {
     found: killSwitchFound,
     value: killSwitchEnabled,
-    verdict: 'pass',
+    verdict: killSwitchFound ? 'pass' : 'fail',
   }
 
   const defaultPolicyCheck: CheckResult<string> = {
     found: defaultPolicyFound,
     value: defaultPolicy,
-    verdict: defaultPolicyFound ? 'pass' : 'fail',
+    verdict: defaultPolicyValid ? 'pass' : 'fail',
   }
 
   const consistentWithStateCheck: CheckResult<boolean> = {
@@ -124,6 +135,13 @@ export async function buildKillSwitchGateStatus(generatedAt = new Date().toISOSt
   }
 
   const researchOnlyBlockedConsistent = !killSwitchEnabled || consistentWithState
+  const blockers = [
+    ...(killSwitchFound ? [] : ['risk_config_kill_switch_missing']),
+    ...(defaultPolicyFound ? [] : ['kill_switch_default_policy_missing']),
+    ...(defaultPolicyFound && !defaultPolicyValid ? [`kill_switch_default_policy_invalid:${defaultPolicy ?? 'null'}`] : []),
+    ...(consistentWithStateFound && consistentWithState ? [] : ['kill_switch_state_not_verifiably_consistent']),
+  ]
+  const status: Status = blockers.length === 0 ? 'pass' : 'fail'
 
   return {
     schemaVersion: 1,
@@ -134,7 +152,7 @@ export async function buildKillSwitchGateStatus(generatedAt = new Date().toISOSt
     paperTradingAllowed: false,
     liveTradingAllowed: false,
     executionAllowed: false,
-    status: 'pass',
+    status,
     killSwitchEnabled,
     defaultPolicy,
     researchOnlyBlockedConsistent,
@@ -143,7 +161,7 @@ export async function buildKillSwitchGateStatus(generatedAt = new Date().toISOSt
       defaultPolicy: defaultPolicyCheck,
       consistentWithState: consistentWithStateCheck,
     },
-    blockers: [],
+    blockers,
     nextActions: [
       'Keep kill-switch gate in the research-evidence refresh chain; this is protection evidence, not trading authorization.',
       'If killSwitch state changes or defaultPolicy is updated, re-run this gate to confirm consistency.',

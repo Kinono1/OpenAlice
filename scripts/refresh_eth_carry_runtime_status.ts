@@ -27,6 +27,7 @@ interface CliArgs {
   validationRunsPath: string
   verdictPath: string
   releaseGateStatusPath: string
+  admissionDecisionPath: string
   registryPath: string
   portfolioTargetPath: string
   snapshotBaseDir: string
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
         validationRunsPath: resolve(args.validationRunsPath),
         verdictPath: resolve(args.verdictPath),
         releaseGateStatusPath: resolve(args.releaseGateStatusPath),
+        admissionDecisionPath: resolve(args.admissionDecisionPath),
         registryPath: resolve(args.registryPath),
         portfolioTargetPath: resolve(args.portfolioTargetPath),
         snapshotBaseDir: resolve(args.snapshotBaseDir),
@@ -206,6 +208,7 @@ async function refreshEthCarryRuntimeStatus(
       validationRunsPath: args.validationRunsPath,
       verdictPath: args.verdictPath,
       releaseGateStatusPath: args.releaseGateStatusPath,
+      admissionDecisionPath: args.admissionDecisionPath,
       registryPath: args.registryPath,
       portfolioTargetPath: finalTargetPath,
       runtimePublishStatePath: resolve(args.snapshotBaseDir, 'runtime_publish_state.synthetic.json'),
@@ -224,6 +227,7 @@ async function refreshEthCarryRuntimeStatus(
       validationRunsPath: resolve(args.validationRunsPath),
       verdictPath: resolve(args.verdictPath),
       releaseGateStatusPath: resolve(args.releaseGateStatusPath),
+      admissionDecisionPath: resolve(args.admissionDecisionPath),
       registryPath: resolve(args.registryPath),
       canonicalPortfolioTargetPath: resolve(args.portfolioTargetPath),
       runtimeTruthPortfolioTargetPath: finalTargetPath,
@@ -906,6 +910,7 @@ function parseArgs(argv: string[]): CliArgs {
     validationRunsPath: raw.get('validationRunsPath') ?? 'data/research/strategy/strategy_validation_runs.json',
     verdictPath: raw.get('verdictPath') ?? 'data/research/strategy/experiment_verdict.v2.json',
     releaseGateStatusPath: raw.get('releaseGateStatusPath') ?? 'data/runtime/release_gate_status.json',
+    admissionDecisionPath: raw.get('admissionDecisionPath') ?? 'data/runtime/admission_decision.v1.json',
     registryPath: raw.get('registryPath') ?? 'data/runtime/paper_champion_registry.json',
     portfolioTargetPath: raw.get('portfolioTargetPath') ?? 'data/runtime/paper_portfolio_target.json',
     snapshotBaseDir: raw.get('snapshotBaseDir') ?? 'data/runtime/eth_carry_status',
