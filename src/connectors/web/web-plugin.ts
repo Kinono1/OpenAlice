@@ -22,9 +22,11 @@ import { createAgentStatusRoutes } from './routes/agent-status.js'
 import { createHealthRoutes } from './routes/health.js'
 import { createSignalRoutes } from './routes/signals.js'
 import { createStrategyRoutes } from './routes/strategy.js'
+import { createSystemRoutes } from './routes/system.js'
 import {
   createRateLimitMiddleware,
   createRequireAuth,
+  createRequireStrongAuth,
   createRequireTrade,
   createRuntimeRoleGuard,
 } from './routes/security.js'
@@ -56,6 +58,7 @@ export class WebPlugin implements Plugin {
     const maxSseClients = this.config.maxSseClients ?? Number(process.env.WEB_SSE_MAX_CLIENTS ?? 100)
     const sseMaxDurationMs = this.config.sseMaxDurationMs ?? Number(process.env.WEB_SSE_MAX_DURATION_MS ?? 15 * 60_000)
     const requireAuth = createRequireAuth(enforceAuth)
+    const requireStrongAuth = createRequireStrongAuth()
     const requireTrade = createRequireTrade(enforceAuth)
 
     // Initialize sessions for the default channel and all sub-channels
@@ -117,6 +120,7 @@ export class WebPlugin implements Plugin {
     app.route('/api', createHealthRoutes(ctx))
     app.route('/api/tools', createToolsRoutes(ctx.toolCenter, { requireAuth }))
     app.route('/api/agent-status', createAgentStatusRoutes(ctx, { requireAuth, maxSseClients, sseMaxDurationMs }))
+    app.route('/api/system', createSystemRoutes(ctx, { requireStrongAuth }))
 
     // ==================== Serve UI (Vite build output) ====================
     const uiRoot = resolve('dist/ui')

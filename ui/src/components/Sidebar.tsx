@@ -113,6 +113,16 @@ const NAV_SECTIONS: NavSection[] = [
     sectionLabel: 'System',
     items: [
       {
+        page: 'system',
+        label: 'System Status',
+        icon: (active) => (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M7 12h3l2-5 3 10 2-5h2" />
+          </svg>
+        ),
+      },
+      {
         page: 'connectors',
         label: 'Connectors',
         icon: (active) => (

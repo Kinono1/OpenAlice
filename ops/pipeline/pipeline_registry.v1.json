@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 617,
+  "entryCount": 618,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -11046,6 +11046,35 @@
         "key": "pipeline:pipeline.scripts_settle_rank_ic_prospective_observations_ts"
       },
       "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_show_system_status_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/show_system_status.ts",
+      "compatibilityAliases": [
+        "status:system"
+      ],
+      "inputs": [
+        "data/runtime/admission_decision.v1.json",
+        "data/runtime/live_data_freshness.latest.json",
+        "data/runtime/sidecars",
+        "ops/pipeline/pipeline_registry.v1.json",
+        "runtime/releases/current",
+        "runtime/releases/previous"
+      ],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 86400,
       "schedulerOwner": "manual",

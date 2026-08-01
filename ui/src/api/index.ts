@@ -14,6 +14,7 @@ import { toolsApi } from './tools'
 import { channelsApi } from './channels'
 import { agentStatusApi } from './agentStatus'
 import { strategyApi } from './strategy'
+import { systemApi } from './system'
 export const api = {
   chat: chatApi,
   config: configApi,
@@ -27,6 +28,7 @@ export const api = {
   strategy: strategyApi,
   channels: channelsApi,
   agentStatus: agentStatusApi,
+  system: systemApi,
 }
 
 // Re-export all types for convenience
@@ -59,3 +61,4 @@ export type {
 } from './types'
 export type { EventQueryResult } from './events'
 export type { ToolCallQueryResult } from './agentStatus'
+export type { SystemStatusV1 } from './system'

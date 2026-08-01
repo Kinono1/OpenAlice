@@ -7,7 +7,12 @@ vi.mock('@hono/node-server/conninfo', () => ({
   getConnInfo: connInfoMock,
 }))
 
-import { createRateLimitMiddleware, createRequireAuth, createRequireTrade } from '../routes/security.js'
+import {
+  createRateLimitMiddleware,
+  createRequireAuth,
+  createRequireStrongAuth,
+  createRequireTrade,
+} from '../routes/security.js'
 
 describe('web security middleware', () => {
   const originalAuthToken = process.env.AUTH_TOKEN
@@ -69,6 +74,28 @@ describe('web security middleware', () => {
       headers: { Authorization: 'Bearer auth-token' },
     })
     expect(denied.status).toBe(401)
+  })
+
+  it('requires a strong AUTH_TOKEN and never honors the development bypass', async () => {
+    process.env.AUTH_TOKEN = 'short-token'
+    process.env.DEV_AUTH_BYPASS = 'true'
+    process.env.ALLOW_UNSAFE_DEV_AUTH_BYPASS = 'true'
+    process.env.NODE_ENV = 'development'
+
+    const app = new Hono()
+    app.use('*', createRequireStrongAuth())
+    app.get('/', (c) => c.json({ ok: true }))
+
+    expect((await app.request('/', {
+      headers: { Authorization: 'Bearer short-token' },
+    })).status).toBe(401)
+
+    const strongToken = 's'.repeat(40)
+    process.env.AUTH_TOKEN = strongToken
+    expect((await app.request('/')).status).toBe(401)
+    expect((await app.request('/', {
+      headers: { Authorization: `Bearer ${strongToken}` },
+    })).status).toBe(200)
   })
 
   it('requires trade token and accepts alice_token cookie', async () => {

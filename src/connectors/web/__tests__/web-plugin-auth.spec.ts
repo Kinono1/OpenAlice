@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   serve: vi.fn(() => ({ close: vi.fn() })),
   readWebSubchannels: vi.fn(),
   createRequireAuth: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
+  createRequireStrongAuth: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
   createRequireTrade: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
   createRuntimeRoleGuard: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
   createRateLimitMiddleware: vi.fn(() => vi.fn(async (_c: unknown, next: () => Promise<void>) => next())),
@@ -34,6 +35,7 @@ vi.mock('../routes/security.js', async (importOriginal) => {
   return {
     ...actual,
     createRequireAuth: mocks.createRequireAuth,
+    createRequireStrongAuth: mocks.createRequireStrongAuth,
     createRequireTrade: mocks.createRequireTrade,
     createRuntimeRoleGuard: mocks.createRuntimeRoleGuard,
     createRateLimitMiddleware: mocks.createRateLimitMiddleware,
@@ -116,6 +118,11 @@ vi.mock('../routes/strategy.js', async () => {
   return { createStrategyRoutes: () => new Hono() }
 })
 
+vi.mock('../routes/system.js', async () => {
+  const { Hono } = await import('hono')
+  return { createSystemRoutes: () => new Hono() }
+})
+
 import { WebPlugin } from '../web-plugin.js'
 
 function makeCtx(input?: {
@@ -147,6 +154,7 @@ describe('WebPlugin auth wiring', () => {
     await plugin.start(makeCtx({ enforceAuth: true }) as any)
 
     expect(mocks.createRequireAuth).toHaveBeenCalledWith(true)
+    expect(mocks.createRequireStrongAuth).toHaveBeenCalledWith()
     expect(mocks.createRequireTrade).toHaveBeenCalledWith(true)
   })
 
@@ -155,6 +163,7 @@ describe('WebPlugin auth wiring', () => {
     await plugin.start(makeCtx({ enforceAuth: false }) as any)
 
     expect(mocks.createRequireAuth).toHaveBeenCalledWith(false)
+    expect(mocks.createRequireStrongAuth).toHaveBeenCalledWith()
     expect(mocks.createRequireTrade).toHaveBeenCalledWith(false)
   })
 

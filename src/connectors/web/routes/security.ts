@@ -53,6 +53,23 @@ export function createRequireAuth(enforceAuth = false): MiddlewareHandler {
   return withDevBypass(createCoreRequireAuth(enforceAuth))
 }
 
+export const STRONG_AUTH_MIN_BYTES = 32
+
+/**
+ * Mandatory authentication for evidence-bearing operational status.
+ * It deliberately ignores the optional global-auth and development-bypass flags.
+ */
+export function createRequireStrongAuth(): MiddlewareHandler {
+  const requireAuth = createCoreRequireAuth(true)
+  return createMiddleware(async (c, next) => {
+    const { auth, authConfigured } = getWebAuthTokens()
+    if (!authConfigured || Buffer.byteLength(auth, 'utf8') < STRONG_AUTH_MIN_BYTES) {
+      return c.json({ error: 'unauthorized' }, 401)
+    }
+    return requireAuth(c, next)
+  })
+}
+
 export function createRequireTrade(enforceAuth = true): MiddlewareHandler {
   return withDevBypass(createCoreRequireTrade(enforceAuth))
 }

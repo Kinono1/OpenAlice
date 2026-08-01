@@ -27,6 +27,7 @@
     "release:build": "tsx scripts/manage_local_release.ts build",
     "release:verify": "tsx scripts/manage_local_release.ts verify",
     "release:status": "tsx scripts/manage_local_release.ts status",
+    "status:system": "tsx scripts/show_system_status.ts",
     "release:activate": "tsx scripts/manage_local_release.ts activate",
     "release:rollback": "tsx scripts/manage_local_release.ts rollback",
     "canary:rollback-drill": "tsx scripts/run_canary_rollback_drill.ts",
