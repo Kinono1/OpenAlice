@@ -27,6 +27,10 @@ export interface LeggedExecutorOptions {
   legBFillTimeoutMs?: number
   /** Poll interval for order status (default 500) */
   pollIntervalMs?: number
+  /** Authorized dispatcher-backed submitter. Required whenever execute=true. */
+  submitOrder?: (order: CryptoPlaceOrderRequest) => Promise<CryptoOrderResult>
+  /** Authorized dispatcher-backed cancellation path. */
+  cancelOrder?: (orderId: string) => Promise<boolean>
 }
 
 export type LeggedStatus =
@@ -97,6 +101,8 @@ export async function executeLeggedArb(
     legAFillTimeoutMs = 10_000,
     legBFillTimeoutMs = 8_000,
     pollIntervalMs = 500,
+    submitOrder,
+    cancelOrder,
   } = opts
 
   const startMs = Date.now()
@@ -136,8 +142,21 @@ export async function executeLeggedArb(
     }
   }
 
+  if (!submitOrder) {
+    return {
+      status: 'aborted_leg_a',
+      legAResult: {
+        success: false,
+        error: 'authorized_dispatcher_submitter_required',
+      },
+      description: 'execute=true requires an authorized dispatcher-backed submitter',
+      elapsedMs: Date.now() - startMs,
+      dryRun,
+    }
+  }
+
   // - Step 1: Submit legA -
-  const legAResult = await engine.placeOrder(pair.legA)
+  const legAResult = await submitOrder(pair.legA)
   if (!legAResult.success) {
     return {
       status: 'aborted_leg_a',
@@ -155,8 +174,8 @@ export async function executeLeggedArb(
 
   if (!legAFill.filled) {
     // legA timed out - cancel it if possible, then abort
-    if (legAResult.orderId) {
-      await engine.cancelOrder(legAResult.orderId).catch(() => undefined)
+    if (legAResult.orderId && cancelOrder) {
+      await cancelOrder(legAResult.orderId).catch(() => undefined)
     }
     return {
       status: 'aborted_leg_a',
@@ -168,7 +187,7 @@ export async function executeLeggedArb(
   }
 
   // - Step 3: Submit legB -
-  const legBResult = await engine.placeOrder(pair.legB)
+  const legBResult = await submitOrder(pair.legB)
 
   if (legBResult.success) {
     // Wait for legB fill (best-effort; don't hedge if it's just slow)
@@ -187,7 +206,7 @@ export async function executeLeggedArb(
 
   // - Step 4: legB failed - hedge legA back to flat -------------
   const hedgeOrder = buildHedgeOrder(pair.legA, legAFill.filledSize)
-  const hedgeResult = await engine.placeOrder(hedgeOrder)
+  const hedgeResult = await submitOrder(hedgeOrder)
 
   return {
     status: hedgeResult.success ? 'hedged_leg_a' : 'hedge_failed',

@@ -24,13 +24,16 @@ function createTestDispatcher(
     options as { productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null }
   )?.productionRiskPreflightPolicy
   const mergedOptions = options && 'enabled' in options
-    ? {
-        riskConfig: options,
-        productionRiskPreflightPolicy: READY_PRODUCTION_RISK_POLICY,
-      }
-    : {
-        ...options,
-        productionRiskPreflightPolicy:
+      ? {
+          riskConfig: options,
+          productionRiskPreflightPolicy: READY_PRODUCTION_RISK_POLICY,
+          allowTestExecutionPermitBypass: true,
+        }
+      : {
+          ...options,
+          allowTestExecutionPermitBypass:
+            options.allowTestExecutionPermitBypass ?? true,
+          productionRiskPreflightPolicy:
           explicitPolicy === null ? undefined : explicitPolicy ?? READY_PRODUCTION_RISK_POLICY,
       }
   const dispatcher = createCryptoOperationDispatcher(engine, mergedOptions)
@@ -740,11 +743,14 @@ describe('createCryptoOperationDispatcher', () => {
     })
   })
 
-  describe('unknown action', () => {
-    it('throws for unknown action', async () => {
+  describe('syncOrders', () => {
+    it('is a read-only synchronization action', async () => {
       await expect(
         dispatch({ action: 'syncOrders', params: {} }),
-      ).rejects.toThrow('Unknown operation action: syncOrders')
+      ).resolves.toEqual({ success: true, orders: [] })
+      expect(engine.placeOrder).not.toHaveBeenCalled()
+      expect(engine.cancelOrder).not.toHaveBeenCalled()
+      expect(engine.adjustLeverage).not.toHaveBeenCalled()
     })
   })
 
@@ -851,6 +857,7 @@ describe('createCryptoOperationDispatcher', () => {
           engine,
           idempotencyStore: idempotencyStore as any,
           productionRiskPreflightPolicy: READY_PRODUCTION_RISK_POLICY,
+          allowTestExecutionPermitBypass: true,
         },
       )
 

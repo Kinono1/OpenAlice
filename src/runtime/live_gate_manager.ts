@@ -43,6 +43,8 @@ import {
   tryLoadValidatedPromotionReadinessV2,
 } from "./promotion_v2_artifacts.js";
 import type { ToxicFlowAlert } from "../domain/strategy/microstructure/types.js";
+import { tryLoadAdmissionDecision } from "./admission.js";
+import type { CryptoExecutionMode } from "../domain/trading/execution-permit.js";
 
 export interface LiveGateManagerConfig {
   executionGate: SlippageDriftGateConfig;
@@ -55,6 +57,9 @@ export interface LiveGateManagerConfig {
   requirePromotionV2ForLiveOrders: boolean;
   promotionReadinessV2Path: string;
   validatePromotionV2Artifacts: boolean;
+  requireAdmissionDecision: boolean;
+  admissionDecisionPath: string;
+  accountMode: CryptoExecutionMode;
   regimeShift: {
     enabled: boolean;
     symbol?: string;
@@ -91,6 +96,7 @@ export interface LiveGateManagerOptions {
   eventLog?: EventLog;
   baseDir?: string;
   manualOverridePath?: string;
+  accountId?: string;
   config?: LiveGateManagerConfigOverride;
 }
 
@@ -126,9 +132,12 @@ const DEFAULT_CONFIG: LiveGateManagerConfig = {
   requireReleaseGatePass: true,
   releaseGateStatusPath: "data/runtime/release_gate_status.json",
   releaseGateStatusCacheTtlMs: 60_000,
-  requirePromotionV2ForLiveOrders: false,
+  requirePromotionV2ForLiveOrders: true,
   promotionReadinessV2Path: DEFAULT_PROMOTION_READINESS_V2_PATH,
   validatePromotionV2Artifacts: true,
+  requireAdmissionDecision: true,
+  admissionDecisionPath: "data/runtime/admission_decision.v1.json",
+  accountMode: "paper_only",
   regimeShift: {
     enabled: true,
     checkIntervalMs: 60_000,
@@ -242,6 +251,11 @@ export class LiveGateManager {
       };
     }
 
+    if (!req.reduceOnly && this.config.requireAdmissionDecision) {
+      const admissionDecision = await this.evaluateAdmissionDecisionGate(req);
+      if (admissionDecision) return admissionDecision;
+    }
+
     if (
       !req.reduceOnly &&
       this.config.requireReleaseGatePass &&
@@ -348,6 +362,48 @@ export class LiveGateManager {
       };
     }
 
+    return undefined;
+  }
+
+  private async evaluateAdmissionDecisionGate(
+    req: CryptoPlaceOrderRequest,
+  ): Promise<RiskCheckResult | undefined> {
+    const loaded = await tryLoadAdmissionDecision(
+      this.config.admissionDecisionPath,
+      { now: new Date() },
+    );
+    if (loaded.kind !== "loaded") {
+      return {
+        approved: false,
+        reason: `Admission decision ${loaded.kind}: ${loaded.error}`,
+      };
+    }
+    const decision = loaded.decision;
+    const accountId = this.opts.accountId?.trim();
+    if (!accountId || !decision.accountScope.includes(accountId)) {
+      return {
+        approved: false,
+        reason: `Admission account scope does not include ${accountId || "missing-account"}.`,
+      };
+    }
+    if (!decision.assetScope.includes(req.symbol)) {
+      return {
+        approved: false,
+        reason: `Admission asset scope does not include ${req.symbol}.`,
+      };
+    }
+    if (this.config.accountMode === "live_guarded") {
+      if (!decision.liveTradingAllowed) {
+        return { approved: false, reason: "Admission does not allow live trading." };
+      }
+      if (!decision.liveExecutionArmed) {
+        return { approved: false, reason: "Live execution arm is not active." };
+      }
+      return undefined;
+    }
+    if (!decision.paperTradingAllowed) {
+      return { approved: false, reason: "Admission does not allow paper trading." };
+    }
     return undefined;
   }
 

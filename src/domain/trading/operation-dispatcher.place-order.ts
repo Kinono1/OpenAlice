@@ -32,6 +32,12 @@ import {
   evaluateProductionRiskPreflight,
   productionRiskPreflightError,
 } from './production-risk-preflight.js'
+import {
+  authorizeBrokerWrite,
+  recordExecutionReceipt,
+  type BrokerWriteAuthorizationInput,
+} from './operation-dispatcher.execution-gate.js'
+import type { ExecutionPermitV1 } from './execution-permit.js'
 
 interface PlaceOrderExecutorDeps {
   engine: ICryptoTradingEngine
@@ -102,6 +108,9 @@ export function createPlaceOrderExecutor({
     const prefetchedAccount = prefetchedState?.account
     let strategySummary: NonNullable<CryptoOrderResult['strategy']> | undefined
     let expectedPrice: number | undefined
+    let ticketValidated = false
+    let killSwitchPassed = false
+    let riskReductionProven = false
     if (idempotencyKey) {
       req.idempotencyKey = idempotencyKey
     }
@@ -300,6 +309,7 @@ export function createPlaceOrderExecutor({
         await recordIntentFailureEnsuringIntent(error, strategySummary)
         return failWithStrategy(error, strategySummary)
       }
+      riskReductionProven = true
     }
 
     if (options.killSwitch) {
@@ -323,6 +333,7 @@ export function createPlaceOrderExecutor({
         await recordIntentFailureEnsuringIntent(error, strategySummary)
         return failWithStrategy(error, strategySummary)
       }
+      killSwitchPassed = true
     }
 
     if (options.ticketStore?.isRequired() && !ticketId) {
@@ -370,6 +381,7 @@ export function createPlaceOrderExecutor({
         await recordIntentFailureEnsuringIntent(error)
         return fail(error)
       }
+      ticketValidated = true
     }
 
     if (options.exchangeId) {
@@ -619,12 +631,20 @@ export function createPlaceOrderExecutor({
           riskCheckedAtMs: number
         }
       | {
+          kind: 'permit_rejected'
+          riskContext?: RiskCheckContext
+          riskResult: RiskCheckResult
+          riskCheckedAtMs: number
+          reasonCodes: string[]
+        }
+      | {
           kind: 'executed'
           riskContext?: RiskCheckContext
           riskResult: RiskCheckResult
           orderResult: CryptoOrderResult
           riskCheckedAtMs: number
           brokerSubmittedAtMs: number
+          permit: ExecutionPermitV1 | null
         }
 
     let lockedExecution: LockedExecution
@@ -632,6 +652,7 @@ export function createPlaceOrderExecutor({
     let lastBrokerSubmittedAtMs: number | undefined
     let lastRiskDecision: ExecutionTelemetry['riskDecision'] = 'rejected'
     let lastRiskReason: string | null = null
+    let lastPermit: ExecutionPermitV1 | null = null
     try {
       lockedExecution = await withPlaceOrderLock<LockedExecution>(
         async (): Promise<LockedExecution> => {
@@ -669,6 +690,35 @@ export function createPlaceOrderExecutor({
 
           lastRiskDecision = 'approved'
           lastRiskReason = null
+          const authorizationInput = buildPlaceOrderAuthorizationInput({
+            op,
+            request: effectiveRequest,
+            intentId,
+            ticketId,
+            idempotencyKey: idempotencyKey ?? '',
+            expectedPrice,
+            ticketValidated,
+            idempotencyReserved,
+            killSwitchPassed,
+            riskReductionProven,
+          })
+          const authorization = await authorizeBrokerWrite(
+            engine,
+            options,
+            authorizationInput,
+          )
+          if (!authorization.allowed) {
+            lastRiskDecision = 'rejected'
+            lastRiskReason = authorization.reasonCodes.join(',')
+            return {
+              kind: 'permit_rejected',
+              riskContext,
+              riskResult,
+              riskCheckedAtMs,
+              reasonCodes: authorization.reasonCodes,
+            }
+          }
+          lastPermit = authorization.permit
           const brokerSubmittedAtMs = Date.now()
           lastBrokerSubmittedAtMs = brokerSubmittedAtMs
           const orderResult = await withTimeout(
@@ -683,6 +733,7 @@ export function createPlaceOrderExecutor({
             orderResult,
             riskCheckedAtMs,
             brokerSubmittedAtMs,
+            permit: authorization.permit,
           }
         },
       )
@@ -724,6 +775,26 @@ export function createPlaceOrderExecutor({
             })
           })
       }
+      if (lastPermit) {
+        await recordExecutionReceipt(
+          options,
+          buildPlaceOrderAuthorizationInput({
+            op,
+            request: effectiveRequest,
+            intentId,
+            ticketId,
+            idempotencyKey: idempotencyKey ?? '',
+            expectedPrice,
+            ticketValidated,
+            idempotencyReserved,
+            killSwitchPassed,
+            riskReductionProven,
+          }),
+          'broker_failed',
+          [error],
+          lastPermit,
+        )
+      }
       await finalizeIdempotency('failed', undefined, error)
       await recordIntentFailureEnsuringIntent(error, strategySummary, effectiveRequest, executionTelemetry)
       return failWithStrategy(error, strategySummary)
@@ -731,6 +802,16 @@ export function createPlaceOrderExecutor({
 
     const riskContext = lockedExecution.riskContext
     const riskResult = lockedExecution.riskResult
+    if (lockedExecution.kind === 'permit_rejected') {
+      const error = `execution-permit: ${lockedExecution.reasonCodes.join(',')}`
+      await finalizeIdempotency('failed', undefined, error)
+      await recordIntentFailureEnsuringIntent(
+        error,
+        strategySummary,
+        effectiveRequest,
+      )
+      return failWithStrategy(error, strategySummary)
+    }
     if (lockedExecution.kind === 'risk_rejected') {
       const error = `risk: ${riskResult.reason ?? 'unknown reason'}`
       const executionTelemetry: ExecutionTelemetry = {
@@ -824,6 +905,25 @@ export function createPlaceOrderExecutor({
       strategy: strategySummary,
       executionTelemetry,
     }
+
+    await recordExecutionReceipt(
+      options,
+      buildPlaceOrderAuthorizationInput({
+        op,
+        request: effectiveRequest,
+        intentId,
+        ticketId,
+        idempotencyKey: idempotencyKey ?? '',
+        expectedPrice,
+        ticketValidated,
+        idempotencyReserved,
+        killSwitchPassed,
+        riskReductionProven,
+      }),
+      orderResult.success ? 'broker_succeeded' : 'broker_failed',
+      orderResult.success ? [] : [orderResult.error ?? 'broker_order_failed'],
+      lockedExecution.permit,
+    )
 
     await safeRunAfterHook(options, {
       operation: op,
@@ -964,6 +1064,66 @@ export function createPlaceOrderExecutor({
       },
     }
   }
+}
+
+function buildPlaceOrderAuthorizationInput(input: {
+  op: Operation
+  request: CryptoPlaceOrderRequest
+  intentId: string
+  ticketId: string
+  idempotencyKey: string
+  expectedPrice?: number
+  ticketValidated: boolean
+  idempotencyReserved: boolean
+  killSwitchPassed: boolean
+  riskReductionProven: boolean
+}): BrokerWriteAuthorizationInput {
+  const completedChecks = ['risk_passed', 'limits_passed', 'slippage_policy_loaded']
+  if (input.ticketValidated) completedChecks.push('ticket_valid')
+  if (input.idempotencyReserved) completedChecks.push('idempotency_reserved')
+  if (input.killSwitchPassed) completedChecks.push('kill_switch_passed')
+  if (input.riskReductionProven) completedChecks.push('risk_reduction_proven')
+  const riskReducing = input.request.reduceOnly === true
+  return {
+    intentId: input.intentId,
+    action: input.op.action === 'closePosition'
+      ? 'close'
+      : riskReducing
+        ? 'reduce'
+        : 'open',
+    riskReducing,
+    symbol: input.request.symbol,
+    side: input.request.side,
+    notionalUsd: estimateOrderNotionalUsd(input.request, input.expectedPrice),
+    ticketId: input.ticketId,
+    idempotencyKey: input.idempotencyKey,
+    completedChecks,
+  }
+}
+
+function estimateOrderNotionalUsd(
+  request: CryptoPlaceOrderRequest,
+  expectedPrice?: number,
+): number | undefined {
+  if (
+    typeof request.usd_size === 'number'
+    && Number.isFinite(request.usd_size)
+    && request.usd_size > 0
+  ) {
+    return request.usd_size
+  }
+  const price = request.price ?? expectedPrice
+  if (
+    typeof request.size === 'number'
+    && Number.isFinite(request.size)
+    && request.size > 0
+    && typeof price === 'number'
+    && Number.isFinite(price)
+    && price > 0
+  ) {
+    return request.size * price
+  }
+  return undefined
 }
 
 function resolveTimeoutPhase(operationName: string): ExecutionTelemetry['timeoutPhase'] {

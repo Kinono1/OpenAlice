@@ -33,8 +33,34 @@ import {
   signManualOverridePayload,
   type ManualOverride,
 } from "./manual_override.js";
+import { admissionDecisionId, type AdmissionDecisionV1 } from "./admission.js";
 
 describe("live_gate_manager", () => {
+  it("fails closed when the unified admission snapshot is missing", async () => {
+    const harness = await createHarness({ admissionDecision: null });
+    const blocked = await harness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+    });
+    expect(blocked?.approved).toBe(false);
+    expect(String(blocked?.reason)).toContain("Admission decision missing");
+  });
+
+  it("consumes live admission but still rejects when the execution arm is false", async () => {
+    const harness = await createHarness({
+      admissionDecision: createLiveAdmissionDecision(false),
+      config: { accountMode: "live_guarded" },
+    });
+    const blocked = await harness.manager.beforePlaceOrder({
+      symbol: "BTC/USD",
+      side: "buy",
+      type: "market",
+    });
+    expect(blocked?.approved).toBe(false);
+    expect(String(blocked?.reason)).toContain("arm is not active");
+  });
+
   it("beforePlaceOrder blocks new opens when manual override pauses them", async () => {
     const harness = await createHarness({
       manualOverride: { pauseNewOpens: true },
@@ -662,6 +688,7 @@ interface HarnessOptions {
   initialRampStageLabel?: string;
   regimeShiftCacheResult?: RegimeShiftResult;
   availableSymbols?: string[];
+  admissionDecision?: AdmissionDecisionV1 | null;
 }
 
 /** Test secret for HMAC signing of manual override fixtures. */
@@ -719,6 +746,7 @@ async function createHarness(opts?: HarnessOptions) {
   const manualOverridePath = join(tempDir, "manual_override.json");
   const releaseGateStatusPath = join(tempDir, "release_gate_status.json");
   const promotionReadinessV2Path = join(tempDir, "strategy_promotion.latest.json");
+  const admissionDecisionPath = join(tempDir, "admission_decision.v1.json");
 
   if (opts?.manualOverride) {
     const signedOverride = signTestOverride(opts.manualOverride);
@@ -740,6 +768,16 @@ async function createHarness(opts?: HarnessOptions) {
       promotionReadinessV2Path,
       `${JSON.stringify(opts.promotionReadinessV2, null, 2)}\n`,
       "utf-8"
+    );
+  }
+  const admissionDecision = opts?.admissionDecision === undefined
+    ? createPaperAdmissionDecision(opts?.availableSymbols ?? ["BTC/USD"])
+    : opts.admissionDecision;
+  if (admissionDecision) {
+    await writeFile(
+      admissionDecisionPath,
+      `${JSON.stringify(admissionDecision, null, 2)}\n`,
+      "utf-8",
     );
   }
 
@@ -773,6 +811,10 @@ async function createHarness(opts?: HarnessOptions) {
   const config: LiveGateManagerConfigOverride = {
     releaseGateStatusPath,
     promotionReadinessV2Path,
+    admissionDecisionPath,
+    accountMode: "paper_only",
+    requireAdmissionDecision: true,
+    requirePromotionV2ForLiveOrders: false,
     regimeShift: {
       enabled: false,
       ...(opts?.config?.regimeShift ?? {}),
@@ -786,6 +828,7 @@ async function createHarness(opts?: HarnessOptions) {
       klineStore,
       baseDir: tempDir,
       manualOverridePath,
+      accountId: "test-account",
       config,
     },
     executionStore,
@@ -803,6 +846,69 @@ async function createHarness(opts?: HarnessOptions) {
     executionStore,
     rampStore,
     riskBreakerStore,
+  };
+}
+
+function createPaperAdmissionDecision(assetScope: string[]): AdmissionDecisionV1 {
+  const now = new Date();
+  const core: Omit<AdmissionDecisionV1, "schemaVersion" | "decisionId"> = {
+    candidateId: "live-gate-test-candidate",
+    evaluatedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+    sourceCommit: "1".repeat(40),
+    dirtyStateHash: "2".repeat(64),
+    releaseManifestHash: "3".repeat(64),
+    stage: "paper_allowed",
+    paperTradingAllowed: true,
+    liveTradingAllowed: false,
+    liveExecutionArmed: false,
+    gateResults: [{
+      gateId: "promotion_v2_6",
+      status: "pass",
+      evidenceRefs: ["4".repeat(64)],
+      reasonCodes: [],
+    }],
+    blockingReasons: ["tiny_cap_review_missing"],
+    evidenceRefs: ["4".repeat(64)],
+    approvalRefs: [],
+    accountScope: ["test-account"],
+    assetScope,
+  };
+  return {
+    schemaVersion: "admission_decision.v1",
+    decisionId: admissionDecisionId(core),
+    ...core,
+  };
+}
+
+function createLiveAdmissionDecision(armed: boolean): AdmissionDecisionV1 {
+  const paper = createPaperAdmissionDecision(["BTC/USD"]);
+  const {
+    schemaVersion: _schemaVersion,
+    decisionId: _decisionId,
+    ...paperCore
+  } = paper;
+  const core: Omit<AdmissionDecisionV1, "schemaVersion" | "decisionId"> = {
+    ...paperCore,
+    stage: "live_allowed",
+    liveTradingAllowed: true,
+    liveExecutionArmed: armed,
+    gateResults: [
+      ...paperCore.gateResults,
+      {
+        gateId: "live_dual_approval",
+        status: "pass",
+        evidenceRefs: ["5".repeat(64)],
+        reasonCodes: [],
+      },
+    ],
+    evidenceRefs: [...paperCore.evidenceRefs, "5".repeat(64)],
+    approvalRefs: ["approval-a", "approval-b"],
+  };
+  return {
+    schemaVersion: "admission_decision.v1",
+    decisionId: admissionDecisionId(core),
+    ...core,
   };
 }
 

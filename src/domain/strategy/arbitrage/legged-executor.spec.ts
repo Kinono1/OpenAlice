@@ -18,6 +18,13 @@ function mockEngine(overrides: Partial<ICryptoTradingEngine> = {}): ICryptoTradi
   }
 }
 
+function executionOptions(engine: ICryptoTradingEngine) {
+  return {
+    submitOrder: (order: Parameters<ICryptoTradingEngine['placeOrder']>[0]) => engine.placeOrder(order),
+    cancelOrder: (orderId: string) => engine.cancelOrder(orderId),
+  }
+}
+
 const pair: ArbLegPair = {
   legA: { symbol: 'BTC/USDT', side: 'buy', type: 'market', usd_size: 100, idempotencyKey: 'leg-a' },
   legB: { symbol: 'ETH/USDT', side: 'sell', type: 'market', usd_size: 100, idempotencyKey: 'leg-b' },
@@ -35,9 +42,22 @@ describe('executeLeggedArb', () => {
     expect(engine.placeOrder).not.toHaveBeenCalled()
   })
 
+  it('rejects execute=true without an authorized dispatcher submitter', async () => {
+    const engine = mockEngine()
+    const result = await executeLeggedArb(engine, pair, {
+      execute: true,
+      pollIntervalMs: 1,
+    })
+    expect(result.status).toBe('aborted_leg_a')
+    expect(result.legAResult.error).toBe('authorized_dispatcher_submitter_required')
+    expect(engine.placeOrder).not.toHaveBeenCalled()
+  })
+
   it('returns filled_both when both legs succeed', async () => {
     const engine = mockEngine()
-    const result = await executeLeggedArb(engine, pair, { execute: true, pollIntervalMs: 1 })
+    const result = await executeLeggedArb(engine, pair, {
+      ...executionOptions(engine), execute: true, pollIntervalMs: 1,
+    })
     expect(result.status).toBe('filled_both')
     expect(result.dryRun).toBe(false)
     expect(engine.placeOrder).toHaveBeenCalledTimes(2)
@@ -47,7 +67,9 @@ describe('executeLeggedArb', () => {
     const engine = mockEngine({
       placeOrder: vi.fn().mockResolvedValue({ success: false, error: 'rejected' } as CryptoOrderResult),
     })
-    const result = await executeLeggedArb(engine, pair, { execute: true, pollIntervalMs: 1 })
+    const result = await executeLeggedArb(engine, pair, {
+      ...executionOptions(engine), execute: true, pollIntervalMs: 1,
+    })
     expect(result.status).toBe('aborted_leg_a')
     expect(engine.placeOrder).toHaveBeenCalledTimes(1)
   })
@@ -60,7 +82,7 @@ describe('executeLeggedArb', () => {
         ...pair,
         legA: { ...pair.legA, leverage: 100 },
       },
-      { execute: true, pollIntervalMs: 1 },
+      { ...executionOptions(engine), execute: true, pollIntervalMs: 1 },
     )
 
     expect(result.status).toBe('aborted_leg_a')
@@ -77,7 +99,7 @@ describe('executeLeggedArb', () => {
         ...pair,
         legB: { ...pair.legB, leverage: 100 },
       },
-      { execute: true, pollIntervalMs: 1 },
+      { ...executionOptions(engine), execute: true, pollIntervalMs: 1 },
     )
 
     expect(result.status).toBe('aborted_leg_a')
@@ -97,7 +119,9 @@ describe('executeLeggedArb', () => {
         return { success: true, orderId: 'hedge-1' } as CryptoOrderResult  // hedge
       }),
     })
-    const result = await executeLeggedArb(engine, pair, { execute: true, pollIntervalMs: 1 })
+    const result = await executeLeggedArb(engine, pair, {
+      ...executionOptions(engine), execute: true, pollIntervalMs: 1,
+    })
     expect(result.status).toBe('hedged_leg_a')
     expect(engine.placeOrder).toHaveBeenCalledTimes(3)
     // hedge order must be reduce-only
@@ -115,7 +139,9 @@ describe('executeLeggedArb', () => {
         return { success: false, error: 'rejected' } as CryptoOrderResult
       }),
     })
-    const result = await executeLeggedArb(engine, pair, { execute: true, pollIntervalMs: 1 })
+    const result = await executeLeggedArb(engine, pair, {
+      ...executionOptions(engine), execute: true, pollIntervalMs: 1,
+    })
     expect(result.status).toBe('hedge_failed')
   })
 })

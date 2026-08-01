@@ -64,6 +64,15 @@ export async function executeSimpleAction(
   } = {},
 ): Promise<SimpleActionResult> {
   switch (op.action) {
+    case 'syncOrders': {
+      const orders = await withTimeout(
+        'sync orders',
+        timeoutMs,
+        () => engine.getOrders(),
+      )
+      return { success: true, orders }
+    }
+
     case 'closePosition': {
       const resolved = await resolveClosePositionOrder(engine, op, timeoutMs)
       if ('error' in resolved) {

@@ -2,6 +2,11 @@ import type { Contract, Order, OrderCancel, Execution, OrderState } from '@trade
 import type Decimal from 'decimal.js'
 import type { StrategyExecutionSummary } from '../strategy/execution-decision.js'
 import type { ProductionRiskPreflightPolicyLike } from './production-risk-preflight.js'
+import type {
+  CryptoExecutionMode,
+  ExecutionAuthorityProvider,
+} from './execution-permit.js'
+import type { ExecutionReceiptV1 } from './operation-dispatcher.execution-gate.js'
 
 export type OperationAction =
   | 'placeOrder'
@@ -326,6 +331,13 @@ export interface CryptoOperationDispatcherOptions {
   slippageConfig?: SlippageConfig
   eventLog?: { append: (type: string, payload: unknown) => Promise<unknown> }
   productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null
+  executionAuthorityProvider?: ExecutionAuthorityProvider
+  accountId?: string
+  accountMode?: CryptoExecutionMode
+  executionPermitTtlMs?: number
+  maxExecutionMarketDataAgeMs?: number
+  executionReceiptSink?: (receipt: ExecutionReceiptV1) => Promise<void>
+  allowTestExecutionPermitBypass?: boolean
 }
 
 export interface CommitOperation {
@@ -353,4 +365,11 @@ export interface CommitExecutorDeps {
   ) => Promise<PlaceOrderPreparationResult | undefined>
   onEvent?: (type: string, payload: unknown) => Promise<void>
   productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null
+  executionAuthorityProvider?: ExecutionAuthorityProvider
+  accountId?: string
+  accountMode?: CryptoExecutionMode
+  executionPermitTtlMs?: number
+  maxExecutionMarketDataAgeMs?: number
+  executionReceiptSink?: (receipt: ExecutionReceiptV1) => Promise<void>
+  allowTestExecutionPermitBypass?: boolean
 }

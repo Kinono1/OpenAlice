@@ -445,7 +445,7 @@ const guardConfigSchema = z.object({
 })
 
 const cryptoExecutionSchema = z.object({
-  mode: z.literal('paper_only').default('paper_only'),
+  mode: z.enum(['paper_only', 'live_guarded']).default('paper_only'),
   enableCryptoDispatcher: z.boolean().default(true),
   requireDecisionTicket: z.boolean().default(false),
   ticketTtlMs: z.number().int().positive().default(600_000),
@@ -453,6 +453,7 @@ const cryptoExecutionSchema = z.object({
   killSwitchDefaultPolicy: z.enum(['block_new_only', 'block_all']).default('block_new_only'),
   killSwitchStatePath: z.string().default('data/runtime/kill-switch.sqlite'),
   operationTimeoutMs: z.number().int().positive().default(30_000),
+  admissionDecisionPath: z.string().default('data/runtime/admission_decision.v1.json'),
 })
 
 export const accountConfigSchema = z.object({

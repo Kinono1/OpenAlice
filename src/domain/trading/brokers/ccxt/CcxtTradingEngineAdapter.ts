@@ -60,8 +60,12 @@ import {
   evaluateProductionRiskPreflight,
   productionRiskPreflightOrderResult,
 } from '../../production-risk-preflight.js'
+import {
+  createEnvironmentExecutionAuthorityProvider,
+  type CryptoExecutionMode,
+} from '../../execution-permit.js'
 
-export type CryptoExecutionMode = 'paper_only'
+export type { CryptoExecutionMode } from '../../execution-permit.js'
 export type KillSwitchDefaultPolicy = 'block_new_only' | 'block_all'
 const SLIPPAGE_BREACH_ACTIVATION_THRESHOLD = 2
 
@@ -92,6 +96,7 @@ export interface CryptoExecutionConfig {
   killSwitchDefaultPolicy: KillSwitchDefaultPolicy
   killSwitchStatePath: string
   operationTimeoutMs: number
+  admissionDecisionPath: string
   productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null
 }
 
@@ -99,6 +104,9 @@ export interface CcxtExecutionRuntime {
   enabled: boolean
   mode: CryptoExecutionMode
   requireDecisionTicket: boolean
+  configuredRequireDecisionTicket: boolean
+  authorityEnforced: boolean
+  admissionDecisionPath: string
   ticketTtlMs: number
   idempotencyTtlMs: number
   killSwitchDefaultPolicy: KillSwitchDefaultPolicy
@@ -122,6 +130,7 @@ export const DEFAULT_CRYPTO_EXECUTION_CONFIG: CryptoExecutionConfig = {
   killSwitchDefaultPolicy: 'block_new_only',
   killSwitchStatePath: 'data/runtime/kill-switch.sqlite',
   operationTimeoutMs: 30_000,
+  admissionDecisionPath: 'data/runtime/admission_decision.v1.json',
 }
 
 export function resolveCryptoExecutionConfig(
@@ -280,7 +289,13 @@ function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
     case 'cancelOrder':
       return {
         action: 'cancelOrder',
-        params: { orderId: op.orderId },
+        params: {
+          orderId: op.orderId,
+          ticketId: op.governance?.snapshotId,
+          idempotencyKey: op.governance?.snapshotId
+            ? `cancel:${op.orderId}:${op.governance.snapshotId}`
+            : undefined,
+        },
       }
 
     default:
@@ -836,6 +851,10 @@ export async function createCcxtExecutionBridge(input: {
   strategyConfig?: StrategyConfig
 }): Promise<CcxtExecutionBridge> {
   const config = resolveCryptoExecutionConfig(input.cryptoExecution)
+  const executionPermitTestBypass = isTestRuntime()
+  const effectiveRequireDecisionTicket = executionPermitTestBypass
+    ? config.requireDecisionTicket
+    : true
   const baseDir = resolve('data/trading', input.accountId)
   const intentLedgerPath = resolve(baseDir, 'intent-ledger.jsonl')
   const idempotencyStorePath = resolve(baseDir, 'idempotency-store.json')
@@ -857,7 +876,10 @@ export async function createCcxtExecutionBridge(input: {
   const runtimeBase: CcxtExecutionRuntime = {
     enabled: config.enableCryptoDispatcher,
     mode: config.mode,
-    requireDecisionTicket: config.requireDecisionTicket,
+    requireDecisionTicket: effectiveRequireDecisionTicket,
+    configuredRequireDecisionTicket: config.requireDecisionTicket,
+    authorityEnforced: !executionPermitTestBypass,
+    admissionDecisionPath: config.admissionDecisionPath,
     ticketTtlMs: config.ticketTtlMs,
     idempotencyTtlMs: config.idempotencyTtlMs,
     killSwitchDefaultPolicy: config.killSwitchDefaultPolicy,
@@ -908,7 +930,7 @@ export async function createCcxtExecutionBridge(input: {
     eventLog: input.eventLog,
   })
   const ticketStore = new DecisionTicketStore({
-    required: config.requireDecisionTicket,
+    required: effectiveRequireDecisionTicket,
     ttlMs: config.ticketTtlMs,
   })
   const killSwitchStore = new SqliteDurableStateStore(resolve(config.killSwitchStatePath))
@@ -927,6 +949,14 @@ export async function createCcxtExecutionBridge(input: {
     operationTimeoutMs: config.operationTimeoutMs,
     eventLog: input.eventLog,
     productionRiskPreflightPolicy: config.productionRiskPreflightPolicy,
+    executionAuthorityProvider: executionPermitTestBypass
+      ? undefined
+      : createEnvironmentExecutionAuthorityProvider({
+          admissionDecisionPath: config.admissionDecisionPath,
+        }),
+    accountId: input.accountId,
+    accountMode: config.mode,
+    allowTestExecutionPermitBypass: executionPermitTestBypass,
     afterPlaceOrder: async ({ request, expectedPrice, result }) => {
       const observation = slippageProtection.observe({
         symbol: request.symbol,
