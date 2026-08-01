@@ -10,7 +10,7 @@ import {
   rename,
   rm,
 } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -157,7 +157,12 @@ export async function buildLocalRelease(
   if (!args.skipBuild) {
     await execFileAsync('pnpm', ['build'], { cwd: repoRoot })
   }
-  await lstat(resolve(repoRoot, args.runtimeEntry))
+  const runtimeEntryPath = resolve(repoRoot, args.runtimeEntry)
+  assertWithin(repoRoot, runtimeEntryPath)
+  await lstat(runtimeEntryPath)
+  const runtimeEntryRelative = relative(repoRoot, runtimeEntryPath)
+  const runtimeArtifactRoot = runtimeEntryRelative.split(/[\\/]/)[0]
+  if (!runtimeArtifactRoot) throw new Error('runtime_entry_root_missing')
 
   const builtAt = new Date()
   const receiptPaths = args.receiptPaths.length > 0
@@ -194,6 +199,10 @@ export async function buildLocalRelease(
       ['--filter', 'open-alice', 'deploy', '--prod', '--legacy', tempRelease],
       { cwd: repoRoot },
     )
+    await copyReleaseTree(
+      resolve(repoRoot, runtimeArtifactRoot),
+      resolve(tempRelease, runtimeArtifactRoot),
+    )
     await mkdir(join(tempRelease, 'release-metadata'), { recursive: true })
     await copyFile(args.pipelineRegistryPath, join(tempRelease, 'release-metadata/pipeline_registry.v1.json'))
     await copyFile(args.dependencyLockPath, join(tempRelease, 'release-metadata/pnpm-lock.yaml'))
@@ -201,7 +210,7 @@ export async function buildLocalRelease(
 
     const artifactHashes = await collectArtifactHashes(tempRelease, [
       args.runtimeEntry,
-      'dist',
+      runtimeArtifactRoot,
       'package.json',
       'release-metadata',
     ])
@@ -236,6 +245,21 @@ export async function buildLocalRelease(
   } catch (error) {
     await rm(tempRelease, { recursive: true, force: true }).catch(() => undefined)
     throw error
+  }
+}
+
+export async function copyReleaseTree(source: string, destination: string): Promise<void> {
+  const stat = await lstat(source)
+  if (stat.isSymbolicLink()) throw new Error(`release_artifact_symlink_forbidden:${source}`)
+  if (stat.isFile()) {
+    await mkdir(dirname(destination), { recursive: true })
+    await copyFile(source, destination)
+    return
+  }
+  if (!stat.isDirectory()) throw new Error(`release_artifact_type_forbidden:${source}`)
+  await mkdir(destination, { recursive: true })
+  for (const entry of await readdir(source)) {
+    await copyReleaseTree(join(source, entry), join(destination, entry))
   }
 }
 

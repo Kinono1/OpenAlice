@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { collectArtifactHashes, parseArgs } from './manage_local_release.js'
+import { collectArtifactHashes, copyReleaseTree, parseArgs } from './manage_local_release.js'
 
 describe('manage_local_release', () => {
   it('keeps build, activation and rollback as distinct explicit commands', () => {
@@ -38,5 +38,28 @@ describe('manage_local_release', () => {
     const second = await collectArtifactHashes(root, ['dist'])
     expect(first).toEqual(second)
     expect(Object.keys(first)).toEqual(['dist/a.js', 'dist/b.js'])
+  })
+
+  it('copies built runtime artifacts that package deployment excludes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'release-copy-'))
+    const source = join(root, 'source/dist')
+    const destination = join(root, 'release/dist')
+    await mkdir(source, { recursive: true })
+    await writeFile(join(source, 'main.js'), 'runtime\n')
+
+    await copyReleaseTree(source, destination)
+
+    expect(await readFile(join(destination, 'main.js'), 'utf-8')).toBe('runtime\n')
+  })
+
+  it('rejects symlinks while copying built runtime artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'release-copy-symlink-'))
+    const source = join(root, 'source/dist')
+    await mkdir(source, { recursive: true })
+    await writeFile(join(source, 'main.js'), 'runtime\n')
+    await symlink('main.js', join(source, 'alias.js'))
+
+    await expect(copyReleaseTree(source, join(root, 'release/dist')))
+      .rejects.toThrow('release_artifact_symlink_forbidden')
   })
 })
