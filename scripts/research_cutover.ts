@@ -543,7 +543,7 @@ async function writeReceipt(args: Args, value: Record<string, unknown>): Promise
 }
 
 function assertFullClosure(hashes: Record<string, string>): void {
-  for (const prefix of ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']) {
+  for (const prefix of ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'node_modules/.bin/tsx', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']) {
     if (!Object.keys(hashes).some((path) => path === prefix || path.startsWith(prefix))) {
       throw new Error(`research_release_closure_missing:${prefix}`)
     }

@@ -62,7 +62,7 @@ async function main() {
     }
   }
 
-  const requiredClosure = ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']
+  const requiredClosure = ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'node_modules/.bin/tsx', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']
   for (const prefix of requiredClosure) {
     if (!Object.keys(manifest.artifactHashes).some((path) => path === prefix || path.startsWith(prefix))) {
       throw new Error(`release_executable_closure_missing:${prefix}`)

@@ -73,7 +73,7 @@ async function readPointer(path: string): Promise<string | null> {
 }
 
 function assertFullClosure(hashes: Record<string, string>): void {
-  for (const prefix of ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']) {
+  for (const prefix of ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'node_modules/.bin/tsx', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']) {
     if (!Object.keys(hashes).some((path) => path === prefix || path.startsWith(prefix))) {
       throw new Error(`canary_release_closure_missing:${prefix}`)
     }

@@ -2,7 +2,12 @@ import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { collectArtifactHashes, copyReleaseTree, parseArgs } from './manage_local_release.js'
+import {
+  collectArtifactHashes,
+  copyReleaseTree,
+  parseArgs,
+  prepareStableTsxLauncher,
+} from './manage_local_release.js'
 
 describe('manage_local_release', () => {
   it('keeps the TypeScript runner in production dependencies for immutable Cron scripts', async () => {
@@ -59,6 +64,19 @@ describe('manage_local_release', () => {
     await copyReleaseTree(source, destination)
 
     expect(await readFile(join(destination, 'main.js'), 'utf-8')).toBe('runtime\n')
+  })
+
+  it('materializes a release-relative tsx launcher without source-worktree paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'release-tsx-launcher-'))
+    const cli = join(root, 'node_modules/.pnpm/tsx@4.21.0/node_modules/tsx/dist/cli.mjs')
+    await mkdir(join(root, 'node_modules/.bin'), { recursive: true })
+    await mkdir(join(root, 'node_modules/.pnpm/tsx@4.21.0/node_modules/tsx/dist'), { recursive: true })
+    await writeFile(cli, '#!/usr/bin/env node\n')
+
+    expect(await prepareStableTsxLauncher(root)).toBe('node_modules/.bin/tsx')
+    const wrapper = await readFile(join(root, 'node_modules/.bin/tsx'), 'utf8')
+    expect(wrapper).toContain('../.pnpm/tsx@4.21.0/node_modules/tsx/dist/cli.mjs')
+    expect(wrapper).not.toContain(String(root))
   })
 
   it('excludes regenerable interpreter caches from the immutable closure', async () => {

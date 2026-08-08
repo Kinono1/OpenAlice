@@ -34,6 +34,7 @@ const REQUIRED_RELEASE_CLOSURE = [
   'src/',
   'ops/',
   'default/',
+  'node_modules/.bin/tsx',
   'package.json',
   'pnpm-lock.yaml',
   'release-metadata/',

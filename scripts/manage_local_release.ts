@@ -2,13 +2,16 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  chmod,
   copyFile,
   lstat,
   mkdir,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
+  writeFile,
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -241,6 +244,7 @@ export async function buildLocalRelease(
       ['--filter', 'open-alice', 'deploy', '--prod', '--legacy', tempRelease],
       { cwd: repoRoot },
     )
+    await prepareStableTsxLauncher(tempRelease)
     await copyReleaseTree(
       resolve(repoRoot, runtimeArtifactRoot),
       resolve(tempRelease, runtimeArtifactRoot),
@@ -265,6 +269,7 @@ export async function buildLocalRelease(
       'src',
       'ops',
       'default',
+      'node_modules/.bin/tsx',
       'package.json',
       'pnpm-lock.yaml',
       'release-metadata',
@@ -343,6 +348,40 @@ export async function copyReleaseTree(source: string, destination: string): Prom
     if (REGENERABLE_RELEASE_CACHE_NAMES.has(entry)) continue
     await copyReleaseTree(join(source, entry), join(destination, entry))
   }
+}
+
+/**
+ * pnpm's generated .bin wrappers embed the temporary deploy directory. That
+ * path disappears when the release is atomically renamed, so materialize a
+ * release-relative tsx launcher for Cron shell entrypoints. The target must
+ * resolve inside the same immutable release tree.
+ */
+export async function prepareStableTsxLauncher(releaseRoot: string): Promise<string> {
+  const root = await realpath(resolve(releaseRoot))
+  const pnpmRoot = join(root, 'node_modules/.pnpm')
+  const candidates: string[] = []
+  for (const name of await readdir(pnpmRoot)) {
+    if (!name.startsWith('tsx@')) continue
+    const cli = join(pnpmRoot, name, 'node_modules/tsx/dist/cli.mjs')
+    try {
+      const resolvedCli = await realpath(cli)
+      assertWithin(root, resolvedCli)
+      candidates.push(name)
+    } catch (error) {
+      if (!isEnoent(error)) throw error
+    }
+  }
+  if (candidates.length !== 1) {
+    throw new Error(`release_tsx_runtime_invalid:${candidates.sort().join('|') || 'missing'}`)
+  }
+  const binPath = join(root, 'node_modules/.bin/tsx')
+  await mkdir(dirname(binPath), { recursive: true })
+  const cliPath = join(pnpmRoot, candidates[0]!, 'node_modules/tsx/dist/cli.mjs')
+  const relativeCli = relative(dirname(binPath), cliPath).replaceAll('\\', '/')
+  const wrapper = `#!/bin/sh\nset -eu\nbasedir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec /usr/bin/env node "$basedir/${relativeCli}" "$@"\n`
+  await writeFile(binPath, wrapper, { encoding: 'utf8', mode: 0o755 })
+  await chmod(binPath, 0o755)
+  return relative(root, binPath).replaceAll('\\', '/')
 }
 
 export async function collectArtifactHashes(

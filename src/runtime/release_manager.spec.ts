@@ -269,6 +269,7 @@ async function createRelease(
     'src/runtime.ts': 'export {}\n',
     'ops/pipeline.json': '{}\n',
     'default/config.json': '{}\n',
+    'node_modules/.bin/tsx': '#!/bin/sh\nexec node\n',
     'package.json': '{"name":"openalice-test"}\n',
     'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
     'release-metadata/pipeline_registry.v1.json': '{"schemaVersion":"pipeline_registry.v1","entries":[]}\n',
