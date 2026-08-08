@@ -197,9 +197,21 @@ export function buildRuntimeManifestCoverageReport(input: {
     item.evidenceTrust === 'pass' &&
     item.dqStatus === 'pass',
   ).length
+  // A manifest whose raw producer trust is `pass` can still be unusable for
+  // canonical evidence when its source identity is legacy, missing, or bound
+  // to a different source kind. Treat that identity failure as quarantine for
+  // usability classification, while preserving the producer's raw trust
+  // fields for diagnostics.
   const quarantineManifestCount = items.filter((item) =>
-    item.required &&
-    (item.evidenceTrust === 'quarantine' || item.dqStatus === 'quarantine'),
+    item.required && (
+      item.evidenceTrust === 'quarantine'
+      || item.dqStatus === 'quarantine'
+      || item.trustBlockingReasons.some((reason) => (
+        reason.startsWith('evidence_manifest_legacy_schema:')
+        || reason.startsWith('evidence_source_identity_invalid:')
+        || reason.startsWith('evidence_source_kind_mismatch:')
+      ))
+    ),
   ).length
   const allRequiredManifestsPresentAndHashMatched =
     coverage.missingArtifacts === 0 &&
