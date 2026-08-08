@@ -9,11 +9,13 @@ import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk'
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
 import { pino } from 'pino'
 import type { ContentBlock } from '../../core/session.js'
+import { join } from 'node:path'
 
 import { readAIProviderConfig } from '../../core/config.js'
 
+const agentSdkLogDir = process.env.OPENALICE_LOG_DIR?.trim() || 'logs'
 const logger = pino({
-  transport: { target: 'pino/file', options: { destination: 'logs/agent-sdk.log', mkdir: true } },
+  transport: { target: 'pino/file', options: { destination: join(agentSdkLogDir, 'agent-sdk.log'), mkdir: true } },
 })
 
 // ==================== Types ====================
