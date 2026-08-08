@@ -1,4 +1,6 @@
 node_modules/
+# Keep dependency symlinks used by isolated local tooling out of Git status too.
+node_modules
 dist/
 logs/
 /data/*
