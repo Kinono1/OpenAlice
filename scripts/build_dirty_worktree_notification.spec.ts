@@ -38,7 +38,11 @@ describe('build_dirty_worktree_notification', () => {
       branch: 'work/kino-mainline',
       commit: 'a'.repeat(40),
       statusHash: 'legacy-status',
-      counts: { total: 555 },
+      counts: {
+        total: 555,
+        byProtocolClass: { A: 536, B: 0, C: 14, D: 5 },
+        scopeCounts: { deletedTrackedTotal: 3, promotionRelevantTotal: 555 },
+      },
     }))
     await writeFile(legacyPlanPath, JSON.stringify({ blockingReasons: ['legacy_quarantine'] }))
     const result = buildDirtyWorktreeNotification({
@@ -59,12 +63,19 @@ describe('build_dirty_worktree_notification', () => {
     expect(result.fullText).toContain(`commit=${'a'.repeat(40)}`)
     expect(result.fullText).toContain('sourceMode=git_worktree')
     expect(result.receiptPaths).toContain(legacyPlanPath)
+    expect(result.fullText).toContain('total=555, A=536, B=0, C=14, D=5, deletedTracked=3, promotionRelevant=555')
     expect(result.legacyWipSummary).toMatchObject({
       purpose: 'legacy_wip',
       sourceMode: 'git_worktree',
       branch: 'work/kino-mainline',
       commit: 'a'.repeat(40),
       total: 555,
+      a: 536,
+      b: 0,
+      c: 14,
+      d: 5,
+      deletedTracked: 3,
+      promotionRelevant: 555,
       statusHash: 'legacy-status',
     })
   })

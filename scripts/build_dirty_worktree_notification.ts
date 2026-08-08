@@ -37,6 +37,12 @@ export interface DirtyNotificationResult {
     branch: string | null
     commit: string | null
     total: number
+    a: number
+    b: number
+    c: number
+    d: number
+    deletedTracked: number
+    promotionRelevant: number
     statusHash: string | null
   } | null
 }
@@ -137,6 +143,9 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
   const d = num(byProtocol.D)
   const deletedTracked = num(scopeCounts.deletedTrackedTotal)
   const promotionRelevant = num(scopeCounts.promotionRelevantTotal)
+  const legacyCounts = asRecord(legacyReport?.counts)
+  const legacyByProtocol = asRecord(legacyCounts.byProtocolClass)
+  const legacyScopeCounts = asRecord(legacyCounts.scopeCounts)
   const ordinary = [
     ...stringArray(governance.blockingReasons),
     ...stringArray(coverage?.blockingReasons),
@@ -187,7 +196,13 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
       sourceMode: typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown',
       branch: typeof legacyReport.branch === 'string' ? legacyReport.branch : null,
       commit: typeof legacyReport.commit === 'string' ? legacyReport.commit : null,
-      total: num(asRecord(legacyReport.counts).total),
+      total: num(legacyCounts.total),
+      a: num(legacyByProtocol.A),
+      b: num(legacyByProtocol.B),
+      c: num(legacyByProtocol.C),
+      d: num(legacyByProtocol.D),
+      deletedTracked: num(legacyScopeCounts.deletedTrackedTotal),
+      promotionRelevant: num(legacyScopeCounts.promotionRelevantTotal),
       statusHash: typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : null,
     } : null,
   }
@@ -220,7 +235,7 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
     ? ' Manifest coverage complete, but evidence trust blocked.'
     : ''
   const legacyText = legacyReport
-    ? ` Legacy WIP audit: purpose=legacy_wip, sourceMode=${typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown'}, branch=${typeof legacyReport.branch === 'string' ? legacyReport.branch : 'unknown'}, commit=${typeof legacyReport.commit === 'string' ? legacyReport.commit : 'unknown'}, total=${num(asRecord(legacyReport.counts).total)}, statusHash=${typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : 'unknown'}; legacy_wip is preserved and excluded from canonical trust.`
+    ? ` Legacy WIP audit: purpose=legacy_wip, sourceMode=${typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown'}, branch=${typeof legacyReport.branch === 'string' ? legacyReport.branch : 'unknown'}, commit=${typeof legacyReport.commit === 'string' ? legacyReport.commit : 'unknown'}, total=${num(legacyCounts.total)}, A=${num(legacyByProtocol.A)}, B=${num(legacyByProtocol.B)}, C=${num(legacyByProtocol.C)}, D=${num(legacyByProtocol.D)}, deletedTracked=${num(legacyScopeCounts.deletedTrackedTotal)}, promotionRelevant=${num(legacyScopeCounts.promotionRelevantTotal)}, statusHash=${typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : 'unknown'}; legacy_wip is preserved and excluded from canonical trust.`
     : ''
   const nextActions = status === 'invalid'
     ? ['Repair or regenerate the missing/invalid audit artifacts; fail closed until then.']
@@ -262,7 +277,13 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
       sourceMode: typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown',
       branch: typeof legacyReport.branch === 'string' ? legacyReport.branch : null,
       commit: typeof legacyReport.commit === 'string' ? legacyReport.commit : null,
-      total: num(asRecord(legacyReport.counts).total),
+      total: num(legacyCounts.total),
+      a: num(legacyByProtocol.A),
+      b: num(legacyByProtocol.B),
+      c: num(legacyByProtocol.C),
+      d: num(legacyByProtocol.D),
+      deletedTracked: num(legacyScopeCounts.deletedTrackedTotal),
+      promotionRelevant: num(legacyScopeCounts.promotionRelevantTotal),
       statusHash: typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : null,
     } : null,
   }
