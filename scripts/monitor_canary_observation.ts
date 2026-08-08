@@ -381,7 +381,19 @@ async function listWritableOpenPaths(pid: number): Promise<string[]> {
       if (line.startsWith('a')) access = line.slice(1)
       if (line.startsWith('n')) {
         const path = line.slice(1)
-        if (access.includes('w') || access.includes('u')) paths.push(path)
+        // lsof's `-F an` stream also contains socket names (e.g. `*:3101`),
+        // descriptor metadata, and the controlling TTY.  They are not file
+        // writes and must not be treated as a release-boundary escape.  Only
+        // regular filesystem paths are evidence for this check.
+        if ((access.includes('w') || access.includes('u')) && path.startsWith('/')) {
+          try {
+            const candidate = await stat(path)
+            if (candidate.isFile()) paths.push(path)
+          } catch {
+            // A short-lived/unreadable descriptor is not promoted to a write
+            // violation; the next observation will re-check it.
+          }
+        }
       }
     }
     return [...new Set(paths)].sort()
