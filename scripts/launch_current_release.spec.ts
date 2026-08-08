@@ -23,6 +23,7 @@ describe('stable current release launcher', () => {
       'src/runtime.ts': 'export {}\n',
       'ops/pipeline.json': '{}\n',
       'default/config.json': '{}\n',
+      'node_modules/.bin/tsx': '#!/bin/sh\nexec node\n',
       'package.json': '{"name":"openalice-test"}\n',
       'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
       'release-metadata/pipeline_registry.v1.json': '{"schemaVersion":"pipeline_registry.v1","entries":[]}\n',
@@ -199,6 +200,7 @@ describe('stable current release launcher', () => {
     await mkdir(join(releasePath, 'src'), { recursive: true })
     await mkdir(join(releasePath, 'ops', 'release'), { recursive: true })
     await mkdir(join(releasePath, 'default'), { recursive: true })
+    await mkdir(join(releasePath, 'node_modules', '.bin'), { recursive: true })
     await mkdir(join(releasePath, 'release-metadata'), { recursive: true })
     await mkdir(binDir, { recursive: true })
 
@@ -221,6 +223,7 @@ describe('stable current release launcher', () => {
       'dist/main.js': 'console.log("research-release")\n',
       'src/runtime.ts': 'export {}\n',
       'default/config.json': '{}\n',
+      'node_modules/.bin/tsx': '#!/bin/sh\nexec node\n',
       'package.json': '{"name":"openalice-research-launch-test"}\n',
       'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
       'release-metadata/pipeline_registry.v1.json': '{}\n',
