@@ -51,6 +51,27 @@ describe('RuntimePaths', () => {
     expect(paths.portOverrides).toEqual({ web: 3102, mcp: 3101, mcpAsk: undefined })
   })
 
+  it('allows an explicitly isolated canary input tree only below the canary root', () => {
+    const paths = resolveRuntimePaths({
+      repoRoot: '/repo/OpenAlice',
+      env: {
+        OPENALICE_RUNTIME_ROLE: 'canary',
+        OPENALICE_CANARY_ROOT: '/tmp/openalice-canary',
+        OPENALICE_CANARY_SHARED_DATA_INPUT_DIR: '/tmp/openalice-canary/input',
+      },
+    })
+
+    expect(paths.sharedDataInputDir).toBe('/tmp/openalice-canary/input')
+    expect(() => resolveRuntimePaths({
+      repoRoot: '/repo/OpenAlice',
+      env: {
+        OPENALICE_RUNTIME_ROLE: 'canary',
+        OPENALICE_CANARY_ROOT: '/tmp/openalice-canary',
+        OPENALICE_CANARY_SHARED_DATA_INPUT_DIR: '/tmp/shared-input',
+      },
+    })).toThrow('must be inside canary root')
+  })
+
   it('gives research the shared-data writer role without execution authority', () => {
     const repoRoot = '/repo/OpenAlice'
     const paths = resolveRuntimePaths({

@@ -157,11 +157,19 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
       'runtime/canary/default',
     )
     assertDistinct(canaryRoot, primaryDataDir, 'canary root', 'primary data directory')
+    const canarySharedDataInputDir = resolveFrom(
+      repoRoot,
+      env.OPENALICE_CANARY_SHARED_DATA_INPUT_DIR,
+      primaryDataDir,
+    )
+    if (env.OPENALICE_CANARY_SHARED_DATA_INPUT_DIR && !isWithin(canaryRoot, canarySharedDataInputDir)) {
+      throw new Error('canary shared data input must be inside canary root')
+    }
     return buildRuntimePaths({
       role,
       repoRoot,
       dataDir: join(canaryRoot, 'state'),
-      sharedDataInputDir: primaryDataDir,
+      sharedDataInputDir: canarySharedDataInputDir,
       configDir: primaryConfigDir,
       marketInputDir: primaryMarketInputDir,
       stateDir: join(canaryRoot, 'state'),
