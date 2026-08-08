@@ -227,6 +227,35 @@ describe('audit_runtime_manifest_coverage', () => {
     })
   })
 
+  it('requires verified-release source identity for canonical trust', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-runtime-manifest-source-kind-'))
+    const artifactPath = join(root, 'artifact.json')
+    const raw = '{"ok":true}\n'
+    await writeFile(artifactPath, raw, 'utf-8')
+    await writeFile(`${artifactPath}.manifest.json`, `${JSON.stringify(buildEvidenceManifest({
+      job: 'artifact',
+      artifactPath,
+      startedAt: '2026-05-03T00:00:00.000Z',
+      finishedAt: '2026-05-03T00:00:01.000Z',
+      exitCode: 0,
+      artifactHash: sha256Hex(raw),
+    }), null, 2)}\n`, 'utf-8')
+
+    const report = buildRuntimeManifestCoverageReport({
+      runtimeDir: root,
+      expectedSourceKind: 'verified_release',
+      requiredArtifacts: [{ key: 'artifact', relativePath: 'artifact.json', required: true }],
+    })
+
+    expect(report.allRequiredManifestsPresentAndHashMatched).toBe(true)
+    expect(report.evidenceUsabilityStatus).toBe('quarantine_blocked')
+    expect(report.sourceIdentitySummary.invalidIdentityCount).toBe(1)
+    expect(report.trustBlockingReasons).toContain('evidence_source_identity_invalid:1')
+    expect(report.items[0]?.trustBlockingReasons).toContain(
+      'evidence_source_kind_mismatch:artifact:git_worktree:verified_release',
+    )
+  })
+
   it('writes an audited report with its own sidecar manifest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oa-runtime-manifest-write-'))
     const artifactPath = join(root, 'artifact.json')
