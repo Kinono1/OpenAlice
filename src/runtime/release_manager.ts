@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   open,
+  readdir,
   readFile,
   readlink,
   realpath,
@@ -34,6 +35,7 @@ const REQUIRED_RELEASE_CLOSURE = [
   'ops/',
   'default/',
   'package.json',
+  'pnpm-lock.yaml',
   'release-metadata/',
 ] as const
 
@@ -88,11 +90,16 @@ export async function verifyReleaseDirectory(
   for (const [relativePath, expectedHash] of Object.entries(manifest.artifactHashes)) {
     const artifactPath = resolve(releasePath, relativePath)
     assertWithin(releasePath, artifactPath)
+    const artifactStat = await lstat(artifactPath)
+    if (artifactStat.isSymbolicLink()) {
+      throw new Error(`release_artifact_symlink_forbidden:${relativePath}`)
+    }
     const actualHash = await sha256File(artifactPath)
     if (actualHash !== expectedHash) {
       throw new Error(`release_artifact_hash_mismatch:${relativePath}`)
     }
   }
+  await assertDeclaredClosure(releasePath, manifest.artifactHashes)
   return manifest
 }
 
@@ -299,7 +306,14 @@ export async function rollbackResearchRelease(options: {
     if (!fromCommit) throw new Error('research_current_release_pointer_missing')
     if (!toCommit) throw new Error('research_previous_release_pointer_missing')
     const manifest = await verifyReleaseDirectory(options.releaseRoot, toCommit)
+    if (manifest.dirtyStateHash !== EMPTY_DIRTY_STATE_HASH) {
+      throw new Error('research_release_dirty_source')
+    }
+    assertFullReleaseClosure(manifest)
     if (manifest.liveExecutionArmed !== false) throw new Error('research_release_live_execution_armed')
+    if (manifest.admissionDecisionId !== null) {
+      throw new Error('research_release_admission_decision_must_be_null')
+    }
     await atomicReplaceReleasePointer(options.releaseRoot, 'research-current', toCommit)
     await atomicReplaceReleasePointer(options.releaseRoot, 'research-previous', fromCommit)
     const receipt = buildSwitchReceipt({
@@ -490,6 +504,65 @@ function assertFullReleaseClosure(manifest: ReleaseManifestV1): void {
     if (!paths.some((path) => path === prefix || path.startsWith(prefix))) {
       throw new Error(`research_release_closure_missing:${prefix}`)
     }
+  }
+}
+
+async function assertDeclaredClosure(
+  releasePath: string,
+  artifactHashes: Record<string, string>,
+): Promise<void> {
+  const declared = new Set(Object.keys(artifactHashes))
+  for (const closure of REQUIRED_RELEASE_CLOSURE) {
+    const candidate = resolve(releasePath, closure)
+    assertWithin(releasePath, candidate)
+    if (closure.endsWith('/')) {
+      await walkDeclaredClosure(releasePath, candidate, declared)
+    } else if (await pathExists(candidate)) {
+      const stat = await lstat(candidate)
+      if (stat.isSymbolicLink()) throw new Error(`release_artifact_symlink_forbidden:${closure}`)
+      if (!stat.isFile()) throw new Error(`release_artifact_type_forbidden:${closure}`)
+      if (!declared.has(closure)) throw new Error(`release_artifact_undeclared:${closure}`)
+    }
+  }
+}
+
+async function walkDeclaredClosure(
+  releasePath: string,
+  directory: string,
+  declared: Set<string>,
+): Promise<void> {
+  if (!await pathExists(directory)) return
+  const directoryStat = await lstat(directory)
+  if (directoryStat.isSymbolicLink()) {
+    throw new Error(`release_artifact_symlink_forbidden:${relative(releasePath, directory)}`)
+  }
+  if (!directoryStat.isDirectory()) {
+    throw new Error(`release_artifact_type_forbidden:${relative(releasePath, directory)}`)
+  }
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const child = resolve(directory, entry.name)
+    assertWithin(releasePath, child)
+    const childRelative = relative(releasePath, child).replaceAll('\\', '/')
+    if (entry.isSymbolicLink()) {
+      throw new Error(`release_artifact_symlink_forbidden:${childRelative}`)
+    }
+    if (entry.isDirectory()) {
+      await walkDeclaredClosure(releasePath, child, declared)
+    } else if (entry.isFile()) {
+      if (!declared.has(childRelative)) throw new Error(`release_artifact_undeclared:${childRelative}`)
+    } else {
+      throw new Error(`release_artifact_type_forbidden:${childRelative}`)
+    }
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if (isEnoent(error)) return false
+    throw error
   }
 }
 

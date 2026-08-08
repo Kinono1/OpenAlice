@@ -75,6 +75,9 @@ describe('evidence_manifest', () => {
     const persisted = JSON.parse(await readFile(manifestPath, 'utf-8'))
     expect(persisted).toMatchObject({
       job: 'unit_test_job',
+      producer: 'unit_test_job',
+      producerExitCode: 0,
+      generatedAt: '2026-05-02T00:00:02.000Z',
       evidenceTrust: 'pass',
       businessStatus: 'pass',
       recordsIn: 3,
@@ -150,5 +153,51 @@ describe('evidence_manifest', () => {
       sourceIdentityError: 'git_identity_missing',
       evidenceTrust: 'quarantine',
     })
+  })
+
+  it('quarantines contradictory release identity variables instead of mixing sources', () => {
+    const previous = { ...process.env }
+    try {
+      for (const key of [
+        'OPENALICE_SOURCE_KIND',
+        'OPENALICE_SOURCE_COMMIT',
+        'OPENALICE_DIRTY_STATE_HASH',
+        'OPENALICE_RELEASE_ID',
+        'OPENALICE_RELEASE_MANIFEST_HASH',
+        'OPENALICE_RELEASE_PATH',
+      ]) delete process.env[key]
+      process.env.OPENALICE_SOURCE_KIND = 'git_worktree'
+      process.env.OPENALICE_RELEASE_ID = 'a'.repeat(40)
+
+      const manifest = buildEvidenceManifest({
+        job: 'mixed_source_identity',
+        artifactPath: 'data/runtime/mixed.json',
+        startedAt: '2026-05-02T00:00:00.000Z',
+        finishedAt: '2026-05-02T00:00:01.000Z',
+        exitCode: 0,
+        gitSnapshot: {
+          commit: 'b'.repeat(40),
+          dirty: false,
+          dirtyFilesCount: 0,
+          dirtyHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        },
+      })
+      expect(manifest.sourceKind).toBe('verified_release')
+      expect(manifest.sourceIdentityValid).toBe(false)
+      expect(manifest.sourceIdentityError).toBe('verified_release_identity_invalid')
+      expect(manifest.evidenceTrust).toBe('quarantine')
+    } finally {
+      for (const key of [
+        'OPENALICE_SOURCE_KIND',
+        'OPENALICE_SOURCE_COMMIT',
+        'OPENALICE_DIRTY_STATE_HASH',
+        'OPENALICE_RELEASE_ID',
+        'OPENALICE_RELEASE_MANIFEST_HASH',
+        'OPENALICE_RELEASE_PATH',
+      ]) {
+        if (previous[key] === undefined) delete process.env[key]
+        else process.env[key] = previous[key]
+      }
+    }
   })
 })

@@ -12,6 +12,7 @@ import {
   createRequireAuth,
   createRequireStrongAuth,
   createRequireTrade,
+  createRuntimeRoleGuard,
 } from '../routes/security.js'
 
 describe('web security middleware', () => {
@@ -193,5 +194,20 @@ describe('web security middleware', () => {
 
     expect(trustedFirst.status).toBe(200)
     expect(trustedSecond.status).toBe(200)
+  })
+
+  it('keeps the research web surface read-only while allowing health reads', async () => {
+    const app = new Hono()
+    app.use('*', createRuntimeRoleGuard('research'))
+    app.get('/', (c) => c.json({ ok: true }))
+    app.post('/', (c) => c.json({ mutated: true }))
+
+    expect((await app.request('/')).status).toBe(200)
+    const denied = await app.request('/', { method: 'POST' })
+    expect(denied.status).toBe(403)
+    expect(await denied.json()).toMatchObject({
+      code: 'runtime_read_only',
+      runtimeRole: 'research',
+    })
   })
 })

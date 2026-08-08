@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -47,15 +48,29 @@ trap cleanup EXIT INT TERM
   echo "Runtime manifest coverage=$MANIFEST_COVERAGE_PATH"
   LEGACY_ARGS=()
   if [[ -n "${OPENALICE_LEGACY_WIP_ROOT:-}" && -d "${OPENALICE_LEGACY_WIP_ROOT}" ]]; then
-    ./node_modules/.bin/tsx scripts/audit_dirty_worktree.ts \
+    env \
+      -u OPENALICE_SOURCE_KIND \
+      -u OPENALICE_SOURCE_COMMIT \
+      -u OPENALICE_DIRTY_STATE_HASH \
+      -u OPENALICE_RELEASE_ID \
+      -u OPENALICE_RELEASE_MANIFEST_HASH \
+      -u OPENALICE_RELEASE_PATH \
+      ./node_modules/.bin/tsx scripts/audit_dirty_worktree.ts \
       --json \
       --repoRoot "$OPENALICE_LEGACY_WIP_ROOT" \
       --purpose legacy_wip \
       --sourceMode git_worktree \
       --output "$LEGACY_REPORT_PATH" > "$LEGACY_REPORT_PATH.stdout"
-    ./node_modules/.bin/tsx scripts/build_dirty_quarantine_plan.ts \
+    env \
+      -u OPENALICE_SOURCE_KIND \
+      -u OPENALICE_SOURCE_COMMIT \
+      -u OPENALICE_DIRTY_STATE_HASH \
+      -u OPENALICE_RELEASE_ID \
+      -u OPENALICE_RELEASE_MANIFEST_HASH \
+      -u OPENALICE_RELEASE_PATH \
+      ./node_modules/.bin/tsx scripts/build_dirty_quarantine_plan.ts \
       --input "$LEGACY_REPORT_PATH" --output "$LEGACY_PLAN_PATH" --json > "$LEGACY_PLAN_PATH.stdout"
-    LEGACY_ARGS=(--legacy-report "$LEGACY_REPORT_PATH")
+    LEGACY_ARGS=(--legacy-report "$LEGACY_REPORT_PATH" --legacy-plan "$LEGACY_PLAN_PATH")
   fi
   ./node_modules/.bin/tsx scripts/build_dirty_worktree_notification.ts \
     --report "$REPORT_PATH" \

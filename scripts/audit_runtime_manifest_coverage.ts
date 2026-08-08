@@ -27,6 +27,11 @@ export interface RuntimeManifestCoverageItem {
   manifestBusinessStatus: string | null
   manifestErrorClass: string | null
   manifestRunId: string | null
+  manifestProducer: string | null
+  manifestProducerExitCode: number | null
+  manifestExitCode: number | null
+  manifestGeneratedAt: string | null
+  producerMetadataValid: boolean
   manifestSchemaVersion: number | null
   manifestSourceKind: string | null
   manifestSourceCommit: string | null
@@ -189,13 +194,17 @@ export function buildRuntimeManifestCoverageReport(input: {
   }
   const coverageStatus = blockingReasons.length === 0 ? 'complete' : 'blocked'
   const requiredPassManifests = coverage.requiredArtifacts
+  const producerMetadataInvalidCount = items.filter((item) =>
+    item.required && item.manifestExists && !item.producerMetadataValid,
+  ).length
   const passManifestCount = items.filter((item) =>
     item.required &&
     item.artifactExists &&
     item.manifestExists &&
     item.hashMatches === true &&
     item.evidenceTrust === 'pass' &&
-    item.dqStatus === 'pass',
+    item.dqStatus === 'pass' &&
+    item.producerMetadataValid,
   ).length
   // A manifest whose raw producer trust is `pass` can still be unusable for
   // canonical evidence when its source identity is legacy, missing, or bound
@@ -210,6 +219,10 @@ export function buildRuntimeManifestCoverageReport(input: {
         reason.startsWith('evidence_manifest_legacy_schema:')
         || reason.startsWith('evidence_source_identity_invalid:')
         || reason.startsWith('evidence_source_kind_mismatch:')
+        || reason.startsWith('evidence_producer_missing:')
+        || reason.startsWith('evidence_producer_exit_code_invalid:')
+        || reason.startsWith('evidence_producer_exit_code_mismatch:')
+        || reason.startsWith('evidence_generated_at_invalid:')
       ))
     ),
   ).length
@@ -227,6 +240,7 @@ export function buildRuntimeManifestCoverageReport(input: {
     requiredPassManifests,
     passManifestCount,
     quarantineManifestCount,
+    producerMetadataInvalidCount,
     trustSummary,
     allRequiredManifestsPresentAndHashMatched: allRequiredManifestsPresentAndHashMatched && allRequiredManifestsIdentityMatched,
     sourceIdentitySummary,
@@ -284,6 +298,7 @@ export function buildRuntimeManifestCoverageReport(input: {
       'coverageStatus=complete only means required files and sidecar hashes are present. evidenceUsabilityStatus must be pass before promotion evidence can be used.',
       'evidenceTrust=quarantine is valid coverage under a dirty worktree, but it remains unusable for promotion or monetization conclusions.',
       'Canonical trust also requires schema-v2 source identity convergence across all required manifests.',
+      'Canonical trust also requires producer, producerExitCode, and generatedAt provenance fields in every schema-v2 manifest.',
       'This artifact cannot authorize paper orders, live orders, leverage changes, or promotion.',
     ],
   }
@@ -407,6 +422,10 @@ function buildCoverageItem(
   const manifestBusinessStatus = readString(manifest?.businessStatus)
   const manifestErrorClass = readString(manifest?.errorClass)
   const manifestRunId = readString(manifest?.runId)
+  const manifestProducer = readString(manifest?.producer)
+  const manifestProducerExitCode = readNumber(manifest?.producerExitCode)
+  const manifestExitCode = readNumber(manifest?.exitCode)
+  const manifestGeneratedAt = readString(manifest?.generatedAt)
   const manifestSchemaVersion = readNumber(manifest?.schemaVersion)
   const manifestSourceKind = readString(manifest?.sourceKind)
   const manifestSourceCommit = readString(manifest?.sourceCommit)
@@ -441,6 +460,12 @@ function buildCoverageItem(
     manifestGitDirtyFilesCount,
     manifestExists,
   })
+  const producerMetadataValid = manifestSchemaVersion === 2
+    && Boolean(manifestProducer)
+    && Number.isInteger(manifestProducerExitCode)
+    && Number.isInteger(manifestExitCode)
+    && manifestProducerExitCode === manifestExitCode
+    && Number.isFinite(Date.parse(manifestGeneratedAt ?? ''))
 
   if (manifest) {
     if (!manifestArtifactPath) blockingReasons.push(`manifest_artifact_path_missing:${artifact.key}`)
@@ -456,6 +481,18 @@ function buildCoverageItem(
       trustBlockingReasons.push(`evidence_manifest_legacy_schema:${artifact.key}`)
     } else if (manifestSourceIdentityValid !== true) {
       trustBlockingReasons.push(`evidence_source_identity_invalid:${artifact.key}`)
+    }
+    if (!manifestProducer) trustBlockingReasons.push(`evidence_producer_missing:${artifact.key}`)
+    if (!Number.isInteger(manifestProducerExitCode)) {
+      trustBlockingReasons.push(`evidence_producer_exit_code_invalid:${artifact.key}`)
+    }
+    if (Number.isInteger(manifestProducerExitCode)
+      && Number.isInteger(manifestExitCode)
+      && manifestProducerExitCode !== manifestExitCode) {
+      trustBlockingReasons.push(`evidence_producer_exit_code_mismatch:${artifact.key}`)
+    }
+    if (!manifestGeneratedAt || !Number.isFinite(Date.parse(manifestGeneratedAt))) {
+      trustBlockingReasons.push(`evidence_generated_at_invalid:${artifact.key}`)
     }
     if (expectedSourceKind && manifestSourceKind !== expectedSourceKind) {
       trustBlockingReasons.push(
@@ -480,6 +517,11 @@ function buildCoverageItem(
     manifestBusinessStatus,
     manifestErrorClass,
     manifestRunId,
+    manifestProducer,
+    manifestProducerExitCode,
+    manifestExitCode,
+    manifestGeneratedAt,
+    producerMetadataValid,
     manifestSchemaVersion,
     manifestSourceKind,
     manifestSourceCommit,
@@ -546,6 +588,7 @@ function buildTrustBlockingReasons(input: {
   requiredPassManifests: number
   passManifestCount: number
   quarantineManifestCount: number
+  producerMetadataInvalidCount: number
   trustSummary: RuntimeManifestCoverageReport['trustSummary']
   allRequiredManifestsPresentAndHashMatched: boolean
   sourceIdentitySummary: RuntimeManifestCoverageReport['sourceIdentitySummary']
@@ -559,6 +602,9 @@ function buildTrustBlockingReasons(input: {
   }
   if (input.quarantineManifestCount > 0) {
     reasons.push(`evidence_trust_quarantine:${input.quarantineManifestCount}`)
+  }
+  if (input.producerMetadataInvalidCount > 0) {
+    reasons.push(`evidence_producer_metadata_invalid:${input.producerMetadataInvalidCount}`)
   }
   if (input.trustSummary.fail > 0) reasons.push(`evidence_trust_fail:${input.trustSummary.fail}`)
   if (input.trustSummary.missing > 0) reasons.push(`evidence_trust_missing:${input.trustSummary.missing}`)

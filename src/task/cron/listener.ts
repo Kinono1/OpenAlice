@@ -23,6 +23,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { decideCronNotification } from './notification-policy.js'
 import { buildPipelineExecutionReceipt } from './pipeline-receipt.js'
+import { resolveRuntimeRole } from '../../runtime/runtime-paths.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -135,6 +136,7 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   const session = opts.session ?? new SessionStore('cron/default')
   const scriptRunner = opts.scriptRunner ?? defaultScriptRunner
   const macosNotificationSender = opts.macosNotificationSender ?? sendMacosNotification
+  const runtimeRole = resolveRuntimeRole()
 
   let unsubscribe: (() => void) | null = null
   let agentProcessing = false
@@ -144,6 +146,22 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
 
     // Guard: internal jobs (__heartbeat__, __snapshot__, etc.) have dedicated handlers
     if (isInternalJob(payload.jobName)) return
+
+    // The engine rejects research agent definitions, but keep the listener
+    // boundary fail-closed as well: a hand-written or replayed cron.fire event
+    // must not be able to reach the autonomous LLM session path in research.
+    if (runtimeRole === 'research' && (payload.kind ?? 'agent') !== 'script') {
+      await eventLog.append('cron.error', {
+        jobId: payload.jobId,
+        jobName: payload.jobName,
+        sourceFireSeq: entry.seq,
+        error: 'cron_research_agent_job_forbidden',
+        errorClass: 'runtime_role_forbidden',
+        permanent: true,
+        durationMs: 0,
+      })
+      return
+    }
 
     if ((payload.kind ?? 'agent') === 'script') {
       // Script jobs own independent wrapper/collector locks. Running unrelated

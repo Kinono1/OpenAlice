@@ -31,6 +31,8 @@
     "release:activate": "tsx scripts/manage_local_release.ts activate",
     "release:rollback": "tsx scripts/manage_local_release.ts rollback",
     "canary:rollback-drill": "tsx scripts/run_canary_rollback_drill.ts",
+    "canary:finalize": "tsx scripts/finalize_canary_observation.ts",
+    "canary:monitor": "tsx scripts/monitor_canary_observation.ts",
     "decision:validate": "python3 scripts/validate_decision_packet.py",
     "governance:validate": "python3 scripts/validate_decision_packet.py --output /tmp/openalice_decision_verdict.validation.json",
     "test:watch": "vitest",

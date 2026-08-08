@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 626,
+  "entryCount": 631,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -6642,6 +6642,48 @@
       "cronTaskIds": []
     },
     {
+      "id": "pipeline.scripts_finalize_canary_observation_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/finalize_canary_observation.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_finalize_canary_observation_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/finalize_canary_observation.ts",
+      "compatibilityAliases": [
+        "canary:finalize"
+      ],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
       "id": "pipeline.scripts_finalize_fast_binance_data_vision_summary_spec_ts",
       "owner": "engineering",
       "domain": "testing",
@@ -8461,6 +8503,48 @@
       "cronTaskIds": []
     },
     {
+      "id": "pipeline.scripts_monitor_canary_observation_spec_ts",
+      "owner": "engineering",
+      "domain": "testing",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/monitor_canary_observation.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_monitor_canary_observation_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "active",
+      "entrypoint": "scripts/monitor_canary_observation.ts",
+      "compatibilityAliases": [
+        "canary:monitor"
+      ],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
       "id": "pipeline.scripts_monitor_cvar_next_matrix_py",
       "owner": "runtime-operations",
       "domain": "operations",
@@ -9882,6 +9966,26 @@
         "key": null
       },
       "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_research_cutover_spec_ts",
+      "owner": "research",
+      "domain": "research",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/research_cutover.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 604800,
       "schedulerOwner": "manual",

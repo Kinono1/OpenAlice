@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto'
-import { readFile, realpath } from 'node:fs/promises'
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,18 +52,23 @@ async function main() {
   for (const [relativePath, expectedHash] of Object.entries(manifest.artifactHashes)) {
     const artifactPath = resolve(releasePath, relativePath)
     assertWithin(releasePath, artifactPath)
+    const artifactStat = await lstat(artifactPath)
+    if (artifactStat.isSymbolicLink()) {
+      throw new Error(`release_artifact_symlink_forbidden:${relativePath}`)
+    }
     const actualHash = createHash('sha256').update(await readFile(artifactPath)).digest('hex')
     if (actualHash !== expectedHash) {
       throw new Error(`release_artifact_hash_mismatch:${relativePath}`)
     }
   }
 
-  const requiredClosure = ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'package.json', 'release-metadata/']
+  const requiredClosure = ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']
   for (const prefix of requiredClosure) {
     if (!Object.keys(manifest.artifactHashes).some((path) => path === prefix || path.startsWith(prefix))) {
       throw new Error(`release_executable_closure_missing:${prefix}`)
     }
   }
+  await assertDeclaredClosure(releasePath, manifest.artifactHashes, requiredClosure)
 
   process.env.OPENALICE_SOURCE_COMMIT = manifest.sourceCommit
   process.env.OPENALICE_DIRTY_STATE_HASH = manifest.dirtyStateHash
@@ -72,6 +77,18 @@ async function main() {
   process.env.OPENALICE_RELEASE_ID = manifest.releaseId
   process.env.OPENALICE_SOURCE_KIND = 'verified_release'
   process.env.OPENALICE_RUNTIME_ROLE = runtimeRole
+
+  // Keep a machine-readable identity record in the launchd stderr stream.
+  // Canary observation can then bind process logs to the same immutable
+  // release without reading secrets or relying on a mutable source tree.
+  process.stderr.write(`${JSON.stringify({
+    event: 'openalice_release_start',
+    releaseId: manifest.releaseId,
+    sourceCommit: manifest.sourceCommit,
+    manifestHash: manifest.manifestHash,
+    runtimeRole,
+    releasePath,
+  })}\n`)
 
   if (process.argv.includes('--verify-only')) {
     process.stdout.write(`${JSON.stringify({
@@ -193,6 +210,57 @@ function assertWithin(parent, child) {
 function isWithin(parent, child) {
   const rel = relative(resolve(parent), resolve(child))
   return rel === '' || (!rel.startsWith('..') && !rel.startsWith('/'))
+}
+
+async function assertDeclaredClosure(releasePath, artifactHashes, requiredClosure) {
+  const declared = new Set(Object.keys(artifactHashes))
+  for (const closure of requiredClosure) {
+    const candidate = resolve(releasePath, closure)
+    if (closure.endsWith('/')) {
+      await walkDeclaredClosure(releasePath, candidate, declared)
+    } else if (await pathExists(candidate)) {
+      const stat = await lstat(candidate)
+      if (stat.isSymbolicLink()) throw new Error(`release_artifact_symlink_forbidden:${closure}`)
+      if (!stat.isFile()) throw new Error(`release_artifact_type_forbidden:${closure}`)
+      if (!declared.has(closure)) throw new Error(`release_artifact_undeclared:${closure}`)
+    }
+  }
+}
+
+async function walkDeclaredClosure(releasePath, directory, declared) {
+  if (!await pathExists(directory)) return
+  const directoryStat = await lstat(directory)
+  if (directoryStat.isSymbolicLink()) {
+    throw new Error(`release_artifact_symlink_forbidden:${relative(releasePath, directory)}`)
+  }
+  if (!directoryStat.isDirectory()) {
+    throw new Error(`release_artifact_type_forbidden:${relative(releasePath, directory)}`)
+  }
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const child = resolve(directory, entry.name)
+    assertWithin(releasePath, child)
+    const childRelative = relative(releasePath, child).replaceAll('\\', '/')
+    if (entry.isSymbolicLink()) {
+      throw new Error(`release_artifact_symlink_forbidden:${childRelative}`)
+    }
+    if (entry.isDirectory()) {
+      await walkDeclaredClosure(releasePath, child, declared)
+    } else if (entry.isFile()) {
+      if (!declared.has(childRelative)) throw new Error(`release_artifact_undeclared:${childRelative}`)
+    } else {
+      throw new Error(`release_artifact_type_forbidden:${childRelative}`)
+    }
+  }
+}
+
+async function pathExists(path) {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
+    throw error
+  }
 }
 
 main().catch((error) => {

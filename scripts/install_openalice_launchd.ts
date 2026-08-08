@@ -1,6 +1,6 @@
 import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, dirname, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -12,6 +12,8 @@ interface CliArgs {
   label: string
   plistPath: string
   scriptPath: string
+  workingDirectory: string
+  sourceReleasePath?: string
   logPath: string
   errorLogPath: string
   launch: boolean
@@ -62,6 +64,7 @@ async function main(): Promise<void> {
   const config = buildLaunchdConfig({
     label: args.label,
     scriptPath: args.scriptPath,
+    workingDirectory: args.workingDirectory,
     logPath: args.logPath,
     errorLogPath: args.errorLogPath,
   })
@@ -85,7 +88,7 @@ async function main(): Promise<void> {
   await mkdir(dirname(resolve(args.plistPath)), { recursive: true })
   await mkdir(dirname(resolve(args.logPath)), { recursive: true })
   await mkdir(dirname(resolve(args.errorLogPath)), { recursive: true })
-  await materializeStableLaunchWrapper(args.scriptPath)
+  await materializeStableLaunchWrapper(args.scriptPath, args.sourceReleasePath)
   await writeFile(resolve(args.plistPath), plist, 'utf-8')
 
   if (args.launch) {
@@ -99,11 +102,20 @@ function parseArgs(argv: string[]): CliArgs {
   const raw = parseRawArgs(argv)
   const home = process.env.HOME ?? '/Users/kino'
   const label = raw.get('label') ?? 'ai.openalice.main'
+  const scriptPath = resolve(
+    raw.get('scriptPath') ?? 'runtime/bin/launch_openalice_current.sh',
+  )
   return {
     label,
     plistPath:
       raw.get('plistPath') ?? `${home}/Library/LaunchAgents/${label}.plist`,
-    scriptPath: raw.get('scriptPath') ?? resolve('runtime/bin/launch_openalice_current.sh'),
+    scriptPath,
+    workingDirectory: resolve(
+      raw.get('workingDirectory') ?? join(dirname(scriptPath), '..'),
+    ),
+    sourceReleasePath: raw.get('sourceReleasePath')
+      ? resolve(raw.get('sourceReleasePath')!)
+      : undefined,
     logPath: raw.get('logPath') ?? resolve('logs/openalice_main.launchd.log'),
     errorLogPath: raw.get('errorLogPath') ?? resolve('logs/openalice_main.launchd.err.log'),
     launch: parseBoolArg(raw.get('launch'), false),
@@ -139,11 +151,12 @@ function parseBoolArg(raw: string | undefined, fallback: boolean): boolean {
 function buildLaunchdConfig(input: {
   label: string
   scriptPath: string
+  workingDirectory?: string
   logPath: string
   errorLogPath: string
 }): LaunchdConfig {
   const scriptPath = resolve(input.scriptPath)
-  const workingDirectory = resolve(dirname(scriptPath), '..')
+  const workingDirectory = resolve(input.workingDirectory ?? join(dirname(scriptPath), '..'))
   const homeEnv = process.env.HOME ?? '/Users/kino'
   return {
     label: input.label,
@@ -258,7 +271,10 @@ ${envBlock}
 `
 }
 
-async function materializeStableLaunchWrapper(scriptPath: string): Promise<void> {
+async function materializeStableLaunchWrapper(
+  scriptPath: string,
+  sourceReleasePath?: string,
+): Promise<void> {
   const target = resolve(scriptPath)
   // A research cutover may keep the stable wrapper outside the frozen legacy
   // worktree.  Materialize any explicitly named stable wrapper, but never
@@ -266,13 +282,14 @@ async function materializeStableLaunchWrapper(scriptPath: string): Promise<void>
   if (basename(target) !== 'launch_openalice_current.sh') return
   const binDir = dirname(target)
   await mkdir(binDir, { recursive: true })
+  const sourceRoot = resolve(sourceReleasePath ?? '.')
   const files = [
-    ['ops/release/launch_current.sh', target],
-    ['ops/release/launch_current.mjs', resolve(binDir, 'launch_current.mjs')],
-    ['scripts/openalice_env.sh', resolve(binDir, 'openalice_env.sh')],
+    [join(sourceRoot, 'ops/release/launch_current.sh'), target],
+    [join(sourceRoot, 'ops/release/launch_current.mjs'), resolve(binDir, 'launch_current.mjs')],
+    [join(sourceRoot, 'scripts/openalice_env.sh'), resolve(binDir, 'openalice_env.sh')],
   ] as const
   for (const [source, destination] of files) {
-    await copyFile(resolve(source), destination)
+    await copyFile(source, destination)
     await chmod(destination, 0o555)
   }
 }

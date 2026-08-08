@@ -142,6 +142,63 @@ describe('cron engine', () => {
     }
   })
 
+  it('fails closed when a sensitive paper/order job is incorrectly opted into research', async () => {
+    const previousRole = process.env.OPENALICE_RUNTIME_ROLE
+    const definitionPath = tempPath('definitions.json')
+    try {
+      process.env.OPENALICE_RUNTIME_ROLE = 'research'
+      await writeFile(definitionPath, JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        jobs: [{
+          id: 'bad-paper-job', name: 'paper_policy_shadow_settle_5m', enabled: true, kind: 'script',
+          schedule: { kind: 'every', every: '5m' }, payload: '',
+          entrypoint: 'scripts/cron_paper_policy_shadow_settle.sh', args: [], cwd: '.',
+          allowedRuntimeRoles: ['primary', 'research'],
+        }],
+      }))
+      const researchEngine = createCronEngine({
+        eventLog,
+        storePath,
+        definitionPath,
+        now: () => clock,
+      })
+      await expect(researchEngine.start()).rejects.toThrow('cron_research_sensitive_job_forbidden:bad-paper-job')
+      researchEngine.stop()
+    } finally {
+      if (previousRole === undefined) delete process.env.OPENALICE_RUNTIME_ROLE
+      else process.env.OPENALICE_RUNTIME_ROLE = previousRole
+      await unlink(definitionPath).catch(() => undefined)
+    }
+  })
+
+  it('fails closed when a non-sensitive agent job is incorrectly opted into research', async () => {
+    const previousRole = process.env.OPENALICE_RUNTIME_ROLE
+    const definitionPath = tempPath('definitions.json')
+    try {
+      process.env.OPENALICE_RUNTIME_ROLE = 'research'
+      await writeFile(definitionPath, JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        jobs: [{
+          id: 'bad-agent-job', name: 'routine_status_note', enabled: true, kind: 'agent',
+          schedule: { kind: 'every', every: '1h' }, payload: 'summarize status',
+          allowedRuntimeRoles: ['primary', 'research'],
+        }],
+      }))
+      const researchEngine = createCronEngine({
+        eventLog,
+        storePath,
+        definitionPath,
+        now: () => clock,
+      })
+      await expect(researchEngine.start()).rejects.toThrow('cron_research_agent_job_forbidden:bad-agent-job')
+      researchEngine.stop()
+    } finally {
+      if (previousRole === undefined) delete process.env.OPENALICE_RUNTIME_ROLE
+      else process.env.OPENALICE_RUNTIME_ROLE = previousRole
+      await unlink(definitionPath).catch(() => undefined)
+    }
+  })
+
   // ==================== Job CRUD ====================
 
   describe('CRUD', () => {

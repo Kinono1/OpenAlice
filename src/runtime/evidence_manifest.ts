@@ -27,6 +27,12 @@ export interface VerifiedReleaseIdentity {
 export interface EvidenceManifest {
   schemaVersion: 2
   job: string
+  /** Stable logical producer identifier; intentionally not an absolute machine path. */
+  producer: string
+  /** Exit code reported by the producer that generated the artifact. */
+  producerExitCode: number
+  /** Completion timestamp for the producer output. */
+  generatedAt: string
   runId: string
   artifactPath: string
   manifestPath: string
@@ -55,6 +61,7 @@ export interface EvidenceManifest {
 
 export interface BuildEvidenceManifestInput {
   job: string
+  producer?: string
   artifactPath: string
   manifestPath?: string
   startedAt: Date | string
@@ -114,6 +121,9 @@ export function buildEvidenceManifest(input: BuildEvidenceManifestInput): Eviden
   return {
     schemaVersion: 2,
     job: input.job,
+    producer: input.producer?.trim() || input.job,
+    producerExitCode: exitCode,
+    generatedAt: finishedAt,
     runId: `${finishedAt}__${git.commit ?? 'unknown'}__${process.pid}`,
     artifactPath,
     manifestPath,
@@ -143,19 +153,31 @@ export function buildEvidenceManifest(input: BuildEvidenceManifestInput): Eviden
 export function readVerifiedReleaseIdentity(
   env: NodeJS.ProcessEnv = process.env,
 ): VerifiedReleaseIdentity | null {
-  const requested = env.OPENALICE_SOURCE_KIND === 'verified_release'
-    || Boolean(env.OPENALICE_RELEASE_MANIFEST_HASH)
-    || Boolean(env.OPENALICE_RELEASE_ID)
-  if (!requested) return null
   const sourceKind = env.OPENALICE_SOURCE_KIND
-  if (sourceKind !== 'verified_release') {
+  const hasReleaseIdentityField = [
+    env.OPENALICE_SOURCE_COMMIT,
+    env.OPENALICE_DIRTY_STATE_HASH,
+    env.OPENALICE_RELEASE_ID,
+    env.OPENALICE_RELEASE_MANIFEST_HASH,
+    env.OPENALICE_RELEASE_PATH,
+  ].some((value) => Boolean(value))
+  const invalidSourceKindRequested = sourceKind !== undefined && sourceKind !== 'git_worktree' && sourceKind !== 'verified_release'
+  const requested = hasReleaseIdentityField || sourceKind === 'verified_release' || invalidSourceKindRequested
+  if (!requested) return null
+
+  // Any release identity field is meaningful only when the launcher explicitly
+  // declared a verified release.  Returning an intentionally invalid identity
+  // for contradictory/missing declarations makes the evidence builder
+  // quarantine it instead of silently accepting a mixed source.
+  const identityIsExplicitlyVerified = sourceKind === 'verified_release' && hasReleaseIdentityField
+  if (!identityIsExplicitlyVerified) {
     return {
       sourceKind: 'verified_release',
-      sourceCommit: env.OPENALICE_SOURCE_COMMIT ?? '',
-      dirtyStateHash: env.OPENALICE_DIRTY_STATE_HASH ?? '',
-      releaseId: env.OPENALICE_RELEASE_ID ?? '',
-      releaseManifestHash: env.OPENALICE_RELEASE_MANIFEST_HASH ?? '',
-      releasePathIdentity: env.OPENALICE_RELEASE_PATH ?? '',
+      sourceCommit: '',
+      dirtyStateHash: '',
+      releaseId: '',
+      releaseManifestHash: '',
+      releasePathIdentity: '',
     }
   }
   return {

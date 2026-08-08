@@ -68,7 +68,9 @@ export function assembleChannels(input: {
         token: resolveTelegramBotToken(config.connectors.telegram),
         allowedChatIds: config.connectors.telegram.chatIds,
         pollingEnabled: resolveTelegramPollingEnabled(
-          process.env.OPENALICE_TELEGRAM_POLLING_ENABLED,
+          runtime.role === 'research'
+            ? 'false'
+            : process.env.OPENALICE_TELEGRAM_POLLING_ENABLED,
         ),
       }))
     }
@@ -119,7 +121,9 @@ export function assembleChannels(input: {
           token: resolveTelegramBotToken(fresh.connectors.telegram),
           allowedChatIds: fresh.connectors.telegram.chatIds,
           pollingEnabled: resolveTelegramPollingEnabled(
-            process.env.OPENALICE_TELEGRAM_POLLING_ENABLED,
+            runtime.role === 'research'
+              ? 'false'
+              : process.env.OPENALICE_TELEGRAM_POLLING_ENABLED,
           ),
         })
         await plugin.start(context)

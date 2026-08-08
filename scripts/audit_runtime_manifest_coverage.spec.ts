@@ -256,6 +256,39 @@ describe('audit_runtime_manifest_coverage', () => {
     )
   })
 
+  it('quarantines v2 manifests that omit producer provenance fields', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-runtime-manifest-producer-provenance-'))
+    const artifactPath = join(root, 'artifact.json')
+    const raw = '{"ok":true}\n'
+    await writeFile(artifactPath, raw, 'utf-8')
+    const manifest = buildEvidenceManifest({
+      job: 'artifact',
+      artifactPath,
+      startedAt: '2026-05-03T00:00:00.000Z',
+      finishedAt: '2026-05-03T00:00:01.000Z',
+      exitCode: 0,
+      artifactHash: sha256Hex(raw),
+    })
+    const { producer: _producer, producerExitCode: _exitCode, generatedAt: _generatedAt, ...legacyV2 } = manifest
+    await writeFile(`${artifactPath}.manifest.json`, `${JSON.stringify(legacyV2, null, 2)}\n`, 'utf-8')
+
+    const report = buildRuntimeManifestCoverageReport({
+      runtimeDir: root,
+      requiredArtifacts: [{ key: 'artifact', relativePath: 'artifact.json', required: true }],
+    })
+
+    expect(report.coverageStatus).toBe('complete')
+    expect(report.evidenceUsabilityStatus).toBe('quarantine_blocked')
+    expect(report.trustBlockingReasons).toEqual(expect.arrayContaining([
+      'evidence_producer_metadata_invalid:1',
+    ]))
+    expect(report.items[0]?.trustBlockingReasons).toEqual(expect.arrayContaining([
+      'evidence_producer_missing:artifact',
+      'evidence_producer_exit_code_invalid:artifact',
+      'evidence_generated_at_invalid:artifact',
+    ]))
+  })
+
   it('writes an audited report with its own sidecar manifest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oa-runtime-manifest-write-'))
     const artifactPath = join(root, 'artifact.json')

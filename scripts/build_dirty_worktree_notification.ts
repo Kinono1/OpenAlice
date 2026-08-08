@@ -29,7 +29,16 @@ export interface DirtyNotificationResult {
   trustBlockingReasons: string[]
   planBlockingReasons: string[]
   statePath: string
-  legacyWipSummary: { total: number; statusHash: string | null } | null
+  nextActions: string[]
+  receiptPaths: string[]
+  legacyWipSummary: {
+    purpose: 'legacy_wip'
+    sourceMode: string
+    branch: string | null
+    commit: string | null
+    total: number
+    statusHash: string | null
+  } | null
 }
 
 export interface BuildNotificationOptions {
@@ -41,6 +50,7 @@ export interface BuildNotificationOptions {
   now?: Date
   previousState?: Partial<DirtyNotificationState>
   legacyReportPath?: string
+  legacyPlanPath?: string
 }
 
 function readJson(path: string): Record<string, unknown> | null {
@@ -173,6 +183,10 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
     evidenceUsability,
     blockingReasons,
     legacyWip: legacyReport ? {
+      purpose: legacyReport.purpose === 'legacy_wip' ? 'legacy_wip' : 'unknown',
+      sourceMode: typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown',
+      branch: typeof legacyReport.branch === 'string' ? legacyReport.branch : null,
+      commit: typeof legacyReport.commit === 'string' ? legacyReport.commit : null,
       total: num(asRecord(legacyReport.counts).total),
       statusHash: typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : null,
     } : null,
@@ -206,11 +220,25 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
     ? ' Manifest coverage complete, but evidence trust blocked.'
     : ''
   const legacyText = legacyReport
-    ? ` Legacy WIP audit: total=${num(asRecord(legacyReport.counts).total)}, statusHash=${typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : 'unknown'}; legacy_wip is preserved and excluded from canonical trust.`
+    ? ` Legacy WIP audit: purpose=legacy_wip, sourceMode=${typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown'}, branch=${typeof legacyReport.branch === 'string' ? legacyReport.branch : 'unknown'}, commit=${typeof legacyReport.commit === 'string' ? legacyReport.commit : 'unknown'}, total=${num(asRecord(legacyReport.counts).total)}, statusHash=${typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : 'unknown'}; legacy_wip is preserved and excluded from canonical trust.`
     : ''
+  const nextActions = status === 'invalid'
+    ? ['Repair or regenerate the missing/invalid audit artifacts; fail closed until then.']
+    : status === 'blocked'
+      ? ['Keep the legacy WIP quarantined; resolve trust blockers and regenerate canonical evidence from the verified release.']
+      : ['Keep the verified release as the only canonical source; send a notification only if state changes or the weekly reminder is due.']
+  const receiptPaths = [
+    resolve(options.reportPath),
+    resolve(options.planPath),
+    resolve(options.manifestCoveragePath),
+    resolve(options.notificationPath),
+    statePath,
+    ...(options.legacyReportPath ? [resolve(options.legacyReportPath)] : []),
+    ...(options.legacyPlanPath ? [resolve(options.legacyPlanPath)] : []),
+  ]
   const fullText = status === 'invalid'
-    ? `OpenAlice audit invalid or missing. purpose=${purpose}, sourceMode=${sourceMode}. Fail-closed; inspect audit, coverage, and quarantine plan artifacts.`
-    : `OpenAlice audit completed. purpose=${purpose}, sourceMode=${sourceMode}, branch=${branch ?? 'unknown'}, commit=${commit ?? 'unknown'}, statusHash=${statusHash ?? 'unknown'}, total=${total}, A=${a}, B=${b}, C=${c}, D=${d}, deletedTracked=${deletedTracked}, promotionRelevant=${promotionRelevant}. manifestCoverage=${coverageStatus}, evidenceUsability=${evidenceUsability}.${coverageTrustWarning} blockingReasons=${ordinaryText}. trustBlockingReasons=${trustText}. planBlockingReasons=${planText}. effectiveBlockingReasons=${effectiveText}. promotionAllowed=false, paperTradingAllowed=false, liveTradingAllowed=false. Do not use git add .${legacyText}`
+    ? `OpenAlice audit invalid or missing. purpose=${purpose}, sourceMode=${sourceMode}. Fail-closed; nextAction=${nextActions.join('|')}. receiptPaths=${receiptPaths.join('|')}. inspect audit, coverage, and quarantine plan artifacts.`
+    : `OpenAlice audit completed. purpose=${purpose}, sourceMode=${sourceMode}, branch=${branch ?? 'unknown'}, commit=${commit ?? 'unknown'}, statusHash=${statusHash ?? 'unknown'}, total=${total}, A=${a}, B=${b}, C=${c}, D=${d}, deletedTracked=${deletedTracked}, promotionRelevant=${promotionRelevant}. manifestCoverage=${coverageStatus}, evidenceUsability=${evidenceUsability}.${coverageTrustWarning} blockingReasons=${ordinaryText}. trustBlockingReasons=${trustText}. planBlockingReasons=${planText}. effectiveBlockingReasons=${effectiveText}. promotionAllowed=false, paperTradingAllowed=false, liveTradingAllowed=false. nextAction=${nextActions.join('|')}. receiptPaths=${receiptPaths.join('|')}. Do not use git add .${legacyText}`
   return {
     schemaVersion: 'dirty_worktree_notification.v2',
     generatedAt,
@@ -227,7 +255,13 @@ export function buildDirtyWorktreeNotification(options: BuildNotificationOptions
     trustBlockingReasons: trust,
     planBlockingReasons: planBlockers,
     statePath,
+    nextActions,
+    receiptPaths,
     legacyWipSummary: legacyReport ? {
+      purpose: 'legacy_wip',
+      sourceMode: typeof legacyReport.sourceMode === 'string' ? legacyReport.sourceMode : 'unknown',
+      branch: typeof legacyReport.branch === 'string' ? legacyReport.branch : null,
+      commit: typeof legacyReport.commit === 'string' ? legacyReport.commit : null,
       total: num(asRecord(legacyReport.counts).total),
       statusHash: typeof legacyReport.statusHash === 'string' ? legacyReport.statusHash : null,
     } : null,
@@ -319,6 +353,7 @@ if (process.argv[1]?.endsWith('build_dirty_worktree_notification.ts')) {
     notificationPath: required('notification'),
     statePath: args.get('state'),
     legacyReportPath: args.get('legacy-report'),
+    legacyPlanPath: args.get('legacy-plan'),
   }).then((result) => console.log(JSON.stringify(result, null, 2))).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1

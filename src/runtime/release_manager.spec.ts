@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -163,6 +163,31 @@ describe('local release manager', () => {
     expect(await readReleasePointer(root, 'research-current')).toBeNull()
   })
 
+  it('fails closed when a research rollback target is not eligible for research', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-research-rollback-admission-block-'))
+    await createRelease(root, COMMIT_A, {
+      admissionDecisionId: '9'.repeat(64),
+      dirtyStateHash: EMPTY_DIRTY_HASH,
+    })
+    await createRelease(root, COMMIT_B, { dirtyStateHash: EMPTY_DIRTY_HASH })
+
+    const current = await activateResearchRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_B,
+    })
+    expect(current.status).toBe('pass')
+    await symlink(COMMIT_A, join(root, 'research-previous'))
+
+    const rollback = await rollbackResearchRelease({ releaseRoot: root })
+    expect(rollback).toMatchObject({
+      status: 'blocked',
+      action: 'rollback_research',
+      reasonCodes: ['research_release_admission_decision_must_be_null'],
+    })
+    expect(await readReleasePointer(root, 'research-current')).toBe(COMMIT_B)
+    expect(await readReleasePointer(root, 'research-previous')).toBe(COMMIT_A)
+  })
+
   it('fails closed for a manifest that claims live execution is armed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'openalice-research-live-block-'))
     const releasePath = join(root, COMMIT_A)
@@ -245,6 +270,7 @@ async function createRelease(
     'ops/pipeline.json': '{}\n',
     'default/config.json': '{}\n',
     'package.json': '{"name":"openalice-test"}\n',
+    'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
     'release-metadata/pipeline_registry.v1.json': '{"schemaVersion":"pipeline_registry.v1","entries":[]}\n',
   }
   for (const [relativePath, content] of Object.entries(closureFiles)) {

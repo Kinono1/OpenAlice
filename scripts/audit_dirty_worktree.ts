@@ -303,6 +303,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   let porcelain = ''
   let branch: string | null = null
   let commit: string | null = null
+  let gitSnapshot: {
+    commit: string | null
+    dirty: boolean
+    dirtyFilesCount: number
+    dirtyHash: string
+  } | undefined
   if (sourceMode === 'verified_release') {
     const manifestPath = resolve(repoRoot, 'release_manifest.v1.json')
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
@@ -315,6 +321,13 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     porcelain = await readGitPorcelainStatus(repoRoot)
     branch = await readGitValue(repoRoot, ['symbolic-ref', '--short', 'HEAD'])
     commit = await readGitValue(repoRoot, ['rev-parse', 'HEAD'])
+    const statusLines = porcelain.split(/\r?\n/).filter(Boolean)
+    gitSnapshot = {
+      commit,
+      dirty: statusLines.length > 0,
+      dirtyFilesCount: statusLines.length,
+      dirtyHash: createHash('sha256').update(porcelain).digest('hex'),
+    }
   }
   const audit = buildDirtyWorktreeAudit({
     porcelain,
@@ -338,6 +351,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       recordsIn: audit.counts.total,
       recordsOut: audit.counts.total,
       errorClass: audit.governance.blockingReasons[0] ?? null,
+      ...(gitSnapshot ? { gitSnapshot } : {}),
     })
   }
   if (args.json) {

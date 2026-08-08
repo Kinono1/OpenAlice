@@ -45,6 +45,8 @@ export interface LocalReleaseCliArgs {
   dependencyLockPath: string
   strategyConfigPath: string
   runtimeEntry: string
+  legacyWipRoot?: string
+  freezeReceiptPath?: string
   skipBuild: boolean
   drill: boolean
 }
@@ -89,6 +91,16 @@ export function parseArgs(argv: string[]): LocalReleaseCliArgs {
       get('strategyConfigPath') ?? 'ops/release/strategy_release_config.v1.json',
     ),
     runtimeEntry: get('runtimeEntry') ?? 'dist/main.js',
+    legacyWipRoot: get('legacyWipRoot')
+      ? resolve(get('legacyWipRoot')!)
+      : process.env.OPENALICE_LEGACY_WIP_ROOT
+        ? resolve(process.env.OPENALICE_LEGACY_WIP_ROOT)
+        : undefined,
+    freezeReceiptPath: get('freezeReceipt')
+      ? resolve(get('freezeReceipt')!)
+      : process.env.OPENALICE_LEGACY_WIP_FREEZE_RECEIPT
+        ? resolve(process.env.OPENALICE_LEGACY_WIP_FREEZE_RECEIPT)
+        : undefined,
     skipBuild: parseBoolean(get('skipBuild'), false),
     drill: parseBoolean(get('drill'), false),
   }
@@ -159,6 +171,7 @@ export async function buildLocalRelease(
   args: LocalReleaseCliArgs,
 ) {
   const repoRoot = resolve(process.cwd())
+  await verifyFrozenLegacyWip(repoRoot, args)
   const { stdout: commitStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
     cwd: repoRoot,
   })
@@ -280,6 +293,32 @@ export async function buildLocalRelease(
   } catch (error) {
     await rm(tempRelease, { recursive: true, force: true }).catch(() => undefined)
     throw error
+  }
+}
+
+async function verifyFrozenLegacyWip(
+  repoRoot: string,
+  args: LocalReleaseCliArgs,
+): Promise<void> {
+  if (!args.legacyWipRoot && !args.freezeReceiptPath) return
+  if (!args.legacyWipRoot || !args.freezeReceiptPath) {
+    throw new Error('legacy_wip_freeze_inputs_required')
+  }
+  const { stdout } = await execFileAsync('python3', [
+    join(repoRoot, 'scripts/verify_wip_freeze.py'),
+    '--repo-root',
+    resolve(args.legacyWipRoot),
+    '--receipt',
+    resolve(args.freezeReceiptPath),
+  ], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 })
+  let verification: Record<string, unknown>
+  try {
+    verification = JSON.parse(stdout) as Record<string, unknown>
+  } catch {
+    throw new Error('legacy_wip_freeze_verification_invalid')
+  }
+  if (verification.status !== 'pass' || verification.driftDetected === true) {
+    throw new Error('legacy_wip_drift_detected')
   }
 }
 

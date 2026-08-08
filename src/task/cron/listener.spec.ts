@@ -1015,6 +1015,42 @@ describe('cron listener', () => {
   // ==================== Error handling ====================
 
   describe('error handling', () => {
+    it('fails closed when a research cron.fire event would route to the autonomous agent path', async () => {
+      const previousRole = process.env.OPENALICE_RUNTIME_ROLE
+      listener.stop()
+      try {
+        process.env.OPENALICE_RUNTIME_ROLE = 'research'
+        const researchListener = createCronListener({
+          connectorCenter,
+          eventLog,
+          agentCenter: mockEngine as any,
+          session,
+        })
+        researchListener.start()
+
+        await eventLog.append('cron.fire', {
+          jobId: 'research-agent-fire',
+          jobName: 'routine_status_note',
+          payload: 'summarize status',
+        } satisfies CronFirePayload)
+
+        await vi.waitFor(() => {
+          expect(eventLog.recent({ type: 'cron.error' })).toHaveLength(1)
+        })
+        expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+        expect(eventLog.recent({ type: 'cron.error' })[0].payload).toMatchObject({
+          jobId: 'research-agent-fire',
+          error: 'cron_research_agent_job_forbidden',
+          errorClass: 'runtime_role_forbidden',
+          permanent: true,
+        })
+        researchListener.stop()
+      } finally {
+        if (previousRole === undefined) delete process.env.OPENALICE_RUNTIME_ROLE
+        else process.env.OPENALICE_RUNTIME_ROLE = previousRole
+      }
+    })
+
     it('should write cron.error on engine failure', async () => {
       mockEngine.setShouldFail(true)
       listener.start()

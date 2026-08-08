@@ -30,12 +30,43 @@ async function fixture(overrides: {
 describe('build_dirty_worktree_notification', () => {
   it('unions ordinary and trust blockers and explains complete-but-quarantined coverage', async () => {
     const paths = await fixture()
-    const result = buildDirtyWorktreeNotification({ ...paths, manifestCoveragePath: paths.coveragePath, now: new Date('2026-08-09T00:00:00.000Z') })
+    const legacyReportPath = join(paths.root, 'legacy-report.json')
+    const legacyPlanPath = join(paths.root, 'legacy-plan.json')
+    await writeFile(legacyReportPath, JSON.stringify({
+      purpose: 'legacy_wip',
+      sourceMode: 'git_worktree',
+      branch: 'work/kino-mainline',
+      commit: 'a'.repeat(40),
+      statusHash: 'legacy-status',
+      counts: { total: 555 },
+    }))
+    await writeFile(legacyPlanPath, JSON.stringify({ blockingReasons: ['legacy_quarantine'] }))
+    const result = buildDirtyWorktreeNotification({
+      ...paths,
+      manifestCoveragePath: paths.coveragePath,
+      legacyReportPath,
+      legacyPlanPath,
+      now: new Date('2026-08-09T00:00:00.000Z'),
+    })
     expect(result.status).toBe('blocked')
     expect(result.shouldNotify).toBe(true)
     expect(result.fullText).toContain('Manifest coverage complete, but evidence trust blocked.')
     expect(result.fullText).toContain('trustBlockingReasons=evidence_trust_quarantine:29')
+    expect(result.fullText).toContain('nextAction=')
+    expect(result.fullText).toContain('receiptPaths=')
     expect(result.fullText).toContain('legacy_wip')
+    expect(result.fullText).toContain('branch=work/kino-mainline')
+    expect(result.fullText).toContain(`commit=${'a'.repeat(40)}`)
+    expect(result.fullText).toContain('sourceMode=git_worktree')
+    expect(result.receiptPaths).toContain(legacyPlanPath)
+    expect(result.legacyWipSummary).toMatchObject({
+      purpose: 'legacy_wip',
+      sourceMode: 'git_worktree',
+      branch: 'work/kino-mainline',
+      commit: 'a'.repeat(40),
+      total: 555,
+      statusHash: 'legacy-status',
+    })
   })
 
   it('suppresses unchanged clean state and sends a weekly blocked reminder', async () => {

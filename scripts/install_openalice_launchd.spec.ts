@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildLaunchdConfig, parseArgs, renderLaunchdPlist } from './install_openalice_launchd.ts'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { buildLaunchdConfig, materializeStableLaunchWrapper, parseArgs, renderLaunchdPlist } from './install_openalice_launchd.ts'
 
 describe('install_openalice_launchd', () => {
   const originalEnv = { ...process.env }
@@ -19,6 +20,18 @@ describe('install_openalice_launchd', () => {
     expect(config.label).toBe('ai.openalice.main')
     expect(config.workingDirectory).toBe('/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice')
     expect(config.scriptPath).toContain('/scripts/launch_openalice_main.sh')
+  })
+
+  it('accepts an explicit immutable release working directory', () => {
+    const config = buildLaunchdConfig({
+      label: 'ai.openalice.main',
+      scriptPath: '/repo/runtime/bin/launch_openalice_current.sh',
+      workingDirectory: '/repo/runtime/releases/2222222222222222222222222222222222222222',
+      logPath: '/tmp/openalice.log',
+      errorLogPath: '/tmp/openalice.err.log',
+    })
+
+    expect(config.workingDirectory).toBe('/repo/runtime/releases/2222222222222222222222222222222222222222')
   })
 
   it('renders a plist that keeps the service alive and points to the wrapper script', () => {
@@ -153,5 +166,43 @@ describe('install_openalice_launchd', () => {
     expect(plist).toContain('<string>/repo/OpenAlice/runtime/releases</string>')
     expect(plist).toContain('<key>OPENALICE_LEGACY_WIP_ROOT</key>')
     expect(plist).not.toContain('TELEGRAM_BOT_TOKEN=')
+  })
+
+  it('parses an explicit working directory for a research release', () => {
+    const args = parseArgs([
+      '--scriptPath',
+      '/repo/runtime/bin/launch_openalice_current.sh',
+      '--workingDirectory',
+      '/repo/runtime/releases/3333333333333333333333333333333333333333',
+    ])
+
+    expect(args.workingDirectory).toBe('/repo/runtime/releases/3333333333333333333333333333333333333333')
+  })
+
+  it('parses an explicit immutable release source for wrapper materialization', () => {
+    const args = parseArgs([
+      '--scriptPath',
+      '/repo/runtime/bin/launch_openalice_current.sh',
+      '--sourceReleasePath',
+      '/repo/runtime/releases/3333333333333333333333333333333333333333',
+    ])
+
+    expect(args.sourceReleasePath).toBe('/repo/runtime/releases/3333333333333333333333333333333333333333')
+  })
+
+  it('materializes the stable wrapper from the explicit release source', async () => {
+    const root = await mkdtemp('/tmp/openalice-launchd-source-')
+    const source = `${root}/release`
+    const target = `${root}/bin/launch_openalice_current.sh`
+    await mkdir(`${source}/ops/release`, { recursive: true })
+    await mkdir(`${source}/scripts`, { recursive: true })
+    await mkdir(`${root}/bin`, { recursive: true })
+    await writeFile(`${source}/ops/release/launch_current.sh`, 'release-wrapper\n')
+    await writeFile(`${source}/ops/release/launch_current.mjs`, 'release-launcher\n')
+    await writeFile(`${source}/scripts/openalice_env.sh`, 'release-env\n')
+    await materializeStableLaunchWrapper(target, source)
+    expect(await readFile(target, 'utf8')).toBe('release-wrapper\n')
+    expect(await readFile(`${root}/bin/launch_current.mjs`, 'utf8')).toBe('release-launcher\n')
+    expect(await readFile(`${root}/bin/openalice_env.sh`, 'utf8')).toBe('release-env\n')
   })
 })

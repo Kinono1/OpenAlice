@@ -52,8 +52,8 @@ export async function assembleMarketData(
 
   const symbolIndex = new SymbolIndex({
     cacheFile: join(runtime.sharedDataInputDir, 'cache', 'equity', 'symbols.json'),
-    allowNetwork: runtime.role === 'primary',
-    writeCache: runtime.role === 'primary',
+    allowNetwork: runtime.role === 'primary' || runtime.role === 'research',
+    writeCache: runtime.role === 'primary' || runtime.role === 'research',
   })
   await symbolIndex.load(equityClient)
   return { equityClient, cryptoClient, currencyClient, symbolIndex }

@@ -113,6 +113,31 @@ def registry_roles(registry: dict[str, Any]) -> dict[str, list[str]]:
     return roles
 
 
+def load_cron_role_registry(path: Path) -> tuple[dict[str, Any], Path]:
+    """Load the role-bearing Cron registry, accepting the pipeline path alias.
+
+    The immutable pipeline registry is intentionally an ``entries`` document;
+    runtime-role allowlists live in the sibling ``cron_definitions.v1.json``.
+    Cutover callers historically passed the pipeline registry path, so resolve
+    that alias explicitly instead of treating a valid pipeline registry as an
+    empty/invalid Cron role map.
+    """
+    registry = load_json(path)
+    if isinstance(registry, dict) and isinstance(registry.get("jobs"), list):
+        return registry, path
+    sibling = path.with_name("cron_definitions.v1.json")
+    if (
+        isinstance(registry, dict)
+        and isinstance(registry.get("entries"), list)
+        and sibling.is_file()
+        and not sibling.is_symlink()
+    ):
+        role_registry = load_json(sibling)
+        if isinstance(role_registry, dict) and isinstance(role_registry.get("jobs"), list):
+            return role_registry, sibling
+    raise ValueError(f"cron_role_registry_jobs_missing:{path}")
+
+
 def normalize_document(
     document: dict[str, Any],
     source_root: Path,
@@ -149,6 +174,14 @@ def normalize_document(
                 label=f"{job_id}.script.path",
             )
             script["path"] = relative
+            if isinstance(job.get("entrypoint"), str):
+                entrypoint_relative, _ = map_source_path(
+                    job["entrypoint"],
+                    source_root,
+                    release_root,
+                    label=f"{job_id}.entrypoint",
+                )
+                job["entrypoint"] = entrypoint_relative
             if isinstance(script.get("cwd"), str) and script["cwd"].strip():
                 cwd, _ = map_source_path(
                     script["cwd"],
@@ -214,7 +247,7 @@ def main() -> None:
         raise SystemExit("cron_source_or_release_root_missing")
     original = jobs.read_bytes()
     document = json.loads(original.decode("utf-8"))
-    registry = load_json(registry_path)
+    registry, role_registry_path = load_cron_role_registry(registry_path)
     normalized, mappings = normalize_document(document, source_root, release_root, registry)
     normalized_bytes = (json.dumps(normalized, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     receipt_data = {
@@ -223,6 +256,7 @@ def main() -> None:
         "jobsPath": str(jobs),
         "sourceRoot": str(source_root),
         "releaseRoot": str(release_root),
+        "roleRegistryPath": str(role_registry_path),
         "originalSha256": sha256_bytes(original),
         "normalizedSha256": sha256_bytes(normalized_bytes),
         "jobCount": len(normalized.get("jobs", [])),

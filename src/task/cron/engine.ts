@@ -1232,7 +1232,37 @@ function assertRuntimeRoleAllowed(definition: CronJobDefinition, role: RuntimeRo
     // down the entire research service.
     return false
   }
+  if (role === 'research' && definition.kind !== 'script') {
+    // Research may run reviewed data, audit, evidence, and notification
+    // scripts only.  Any agent definition would route through CronListener's
+    // LLM session path, which is an autonomous-ask capability forbidden by
+    // the research runtime contract.
+    throw new Error(`cron_research_agent_job_forbidden:${definition.id}`)
+  }
+  if (role === 'research' && isResearchExecutionSensitiveDefinition(definition)) {
+    throw new Error(`cron_research_sensitive_job_forbidden:${definition.id}`)
+  }
   return true
+}
+
+/**
+ * Role allowlists are necessary but not sufficient protection: a malformed or
+ * hand-edited registry must not be able to opt paper/order/promotion work into
+ * the research runtime.  Keep the denylist deliberately narrow so public
+ * market-data and evidence/audit jobs remain eligible for research.
+ */
+function isResearchExecutionSensitiveDefinition(definition: CronJobDefinition): boolean {
+  const script = definition.script
+  const tokens = [
+    definition.name,
+    script?.path,
+    ...(script?.args ?? []),
+  ].filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase()
+  return /(^|[^a-z0-9])(paper|papers|order|orders|position|positions|promotion|gated[_-]?improvement|microstructure|p1[_-])([^a-z0-9]|$)/.test(tokens)
+    || definition.name.startsWith('__heartbeat__')
+    || definition.name.startsWith('__snapshot__')
 }
 
 function scheduleAfterFailure(
