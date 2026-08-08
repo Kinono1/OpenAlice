@@ -65,6 +65,15 @@ describe('ExecutionPermitV1', () => {
     expect(result.allowed).toBe(true)
   })
 
+  it('explicitly rejects every research execution permit', () => {
+    const snapshot = makeSnapshot(makeDecision({ paperAllowed: true }), 'research')
+    const result = issueExecutionPermit(makeRequest(), snapshot)
+    expect(result).toEqual({
+      allowed: false,
+      reasonCodes: expect.arrayContaining(['runtime_role_not_primary']),
+    })
+  })
+
   it('rejects account, asset, and process binding mismatches', () => {
     const snapshot = makeSnapshot(makeDecision({ paperAllowed: true }))
     const mismatched = {
@@ -140,11 +149,14 @@ function makeRequest(): ExecutionPermitRequest {
   }
 }
 
-function makeSnapshot(decision: AdmissionDecisionV1): ExecutionAuthoritySnapshot {
+function makeSnapshot(
+  decision: AdmissionDecisionV1,
+  runtimeRole: ExecutionAuthoritySnapshot['identity']['runtimeRole'] = 'primary',
+): ExecutionAuthoritySnapshot {
   return {
     decision,
     identity: {
-      runtimeRole: 'primary',
+      runtimeRole,
       sourceCommit: SOURCE_COMMIT,
       dirtyStateHash: DIRTY_HASH,
       releaseManifestHash: RELEASE_HASH,

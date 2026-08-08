@@ -168,6 +168,7 @@ describe('canary governance', () => {
       backupDir: fixture.backupDir,
       receiptDir: fixture.receiptDir,
       lockTimeoutMs: 100,
+      now: () => new Date('2026-08-01T12:03:00.000Z'),
       adapter,
     })
     expect(receipt).toMatchObject({

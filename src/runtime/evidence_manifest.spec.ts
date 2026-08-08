@@ -81,4 +81,74 @@ describe('evidence_manifest', () => {
       recordsOut: 1,
     })
   })
+
+  it('passes only when a verified release identity is complete and convergent', () => {
+    const manifest = buildEvidenceManifest({
+      job: 'research_data_collect',
+      artifactPath: 'data/runtime/research.json',
+      startedAt: '2026-05-02T00:00:00.000Z',
+      finishedAt: '2026-05-02T00:00:01.000Z',
+      exitCode: 0,
+      releaseIdentity: {
+        sourceKind: 'verified_release',
+        sourceCommit: 'a'.repeat(40),
+        releaseId: 'a'.repeat(40),
+        dirtyStateHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        releaseManifestHash: 'b'.repeat(64),
+        releasePathIdentity: '/immutable/releases/a',
+      },
+    })
+
+    expect(manifest).toMatchObject({
+      schemaVersion: 2,
+      sourceKind: 'verified_release',
+      sourceCommit: 'a'.repeat(40),
+      releaseId: 'a'.repeat(40),
+      sourceIdentityValid: true,
+      evidenceTrust: 'pass',
+    })
+  })
+
+  it('quarantines incomplete verified-release identity and missing Git identity', () => {
+    const invalidRelease = buildEvidenceManifest({
+      job: 'research_data_collect',
+      artifactPath: 'data/runtime/research.json',
+      startedAt: '2026-05-02T00:00:00.000Z',
+      finishedAt: '2026-05-02T00:00:01.000Z',
+      exitCode: 0,
+      releaseIdentity: {
+        sourceKind: 'verified_release',
+        sourceCommit: 'a'.repeat(40),
+        releaseId: 'b'.repeat(40),
+        dirtyStateHash: 'c'.repeat(64),
+        releaseManifestHash: 'd'.repeat(64),
+        releasePathIdentity: '',
+      },
+    })
+    expect(invalidRelease).toMatchObject({
+      sourceIdentityValid: false,
+      sourceIdentityError: 'verified_release_identity_invalid',
+      evidenceTrust: 'quarantine',
+    })
+
+    const noGit = buildEvidenceManifest({
+      job: 'no_git_source',
+      artifactPath: 'data/runtime/research.json',
+      startedAt: '2026-05-02T00:00:00.000Z',
+      finishedAt: '2026-05-02T00:00:01.000Z',
+      exitCode: 0,
+      gitSnapshot: {
+        commit: null,
+        dirty: false,
+        dirtyFilesCount: 0,
+        dirtyHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      },
+    })
+    expect(noGit).toMatchObject({
+      sourceKind: 'git_worktree',
+      sourceIdentityValid: false,
+      sourceIdentityError: 'git_identity_missing',
+      evidenceTrust: 'quarantine',
+    })
+  })
 })

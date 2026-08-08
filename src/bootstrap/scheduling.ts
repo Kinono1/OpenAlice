@@ -68,13 +68,22 @@ export async function startScheduling(input: {
     cronListener.start()
     console.log('cron: engine + listener started')
 
-    await snapshotScheduler.start()
-    if (config.snapshot.enabled) {
-      console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
-    }
-    await heartbeat.start()
-    if (config.heartbeat.enabled) {
-      console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
+    // Heartbeat and snapshot are autonomous agent/account jobs.  They are
+    // deliberately primary-only even though research owns the ordinary Cron
+    // engine for data, audit, and notification work.  Starting either one in
+    // research would attempt to register a primary-only dynamic job and would
+    // also create an implicit autonomous execution path.
+    if (runtime.role === 'primary') {
+      await snapshotScheduler.start()
+      if (config.snapshot.enabled) {
+        console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
+      }
+      await heartbeat.start()
+      if (config.heartbeat.enabled) {
+        console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
+      }
+    } else {
+      console.log(`snapshot/heartbeat: disabled for runtime role ${runtime.role}`)
     }
   } else {
     console.log(`cron: disabled for runtime role ${runtime.role}`)

@@ -26,11 +26,28 @@ import {
 
 const SHA256_RE = /^[a-f0-9]{64}$/
 const COMMIT_RE = /^[a-f0-9]{40}$/
+const EMPTY_DIRTY_STATE_HASH = createHash('sha256').update('').digest('hex')
+const REQUIRED_RELEASE_CLOSURE = [
+  'dist/',
+  'scripts/',
+  'src/',
+  'ops/',
+  'default/',
+  'package.json',
+  'release-metadata/',
+] as const
 
 export const releaseSwitchReceiptV1Schema = z.object({
   schemaVersion: z.literal('release_switch_receipt.v1'),
   receiptId: z.string().regex(SHA256_RE),
-  action: z.enum(['activate', 'rollback', 'rollback_drill']),
+  action: z.enum([
+    'activate',
+    'rollback',
+    'rollback_drill',
+    'activate_research',
+    'rollback_research',
+    'rollback_research_drill',
+  ]),
   executedAt: z.string().datetime(),
   status: z.enum(['pass', 'blocked']),
   fromCommit: z.string().regex(COMMIT_RE).nullable(),
@@ -44,6 +61,12 @@ export const releaseSwitchReceiptV1Schema = z.object({
 }).strict()
 
 export type ReleaseSwitchReceiptV1 = z.infer<typeof releaseSwitchReceiptV1Schema>
+
+export type ReleasePointerName =
+  | 'current'
+  | 'previous'
+  | 'research-current'
+  | 'research-previous'
 
 export async function sha256File(path: string): Promise<string> {
   return createHash('sha256').update(await readFile(path)).digest('hex')
@@ -151,6 +174,69 @@ export async function activateRelease(options: {
   }
 }
 
+/**
+ * Activate an engineering-only research release.  This deliberately has no
+ * credential-rotation escape hatch and never touches production pointers.
+ */
+export async function activateResearchRelease(options: {
+  releaseRoot: string
+  releaseId: string
+  receiptDir?: string
+  now?: Date
+}): Promise<ReleaseSwitchReceiptV1> {
+  const now = options.now ?? new Date()
+  let fromCommit: string | null = null
+  try {
+    const manifest = await verifyReleaseDirectory(options.releaseRoot, options.releaseId)
+    if (manifest.dirtyStateHash !== EMPTY_DIRTY_STATE_HASH) {
+      throw new Error('research_release_dirty_source')
+    }
+    assertFullReleaseClosure(manifest)
+    if (manifest.liveExecutionArmed !== false) {
+      throw new Error('research_release_live_execution_armed')
+    }
+    if (manifest.admissionDecisionId !== null) {
+      throw new Error('research_release_admission_decision_must_be_null')
+    }
+    fromCommit = await readReleasePointer(options.releaseRoot, 'research-current')
+    if (fromCommit && fromCommit !== options.releaseId) {
+      await atomicReplaceReleasePointer(options.releaseRoot, 'research-previous', fromCommit)
+    }
+    await atomicReplaceReleasePointer(options.releaseRoot, 'research-current', options.releaseId)
+    const receipt = buildSwitchReceipt({
+      action: 'activate_research',
+      executedAt: now.toISOString(),
+      status: 'pass',
+      fromCommit,
+      toCommit: options.releaseId,
+      currentCommit: options.releaseId,
+      previousCommit: fromCommit && fromCommit !== options.releaseId ? fromCommit : null,
+      manifestHash: manifest.manifestHash,
+      credentialRotationReceiptId: null,
+      credentialRotationReceiptHash: null,
+      reasonCodes: [],
+    })
+    await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
+    return receipt
+  } catch (error) {
+    const receipt = buildSwitchReceipt({
+      action: 'activate_research',
+      executedAt: now.toISOString(),
+      status: 'blocked',
+      fromCommit,
+      toCommit: options.releaseId,
+      currentCommit: await readReleasePointer(options.releaseRoot, 'research-current'),
+      previousCommit: await readReleasePointer(options.releaseRoot, 'research-previous'),
+      manifestHash: null,
+      credentialRotationReceiptId: null,
+      credentialRotationReceiptHash: null,
+      reasonCodes: [error instanceof Error ? error.message : String(error)],
+    })
+    await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
+    return receipt
+  }
+}
+
 export async function rollbackRelease(options: {
   releaseRoot: string
   receiptDir?: string
@@ -200,9 +286,59 @@ export async function rollbackRelease(options: {
   }
 }
 
+export async function rollbackResearchRelease(options: {
+  releaseRoot: string
+  receiptDir?: string
+  now?: Date
+  drill?: boolean
+}): Promise<ReleaseSwitchReceiptV1> {
+  const now = options.now ?? new Date()
+  const fromCommit = await readReleasePointer(options.releaseRoot, 'research-current')
+  const toCommit = await readReleasePointer(options.releaseRoot, 'research-previous')
+  try {
+    if (!fromCommit) throw new Error('research_current_release_pointer_missing')
+    if (!toCommit) throw new Error('research_previous_release_pointer_missing')
+    const manifest = await verifyReleaseDirectory(options.releaseRoot, toCommit)
+    if (manifest.liveExecutionArmed !== false) throw new Error('research_release_live_execution_armed')
+    await atomicReplaceReleasePointer(options.releaseRoot, 'research-current', toCommit)
+    await atomicReplaceReleasePointer(options.releaseRoot, 'research-previous', fromCommit)
+    const receipt = buildSwitchReceipt({
+      action: options.drill ? 'rollback_research_drill' : 'rollback_research',
+      executedAt: now.toISOString(),
+      status: 'pass',
+      fromCommit,
+      toCommit,
+      currentCommit: toCommit,
+      previousCommit: fromCommit,
+      manifestHash: manifest.manifestHash,
+      credentialRotationReceiptId: null,
+      credentialRotationReceiptHash: null,
+      reasonCodes: [],
+    })
+    await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
+    return receipt
+  } catch (error) {
+    const receipt = buildSwitchReceipt({
+      action: options.drill ? 'rollback_research_drill' : 'rollback_research',
+      executedAt: now.toISOString(),
+      status: 'blocked',
+      fromCommit,
+      toCommit,
+      currentCommit: await readReleasePointer(options.releaseRoot, 'research-current'),
+      previousCommit: await readReleasePointer(options.releaseRoot, 'research-previous'),
+      manifestHash: null,
+      credentialRotationReceiptId: null,
+      credentialRotationReceiptHash: null,
+      reasonCodes: [error instanceof Error ? error.message : String(error)],
+    })
+    await persistSwitchReceipt(options.releaseRoot, receipt, options.receiptDir)
+    return receipt
+  }
+}
+
 export async function readReleasePointer(
   releaseRoot: string,
-  name: 'current' | 'previous',
+  name: ReleasePointerName,
 ): Promise<string | null> {
   const root = await realpath(resolve(releaseRoot))
   const path = join(root, name)
@@ -292,7 +428,7 @@ export async function loadCredentialRotationReceiptBinding(
 
 async function atomicReplaceReleasePointer(
   releaseRoot: string,
-  name: 'current' | 'previous',
+  name: ReleasePointerName,
   releaseId: string,
 ): Promise<void> {
   assertReleaseId(releaseId)
@@ -346,6 +482,15 @@ function assertWithin(parent: string, child: string): void {
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`missing_${field}`)
   return value
+}
+
+function assertFullReleaseClosure(manifest: ReleaseManifestV1): void {
+  const paths = Object.keys(manifest.artifactHashes)
+  for (const prefix of REQUIRED_RELEASE_CLOSURE) {
+    if (!paths.some((path) => path === prefix || path.startsWith(prefix))) {
+      throw new Error(`research_release_closure_missing:${prefix}`)
+    }
+  }
 }
 
 function isEnoent(error: unknown): boolean {

@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { writeEvidenceManifestForArtifact } from '../src/runtime/evidence_manifest.js'
 
@@ -28,6 +29,11 @@ export interface DirtyWorktreeEntry {
 export interface DirtyWorktreeAudit {
   generatedAt: string
   repoRoot: string
+  purpose: 'canonical_release' | 'legacy_wip' | 'unknown'
+  sourceMode: 'git_worktree' | 'clean_worktree' | 'verified_release' | 'unknown'
+  branch: string | null
+  commit: string | null
+  statusHash: string
   isDirty: boolean
   counts: {
     total: number
@@ -84,6 +90,9 @@ export interface DirtyWorktreeGovernance {
 export interface AuditCliArgs {
   json: boolean
   outputPath: string | null
+  repoRoot?: string | null
+  purpose?: DirtyWorktreeAudit['purpose']
+  sourceMode?: DirtyWorktreeAudit['sourceMode']
 }
 
 const DEFAULT_OUTPUT_PATH = 'data/runtime/dirty_worktree_audit.latest.json'
@@ -116,10 +125,22 @@ const PROMOTION_CRITICAL_SCOPE_PATHS = [
 
 export function parseAuditArgs(argv: string[]): AuditCliArgs {
   const raw = parseRawArgs(argv)
-  return {
+  const result: AuditCliArgs = {
     json: parseBool(raw.get('json'), false),
     outputPath: raw.get('output') ?? raw.get('outputPath') ?? null,
   }
+  if (raw.has('repoRoot')) result.repoRoot = raw.get('repoRoot') ?? null
+  if (raw.has('purpose')) {
+    result.purpose = raw.get('purpose') === 'canonical_release' || raw.get('purpose') === 'legacy_wip'
+      ? raw.get('purpose') as DirtyWorktreeAudit['purpose']
+      : 'unknown'
+  }
+  if (raw.has('sourceMode')) {
+    result.sourceMode = raw.get('sourceMode') === 'git_worktree' || raw.get('sourceMode') === 'clean_worktree' || raw.get('sourceMode') === 'verified_release'
+      ? raw.get('sourceMode') as DirtyWorktreeAudit['sourceMode']
+      : 'unknown'
+  }
+  return result
 }
 
 export async function readGitPorcelainStatus(repoRoot = process.cwd()): Promise<string> {
@@ -141,6 +162,10 @@ export function buildDirtyWorktreeAudit(input: {
   porcelain: string
   repoRoot?: string
   generatedAt?: string
+  purpose?: DirtyWorktreeAudit['purpose']
+  sourceMode?: DirtyWorktreeAudit['sourceMode']
+  branch?: string | null
+  commit?: string | null
 }): DirtyWorktreeAudit {
   const repoRoot = input.repoRoot ?? process.cwd()
   const entries = parsePorcelainStatus(input.porcelain)
@@ -170,6 +195,11 @@ export function buildDirtyWorktreeAudit(input: {
   return {
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     repoRoot,
+    purpose: input.purpose ?? 'unknown',
+    sourceMode: input.sourceMode ?? 'unknown',
+    branch: input.branch ?? null,
+    commit: input.commit ?? null,
+    statusHash: createHash('sha256').update(input.porcelain).digest('hex'),
     isDirty: entries.length > 0,
     counts,
     samples,
@@ -185,6 +215,10 @@ export function renderDirtyWorktreeMarkdown(audit: DirtyWorktreeAudit): string {
   lines.push('# Dirty Worktree Audit')
   lines.push('')
   lines.push(`Repo: \`${audit.repoRoot}\``)
+  lines.push(`Purpose: \`${audit.purpose}\``)
+  lines.push(`Source mode: \`${audit.sourceMode}\``)
+  lines.push(`Commit: \`${audit.commit ?? 'unknown'}\``)
+  lines.push(`Status hash: \`${audit.statusHash}\``)
   lines.push(`Generated: \`${audit.generatedAt}\``)
   lines.push(`Dirty entries: ${audit.counts.total}`)
   lines.push(`Promotion-relevant dirty entries: ${audit.counts.scopeCounts.promotionRelevantTotal}`)
@@ -264,9 +298,32 @@ export function renderDirtyWorktreeMarkdown(audit: DirtyWorktreeAudit): string {
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const startedAt = new Date()
   const args = parseAuditArgs(argv)
-  const repoRoot = process.cwd()
-  const porcelain = await readGitPorcelainStatus(repoRoot)
-  const audit = buildDirtyWorktreeAudit({ porcelain, repoRoot })
+  const repoRoot = args.repoRoot ? resolve(args.repoRoot) : process.cwd()
+  const sourceMode = args.sourceMode ?? 'git_worktree'
+  let porcelain = ''
+  let branch: string | null = null
+  let commit: string | null = null
+  if (sourceMode === 'verified_release') {
+    const manifestPath = resolve(repoRoot, 'release_manifest.v1.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+    if (manifest.liveExecutionArmed !== false || typeof manifest.sourceCommit !== 'string' || typeof manifest.dirtyStateHash !== 'string') {
+      throw new Error('verified_release_audit_manifest_invalid')
+    }
+    branch = null
+    commit = manifest.sourceCommit
+  } else {
+    porcelain = await readGitPorcelainStatus(repoRoot)
+    branch = await readGitValue(repoRoot, ['symbolic-ref', '--short', 'HEAD'])
+    commit = await readGitValue(repoRoot, ['rev-parse', 'HEAD'])
+  }
+  const audit = buildDirtyWorktreeAudit({
+    porcelain,
+    repoRoot,
+    purpose: args.purpose ?? 'unknown',
+    sourceMode,
+    branch,
+    commit,
+  })
   const outputPath = args.outputPath ? resolve(args.outputPath) : null
   if (outputPath) {
     await mkdir(dirname(outputPath), { recursive: true })
@@ -287,6 +344,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(JSON.stringify(audit, null, 2))
   } else {
     console.log(renderDirtyWorktreeMarkdown(audit))
+  }
+}
+
+async function readGitValue(repoRoot: string, args: string[]): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd: repoRoot })
+    return stdout.trim() || null
+  } catch {
+    return null
   }
 }
 

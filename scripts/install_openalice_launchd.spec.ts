@@ -129,4 +129,29 @@ describe('install_openalice_launchd', () => {
     expect(args.dryRun).toBe(false)
     expect(args.launch).toBe(true)
   })
+
+  it('persists research role and explicit data/release roots without secrets', () => {
+    process.env.OPENALICE_RUNTIME_ROLE = 'research'
+    process.env.OPENALICE_RELEASE_DIR = '/repo/OpenAlice/runtime/releases'
+    process.env.OPENALICE_DATA_DIR = '/repo/OpenAlice/data'
+    process.env.OPENALICE_SHARED_DATA_INPUT_DIR = '/repo/OpenAlice/data'
+    process.env.OPENALICE_STATE_DIR = '/repo/OpenAlice/data'
+    process.env.OPENALICE_ARTIFACT_DIR = '/repo/OpenAlice/data/runtime'
+    process.env.OPENALICE_LOG_DIR = '/repo/OpenAlice/logs'
+    process.env.OPENALICE_LEGACY_WIP_ROOT = '/repo/OpenAlice-legacy-wip'
+
+    const config = buildLaunchdConfig({
+      label: 'ai.openalice.main',
+      scriptPath: '/repo/OpenAlice/runtime/bin/launch_openalice_current.sh',
+      logPath: '/repo/OpenAlice/logs/openalice.log',
+      errorLogPath: '/repo/OpenAlice/logs/openalice.err.log',
+    })
+    const plist = renderLaunchdPlist(config)
+    expect(plist).toContain('<key>OPENALICE_RUNTIME_ROLE</key>')
+    expect(plist).toContain('<string>research</string>')
+    expect(plist).toContain('<key>OPENALICE_RELEASE_DIR</key>')
+    expect(plist).toContain('<string>/repo/OpenAlice/runtime/releases</string>')
+    expect(plist).toContain('<key>OPENALICE_LEGACY_WIP_ROOT</key>')
+    expect(plist).not.toContain('TELEGRAM_BOT_TOKEN=')
+  })
 })

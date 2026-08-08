@@ -27,7 +27,10 @@ export function assembleChannels(input: {
   let context: EngineContext | null = null
   let connectorsReconnecting = false
 
-  if (config.connectors.mcp.port) {
+  // Research exposes the read-only web surface, but not the MCP tool
+  // transport. MCP/LLM autonomous asks are outside the research capability
+  // matrix and must fail closed at the channel boundary as well as in tools.
+  if (runtime.role !== 'research' && config.connectors.mcp.port) {
     corePlugins.push(
       new McpPlugin(
         toolCenter,
@@ -45,12 +48,20 @@ export function assembleChannels(input: {
     }))
   }
 
-  if (runtime.role === 'primary') {
-    if (config.connectors.mcpAsk.enabled && config.connectors.mcpAsk.port) {
-      optionalPlugins.set('mcp-ask', new McpAskPlugin({
-        port: config.connectors.mcpAsk.port,
-        allowOrigins: config.connectors.mcpAsk.allowOrigins,
-      }))
+  if (runtime.role === 'primary' || runtime.role === 'research') {
+    if (runtime.role === 'primary') {
+      if (config.connectors.mcpAsk.enabled && config.connectors.mcpAsk.port) {
+        optionalPlugins.set('mcp-ask', new McpAskPlugin({
+          port: config.connectors.mcpAsk.port,
+          allowOrigins: config.connectors.mcpAsk.allowOrigins,
+        }))
+      }
+      if (config.marketData.apiServer.enabled) {
+        optionalPlugins.set(
+          'openbb-server',
+          new OpenBBServerPlugin({ port: config.marketData.apiServer.port }),
+        )
+      }
     }
     if (config.connectors.telegram.enabled) {
       optionalPlugins.set('telegram', new TelegramPlugin({
@@ -61,16 +72,10 @@ export function assembleChannels(input: {
         ),
       }))
     }
-    if (config.marketData.apiServer.enabled) {
-      optionalPlugins.set(
-        'openbb-server',
-        new OpenBBServerPlugin({ port: config.marketData.apiServer.port }),
-      )
-    }
   }
 
   const reconnectConnectors = async (): Promise<ReconnectResult> => {
-    if (runtime.role !== 'primary') {
+    if (runtime.role !== 'primary' && runtime.role !== 'research') {
       return {
         success: false,
         error: `runtime role ${runtime.role} forbids connector mutation`,
@@ -85,20 +90,22 @@ export function assembleChannels(input: {
       const fresh = await loadConfig()
       const changes: string[] = []
 
-      const mcpAskWanted = fresh.connectors.mcpAsk.enabled && !!fresh.connectors.mcpAsk.port
-      const mcpAskRunning = optionalPlugins.has('mcp-ask')
-      if (mcpAskRunning && !mcpAskWanted) {
-        await optionalPlugins.get('mcp-ask')!.stop()
-        optionalPlugins.delete('mcp-ask')
-        changes.push('mcp-ask stopped')
-      } else if (!mcpAskRunning && mcpAskWanted) {
-        const plugin = new McpAskPlugin({
-          port: fresh.connectors.mcpAsk.port!,
-          allowOrigins: fresh.connectors.mcpAsk.allowOrigins,
-        })
-        await plugin.start(context)
-        optionalPlugins.set('mcp-ask', plugin)
-        changes.push('mcp-ask started')
+      if (runtime.role === 'primary') {
+        const mcpAskWanted = fresh.connectors.mcpAsk.enabled && !!fresh.connectors.mcpAsk.port
+        const mcpAskRunning = optionalPlugins.has('mcp-ask')
+        if (mcpAskRunning && !mcpAskWanted) {
+          await optionalPlugins.get('mcp-ask')!.stop()
+          optionalPlugins.delete('mcp-ask')
+          changes.push('mcp-ask stopped')
+        } else if (!mcpAskRunning && mcpAskWanted) {
+          const plugin = new McpAskPlugin({
+            port: fresh.connectors.mcpAsk.port!,
+            allowOrigins: fresh.connectors.mcpAsk.allowOrigins,
+          })
+          await plugin.start(context)
+          optionalPlugins.set('mcp-ask', plugin)
+          changes.push('mcp-ask started')
+        }
       }
 
       const telegramWanted = fresh.connectors.telegram.enabled
@@ -120,27 +127,29 @@ export function assembleChannels(input: {
         changes.push('telegram started')
       }
 
-      const openbbWanted = fresh.marketData.apiServer.enabled
-      const openbbRunning = optionalPlugins.has('openbb-server')
-      if (openbbRunning && !openbbWanted) {
-        await optionalPlugins.get('openbb-server')!.stop()
-        optionalPlugins.delete('openbb-server')
-        changes.push('openbb-server stopped')
-      } else if (!openbbRunning && openbbWanted) {
-        const plugin = new OpenBBServerPlugin({ port: fresh.marketData.apiServer.port })
-        await plugin.start(context)
-        optionalPlugins.set('openbb-server', plugin)
-        changes.push('openbb-server started')
-      } else if (openbbRunning && openbbWanted) {
-        const current = optionalPlugins.get('openbb-server') as OpenBBServerPlugin
-        if (current.port !== fresh.marketData.apiServer.port) {
-          await current.stop()
-          const plugin = new OpenBBServerPlugin({
-            port: fresh.marketData.apiServer.port,
-          })
+      if (runtime.role === 'primary') {
+        const openbbWanted = fresh.marketData.apiServer.enabled
+        const openbbRunning = optionalPlugins.has('openbb-server')
+        if (openbbRunning && !openbbWanted) {
+          await optionalPlugins.get('openbb-server')!.stop()
+          optionalPlugins.delete('openbb-server')
+          changes.push('openbb-server stopped')
+        } else if (!openbbRunning && openbbWanted) {
+          const plugin = new OpenBBServerPlugin({ port: fresh.marketData.apiServer.port })
           await plugin.start(context)
           optionalPlugins.set('openbb-server', plugin)
-          changes.push(`openbb-server restarted on port ${fresh.marketData.apiServer.port}`)
+          changes.push('openbb-server started')
+        } else if (openbbRunning && openbbWanted) {
+          const current = optionalPlugins.get('openbb-server') as OpenBBServerPlugin
+          if (current.port !== fresh.marketData.apiServer.port) {
+            await current.stop()
+            const plugin = new OpenBBServerPlugin({
+              port: fresh.marketData.apiServer.port,
+            })
+            await plugin.start(context)
+            optionalPlugins.set('openbb-server', plugin)
+            changes.push(`openbb-server restarted on port ${fresh.marketData.apiServer.port}`)
+          }
         }
       }
       if (changes.length > 0) {

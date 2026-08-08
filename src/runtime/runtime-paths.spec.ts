@@ -51,6 +51,32 @@ describe('RuntimePaths', () => {
     expect(paths.portOverrides).toEqual({ web: 3102, mcp: 3101, mcpAsk: undefined })
   })
 
+  it('gives research the shared-data writer role without execution authority', () => {
+    const repoRoot = '/repo/OpenAlice'
+    const paths = resolveRuntimePaths({
+      repoRoot,
+      env: {
+        OPENALICE_RUNTIME_ROLE: 'research',
+        OPENALICE_DATA_DIR: '/Users/kino/OpenAlice/data',
+        OPENALICE_SHARED_DATA_INPUT_DIR: '/Users/kino/OpenAlice/data',
+        OPENALICE_STATE_DIR: '/Users/kino/OpenAlice/data',
+        OPENALICE_ARTIFACT_DIR: '/Users/kino/OpenAlice/data/runtime',
+        OPENALICE_LOG_DIR: '/Users/kino/OpenAlice/logs',
+      },
+    })
+
+    expect(paths.role).toBe('research')
+    expect(paths.sharedDataInputDir).toBe('/Users/kino/OpenAlice/data')
+    expect(paths.capabilities).toEqual({
+      ownsCron: true,
+      initializesAccounts: false,
+      orderSubmissionPathEnabled: false,
+      writesPromotion: false,
+      writesSharedData: true,
+    })
+    expect(paths.portOverrides).toEqual({ web: undefined, mcp: undefined, mcpAsk: undefined })
+  })
+
   it('requires test state to live below the OS temporary directory', () => {
     expect(() => resolveRuntimePaths({
       repoRoot: '/repo/OpenAlice',

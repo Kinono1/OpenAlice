@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildReleaseManifest } from './release_manifest.js'
 import {
@@ -9,8 +9,10 @@ import {
 } from './credential_rotation.js'
 import {
   activateRelease,
+  activateResearchRelease,
   readReleasePointer,
   rollbackRelease,
+  rollbackResearchRelease,
   sha256File,
   verifyReleaseDirectory,
   writeImmutableReleaseManifest,
@@ -19,6 +21,7 @@ import {
 const COMMIT_A = '1'.repeat(40)
 const COMMIT_B = '2'.repeat(40)
 const DIRTY_HASH = '3'.repeat(64)
+const EMPTY_DIRTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
 describe('local release manager', () => {
   it('verifies immutable releases and atomically maintains current/previous', async () => {
@@ -102,6 +105,104 @@ describe('local release manager', () => {
     expect(blocked.reasonCodes).toContain('credential_rotation_receipt_blocked')
     expect(await readReleasePointer(root, 'current')).toBeNull()
   })
+
+  it('activates and rolls back research pointers without production credentials', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-research-release-'))
+    await createRelease(root, COMMIT_A, { dirtyStateHash: EMPTY_DIRTY_HASH })
+    await createRelease(root, COMMIT_B, { dirtyStateHash: EMPTY_DIRTY_HASH })
+
+    const first = await activateResearchRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_A,
+    })
+    expect(first).toMatchObject({
+      status: 'pass',
+      action: 'activate_research',
+      credentialRotationReceiptId: null,
+    })
+    expect(await readReleasePointer(root, 'research-current')).toBe(COMMIT_A)
+    expect(await readReleasePointer(root, 'current')).toBeNull()
+
+    const second = await activateResearchRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_B,
+    })
+    expect(second.status).toBe('pass')
+    expect(await readReleasePointer(root, 'research-current')).toBe(COMMIT_B)
+    expect(await readReleasePointer(root, 'research-previous')).toBe(COMMIT_A)
+    expect(await readReleasePointer(root, 'current')).toBeNull()
+
+    const rollback = await rollbackResearchRelease({
+      releaseRoot: root,
+      drill: true,
+    })
+    expect(rollback).toMatchObject({
+      status: 'pass',
+      action: 'rollback_research_drill',
+    })
+    expect(await readReleasePointer(root, 'research-current')).toBe(COMMIT_A)
+    expect(await readReleasePointer(root, 'research-previous')).toBe(COMMIT_B)
+  })
+
+  it('blocks the first research activation when an admission decision is bound', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-research-admission-block-'))
+    await createRelease(root, COMMIT_A, {
+      admissionDecisionId: '9'.repeat(64),
+      dirtyStateHash: EMPTY_DIRTY_HASH,
+    })
+
+    const receipt = await activateResearchRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_A,
+    })
+    expect(receipt).toMatchObject({
+      status: 'blocked',
+      action: 'activate_research',
+      reasonCodes: ['research_release_admission_decision_must_be_null'],
+    })
+    expect(await readReleasePointer(root, 'research-current')).toBeNull()
+  })
+
+  it('fails closed for a manifest that claims live execution is armed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-research-live-block-'))
+    const releasePath = join(root, COMMIT_A)
+    await mkdir(join(releasePath, 'dist'), { recursive: true })
+    await writeFile(join(releasePath, 'dist/main.js'), 'candidate\n')
+    await writeFile(join(releasePath, 'release_manifest.v1.json'), `${JSON.stringify({
+      schemaVersion: 'release_manifest.v1',
+      manifestHash: 'a'.repeat(64),
+      releaseId: COMMIT_A,
+      sourceCommit: COMMIT_A,
+      dirtyStateHash: DIRTY_HASH,
+      builtAt: '2026-08-01T12:00:00.000Z',
+      runtimeEntry: 'dist/main.js',
+      artifactHashes: { 'dist/main.js': 'b'.repeat(64) },
+      pipelineRegistryHash: '4'.repeat(64),
+      dependencyLockHash: '5'.repeat(64),
+      strategyConfigHash: '6'.repeat(64),
+      validationReceipts: [{
+        checkId: 'engineering',
+        path: 'receipt.json',
+        receiptHash: '7'.repeat(64),
+        sourceCommit: COMMIT_A,
+        dirtyStateHash: DIRTY_HASH,
+        executedAt: '2026-08-01T11:59:00.000Z',
+        expiresAt: '2026-08-02T12:00:00.000Z',
+        status: 'pass',
+      }],
+      admissionDecisionId: null,
+      engineeringChecks: ['build'],
+      liveExecutionArmed: true,
+    })}\n`)
+
+    const receipt = await activateResearchRelease({
+      releaseRoot: root,
+      releaseId: COMMIT_A,
+    })
+    expect(receipt.status).toBe('blocked')
+    expect(receipt.reasonCodes[0]).toContain('liveExecutionArmed')
+    expect(await readReleasePointer(root, 'research-current')).toBeNull()
+  })
 })
 
 async function createCredentialRotationReceipt(
@@ -130,18 +231,39 @@ async function createCredentialRotationReceipt(
   return path
 }
 
-async function createRelease(root: string, commit: string) {
+async function createRelease(
+  root: string,
+  commit: string,
+  overrides: { admissionDecisionId?: string | null; dirtyStateHash?: string } = {},
+) {
   const path = join(root, commit)
   await mkdir(join(path, 'dist'), { recursive: true })
   await writeFile(join(path, 'dist/main.js'), `console.log(${JSON.stringify(commit)})\n`)
-  const artifactHash = await sha256File(join(path, 'dist/main.js'))
+  const closureFiles: Record<string, string> = {
+    'scripts/runner.sh': '#!/bin/sh\n',
+    'src/runtime.ts': 'export {}\n',
+    'ops/pipeline.json': '{}\n',
+    'default/config.json': '{}\n',
+    'package.json': '{"name":"openalice-test"}\n',
+    'release-metadata/pipeline_registry.v1.json': '{"schemaVersion":"pipeline_registry.v1","entries":[]}\n',
+  }
+  for (const [relativePath, content] of Object.entries(closureFiles)) {
+    await mkdir(dirname(join(path, relativePath)), { recursive: true })
+    await writeFile(join(path, relativePath), content)
+  }
+  const artifactHashes: Record<string, string> = {
+    'dist/main.js': await sha256File(join(path, 'dist/main.js')),
+  }
+  for (const relativePath of Object.keys(closureFiles)) {
+    artifactHashes[relativePath] = await sha256File(join(path, relativePath))
+  }
   const manifest = buildReleaseManifest({
     releaseId: commit,
     sourceCommit: commit,
-    dirtyStateHash: DIRTY_HASH,
+    dirtyStateHash: overrides.dirtyStateHash ?? DIRTY_HASH,
     builtAt: '2026-08-01T12:00:00.000Z',
     runtimeEntry: 'dist/main.js',
-    artifactHashes: { 'dist/main.js': artifactHash },
+    artifactHashes,
     pipelineRegistryHash: '4'.repeat(64),
     dependencyLockHash: '5'.repeat(64),
     strategyConfigHash: '6'.repeat(64),
@@ -150,12 +272,12 @@ async function createRelease(root: string, commit: string) {
       path: 'receipt.json',
       receiptHash: '7'.repeat(64),
       sourceCommit: commit,
-      dirtyStateHash: DIRTY_HASH,
+      dirtyStateHash: overrides.dirtyStateHash ?? DIRTY_HASH,
       executedAt: '2026-08-01T11:59:00.000Z',
       expiresAt: '2026-08-02T12:00:00.000Z',
       status: 'pass',
     }],
-    admissionDecisionId: null,
+    admissionDecisionId: overrides.admissionDecisionId ?? null,
     engineeringChecks: ['build', 'typecheck', 'tests'],
     liveExecutionArmed: false,
   })

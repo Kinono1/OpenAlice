@@ -27,6 +27,14 @@ export interface RuntimeManifestCoverageItem {
   manifestBusinessStatus: string | null
   manifestErrorClass: string | null
   manifestRunId: string | null
+  manifestSchemaVersion: number | null
+  manifestSourceKind: string | null
+  manifestSourceCommit: string | null
+  manifestDirtyStateHash: string | null
+  manifestReleaseId: string | null
+  manifestReleaseManifestHash: string | null
+  manifestReleasePathIdentity: string | null
+  manifestSourceIdentityValid: boolean | null
   manifestGitCommit: string | null
   manifestGitDirty: boolean | null
   manifestGitDirtyFilesCount: number | null
@@ -86,6 +94,14 @@ export interface RuntimeManifestCoverageReport {
   }
   businessStatusSummary: Record<string, number>
   errorClassSummary: Record<string, number>
+  sourceIdentitySummary: {
+    requiredIdentityCount: number
+    validIdentityCount: number
+    invalidIdentityCount: number
+    uniqueIdentityKeys: string[]
+    consistent: boolean
+    sourceKinds: string[]
+  }
   trustBlockingReasons: string[]
   blockingReasons: string[]
   items: RuntimeManifestCoverageItem[]
@@ -96,6 +112,7 @@ export interface RuntimeManifestCoverageArgs {
   runtimeDir: string
   outputPath: string | null
   json: boolean
+  expectedSourceKind?: 'git_worktree' | 'verified_release'
 }
 
 export const DEFAULT_RUNTIME_MANIFEST_COVERAGE_OUTPUT = 'data/runtime/runtime_manifest_coverage.latest.json'
@@ -134,10 +151,12 @@ export const DEFAULT_REQUIRED_RUNTIME_ARTIFACTS: RequiredRuntimeArtifact[] = [
 
 export function parseRuntimeManifestCoverageArgs(argv: string[]): RuntimeManifestCoverageArgs {
   const raw = parseRawArgs(argv)
+  const expectedSourceKind = parseSourceKind(raw.get('sourceKind'))
   return {
     runtimeDir: raw.get('runtimeDir') ?? 'data/runtime',
     outputPath: parseNullablePath(raw.get('output') ?? raw.get('outputPath') ?? DEFAULT_RUNTIME_MANIFEST_COVERAGE_OUTPUT),
     json: parseBool(raw.get('json'), false),
+    ...(expectedSourceKind ? { expectedSourceKind } : {}),
   }
 }
 
@@ -145,10 +164,11 @@ export function buildRuntimeManifestCoverageReport(input: {
   runtimeDir: string
   requiredArtifacts?: RequiredRuntimeArtifact[]
   generatedAt?: string
+  expectedSourceKind?: 'git_worktree' | 'verified_release'
 }): RuntimeManifestCoverageReport {
   const runtimeDir = resolve(input.runtimeDir)
   const items = (input.requiredArtifacts ?? DEFAULT_REQUIRED_RUNTIME_ARTIFACTS)
-    .map((artifact) => buildCoverageItem(runtimeDir, artifact))
+    .map((artifact) => buildCoverageItem(runtimeDir, artifact, input.expectedSourceKind))
   const blockingReasons = items.flatMap((item) => item.blockingReasons)
   const coverage = {
     requiredArtifacts: items.filter((item) => item.required).length,
@@ -186,13 +206,18 @@ export function buildRuntimeManifestCoverageReport(input: {
     coverage.missingManifests === 0 &&
     coverage.hashMismatchManifests === 0 &&
     coverage.invalidManifests === 0
-  const allRequiredManifestsPass = allRequiredManifestsPresentAndHashMatched && passManifestCount === requiredPassManifests
+  const sourceIdentitySummary = buildSourceIdentitySummary(items, input.expectedSourceKind)
+  const allRequiredManifestsIdentityMatched = sourceIdentitySummary.consistent
+  const allRequiredManifestsPass = allRequiredManifestsPresentAndHashMatched
+    && allRequiredManifestsIdentityMatched
+    && passManifestCount === requiredPassManifests
   const trustBlockingReasons = buildTrustBlockingReasons({
     requiredPassManifests,
     passManifestCount,
     quarantineManifestCount,
     trustSummary,
-    allRequiredManifestsPresentAndHashMatched,
+    allRequiredManifestsPresentAndHashMatched: allRequiredManifestsPresentAndHashMatched && allRequiredManifestsIdentityMatched,
+    sourceIdentitySummary,
   })
   const evidenceUsabilityStatus: RuntimeManifestCoverageReport['evidenceUsabilityStatus'] =
     allRequiredManifestsPass
@@ -238,6 +263,7 @@ export function buildRuntimeManifestCoverageReport(input: {
     manifestDirtyStateSummary,
     businessStatusSummary,
     errorClassSummary,
+    sourceIdentitySummary,
     trustBlockingReasons,
     blockingReasons,
     items,
@@ -245,6 +271,7 @@ export function buildRuntimeManifestCoverageReport(input: {
       'This audit only checks runtime artifact manifest coverage and integrity.',
       'coverageStatus=complete only means required files and sidecar hashes are present. evidenceUsabilityStatus must be pass before promotion evidence can be used.',
       'evidenceTrust=quarantine is valid coverage under a dirty worktree, but it remains unusable for promotion or monetization conclusions.',
+      'Canonical trust also requires schema-v2 source identity convergence across all required manifests.',
       'This artifact cannot authorize paper orders, live orders, leverage changes, or promotion.',
     ],
   }
@@ -254,7 +281,10 @@ export async function runRuntimeManifestCoverageAudit(
   args: RuntimeManifestCoverageArgs,
 ): Promise<RuntimeManifestCoverageReport> {
   const startedAt = new Date()
-  const report = buildRuntimeManifestCoverageReport({ runtimeDir: args.runtimeDir })
+  const report = buildRuntimeManifestCoverageReport({
+    runtimeDir: args.runtimeDir,
+    expectedSourceKind: args.expectedSourceKind,
+  })
   if (args.outputPath) {
     const outputPath = resolve(args.outputPath)
     await mkdir(dirname(outputPath), { recursive: true })
@@ -335,7 +365,11 @@ export function renderRuntimeManifestCoverageMarkdown(report: RuntimeManifestCov
   return `${lines.join('\n')}\n`
 }
 
-function buildCoverageItem(runtimeDir: string, artifact: RequiredRuntimeArtifact): RuntimeManifestCoverageItem {
+function buildCoverageItem(
+  runtimeDir: string,
+  artifact: RequiredRuntimeArtifact,
+  expectedSourceKind?: 'git_worktree' | 'verified_release',
+): RuntimeManifestCoverageItem {
   const artifactPath = resolve(runtimeDir, artifact.relativePath)
   const manifestPath = `${artifactPath}.manifest.json`
   const artifactExists = existsSync(artifactPath)
@@ -361,6 +395,14 @@ function buildCoverageItem(runtimeDir: string, artifact: RequiredRuntimeArtifact
   const manifestBusinessStatus = readString(manifest?.businessStatus)
   const manifestErrorClass = readString(manifest?.errorClass)
   const manifestRunId = readString(manifest?.runId)
+  const manifestSchemaVersion = readNumber(manifest?.schemaVersion)
+  const manifestSourceKind = readString(manifest?.sourceKind)
+  const manifestSourceCommit = readString(manifest?.sourceCommit)
+  const manifestDirtyStateHash = readString(manifest?.dirtyStateHash)
+  const manifestReleaseId = readString(manifest?.releaseId)
+  const manifestReleaseManifestHash = readString(manifest?.releaseManifestHash)
+  const manifestReleasePathIdentity = readString(manifest?.releasePathIdentity)
+  const manifestSourceIdentityValid = readBoolean(manifest?.sourceIdentityValid)
   const manifestGit = asRecord(manifest?.git)
   const manifestGitCommit = readString(manifestGit?.commit)
   const manifestGitDirty = readBoolean(manifestGit?.dirty)
@@ -396,6 +438,18 @@ function buildCoverageItem(runtimeDir: string, artifact: RequiredRuntimeArtifact
     if (!evidenceTrust) blockingReasons.push(`evidence_trust_missing:${artifact.key}`)
     else if (!isEvidenceTrust(evidenceTrust)) blockingReasons.push(`evidence_trust_invalid:${artifact.key}:${evidenceTrust}`)
     if (dqStatus && !isEvidenceTrust(dqStatus)) blockingReasons.push(`dq_status_invalid:${artifact.key}:${dqStatus}`)
+    // Legacy manifests are still readable for diagnostics, but can never be
+    // counted as canonical trust evidence after the source-binding upgrade.
+    if (manifestSchemaVersion !== 2) {
+      trustBlockingReasons.push(`evidence_manifest_legacy_schema:${artifact.key}`)
+    } else if (manifestSourceIdentityValid !== true) {
+      trustBlockingReasons.push(`evidence_source_identity_invalid:${artifact.key}`)
+    }
+    if (expectedSourceKind && manifestSourceKind !== expectedSourceKind) {
+      trustBlockingReasons.push(
+        `evidence_source_kind_mismatch:${artifact.key}:${manifestSourceKind ?? 'missing'}:${expectedSourceKind}`,
+      )
+    }
   }
 
   return {
@@ -414,6 +468,14 @@ function buildCoverageItem(runtimeDir: string, artifact: RequiredRuntimeArtifact
     manifestBusinessStatus,
     manifestErrorClass,
     manifestRunId,
+    manifestSchemaVersion,
+    manifestSourceKind,
+    manifestSourceCommit,
+    manifestDirtyStateHash,
+    manifestReleaseId,
+    manifestReleaseManifestHash,
+    manifestReleasePathIdentity,
+    manifestSourceIdentityValid,
     manifestGitCommit,
     manifestGitDirty,
     manifestGitDirtyFilesCount,
@@ -474,6 +536,7 @@ function buildTrustBlockingReasons(input: {
   quarantineManifestCount: number
   trustSummary: RuntimeManifestCoverageReport['trustSummary']
   allRequiredManifestsPresentAndHashMatched: boolean
+  sourceIdentitySummary: RuntimeManifestCoverageReport['sourceIdentitySummary']
 }): string[] {
   const reasons: string[] = []
   if (!input.allRequiredManifestsPresentAndHashMatched) {
@@ -488,7 +551,45 @@ function buildTrustBlockingReasons(input: {
   if (input.trustSummary.fail > 0) reasons.push(`evidence_trust_fail:${input.trustSummary.fail}`)
   if (input.trustSummary.missing > 0) reasons.push(`evidence_trust_missing:${input.trustSummary.missing}`)
   if (input.trustSummary.invalid > 0) reasons.push(`evidence_trust_invalid:${input.trustSummary.invalid}`)
+  if (input.sourceIdentitySummary.invalidIdentityCount > 0) {
+    reasons.push(`evidence_source_identity_invalid:${input.sourceIdentitySummary.invalidIdentityCount}`)
+  }
+  if (!input.sourceIdentitySummary.consistent) reasons.push('evidence_source_identity_mismatch')
   return reasons
+}
+
+function buildSourceIdentitySummary(
+  items: RuntimeManifestCoverageItem[],
+  expectedSourceKind?: 'git_worktree' | 'verified_release',
+): RuntimeManifestCoverageReport['sourceIdentitySummary'] {
+  const required = items.filter((item) => item.required && item.manifestExists)
+  const valid = required.filter((item) => (
+    item.manifestSchemaVersion === 2
+    && item.manifestSourceIdentityValid === true
+    && (!expectedSourceKind || item.manifestSourceKind === expectedSourceKind)
+  ))
+  const invalid = required.filter((item) => !(
+    item.manifestSchemaVersion === 2
+    && item.manifestSourceIdentityValid === true
+    && (!expectedSourceKind || item.manifestSourceKind === expectedSourceKind)
+  ))
+  const identityKey = (item: RuntimeManifestCoverageItem): string => [
+    item.manifestSourceKind ?? 'missing',
+    item.manifestSourceCommit ?? 'missing',
+    item.manifestDirtyStateHash ?? 'missing',
+    item.manifestReleaseId ?? 'missing',
+    item.manifestReleaseManifestHash ?? 'missing',
+    item.manifestReleasePathIdentity ?? 'missing',
+  ].join('|')
+  const uniqueIdentityKeys = [...new Set(valid.map(identityKey))].sort()
+  return {
+    requiredIdentityCount: required.length,
+    validIdentityCount: valid.length,
+    invalidIdentityCount: invalid.length,
+    uniqueIdentityKeys,
+    consistent: required.length > 0 && invalid.length === 0 && uniqueIdentityKeys.length === 1,
+    sourceKinds: [...new Set(valid.map((item) => item.manifestSourceKind ?? 'missing'))].sort(),
+  }
 }
 
 function parseRawArgs(argv: string[]): Map<string, string> {
@@ -521,6 +622,11 @@ function parseNullablePath(value: string | undefined): string | null {
 function parseBool(value: string | undefined, fallback: boolean): boolean {
   if (value == null) return fallback
   return ['1', 'true', 'yes', 'y', 'on'].includes(value.trim().toLowerCase())
+}
+
+function parseSourceKind(value: string | undefined): RuntimeManifestCoverageArgs['expectedSourceKind'] {
+  if (value === 'git_worktree' || value === 'verified_release') return value
+  return undefined
 }
 
 function sha256File(path: string): string {

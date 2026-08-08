@@ -18,9 +18,11 @@ import { validateAdmissionDecision } from '../src/runtime/admission.js'
 import { buildReleaseManifest } from '../src/runtime/release_manifest.js'
 import {
   activateRelease,
+  activateResearchRelease,
   loadValidationReceiptBinding,
   readReleasePointer,
   rollbackRelease,
+  rollbackResearchRelease,
   sha256File,
   verifyReleaseDirectory,
   writeImmutableReleaseManifest,
@@ -29,7 +31,7 @@ import {
 const execFileAsync = promisify(execFile)
 const COMMIT_RE = /^[a-f0-9]{40}$/
 
-type Command = 'build' | 'verify' | 'activate' | 'rollback' | 'status'
+type Command = 'build' | 'verify' | 'activate' | 'rollback' | 'activate-research' | 'rollback-research' | 'status'
 
 export interface LocalReleaseCliArgs {
   command: Command
@@ -49,8 +51,8 @@ export interface LocalReleaseCliArgs {
 
 export function parseArgs(argv: string[]): LocalReleaseCliArgs {
   const command = argv[0] as Command | undefined
-  if (!command || !['build', 'verify', 'activate', 'rollback', 'status'].includes(command)) {
-    throw new Error('command must be build, verify, activate, rollback, or status')
+  if (!command || !['build', 'verify', 'activate', 'rollback', 'activate-research', 'rollback-research', 'status'].includes(command)) {
+    throw new Error('command must be build, verify, activate, rollback, activate-research, rollback-research, or status')
   }
   const values = new Map<string, string[]>()
   for (let index = 1; index < argv.length; index += 1) {
@@ -98,7 +100,18 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({
       current: await readReleasePointer(args.releaseRoot, 'current'),
       previous: await readReleasePointer(args.releaseRoot, 'previous'),
+      researchCurrent: await readReleasePointer(args.releaseRoot, 'research-current'),
+      researchPrevious: await readReleasePointer(args.releaseRoot, 'research-previous'),
     }, null, 2))
+    return
+  }
+  if (args.command === 'rollback-research') {
+    const receipt = await rollbackResearchRelease({
+      releaseRoot: args.releaseRoot,
+      drill: args.drill,
+    })
+    console.log(JSON.stringify(receipt, null, 2))
+    if (receipt.status !== 'pass') process.exitCode = 1
     return
   }
   if (args.command === 'rollback') {
@@ -124,6 +137,15 @@ async function main(): Promise<void> {
       releaseRoot: args.releaseRoot,
       releaseId,
       credentialRotationReceiptPath: args.credentialRotationReceiptPath,
+    })
+    console.log(JSON.stringify(receipt, null, 2))
+    if (receipt.status !== 'pass') process.exitCode = 1
+    return
+  }
+  if (args.command === 'activate-research') {
+    const receipt = await activateResearchRelease({
+      releaseRoot: args.releaseRoot,
+      releaseId,
     })
     console.log(JSON.stringify(receipt, null, 2))
     if (receipt.status !== 'pass') process.exitCode = 1
@@ -203,6 +225,14 @@ export async function buildLocalRelease(
       resolve(repoRoot, runtimeArtifactRoot),
       resolve(tempRelease, runtimeArtifactRoot),
     )
+    // The launcher executes scripts and resolves evidence/runtime contracts
+    // from the immutable release.  Copy and hash the complete executable
+    // closure instead of relying on the deploy bundle's dist-only payload.
+    for (const entry of ['scripts', 'src', 'ops', 'default']) {
+      await copyReleaseTree(resolve(repoRoot, entry), resolve(tempRelease, entry))
+    }
+    await copyFile(resolve(repoRoot, 'package.json'), join(tempRelease, 'package.json'))
+    await copyFile(resolve(repoRoot, 'pnpm-lock.yaml'), join(tempRelease, 'pnpm-lock.yaml'))
     await mkdir(join(tempRelease, 'release-metadata'), { recursive: true })
     await copyFile(args.pipelineRegistryPath, join(tempRelease, 'release-metadata/pipeline_registry.v1.json'))
     await copyFile(args.dependencyLockPath, join(tempRelease, 'release-metadata/pnpm-lock.yaml'))
@@ -211,7 +241,12 @@ export async function buildLocalRelease(
     const artifactHashes = await collectArtifactHashes(tempRelease, [
       args.runtimeEntry,
       runtimeArtifactRoot,
+      'scripts',
+      'src',
+      'ops',
+      'default',
       'package.json',
+      'pnpm-lock.yaml',
       'release-metadata',
     ])
     const manifest = buildReleaseManifest({

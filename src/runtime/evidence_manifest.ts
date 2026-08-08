@@ -13,8 +13,19 @@ export interface GitEvidenceSnapshot {
   dirtyHash: string
 }
 
+export type EvidenceSourceKind = 'git_worktree' | 'verified_release'
+
+export interface VerifiedReleaseIdentity {
+  sourceKind: 'verified_release'
+  sourceCommit: string
+  dirtyStateHash: string
+  releaseId: string
+  releaseManifestHash: string
+  releasePathIdentity: string
+}
+
 export interface EvidenceManifest {
-  schemaVersion: 1
+  schemaVersion: 2
   job: string
   runId: string
   artifactPath: string
@@ -24,6 +35,14 @@ export interface EvidenceManifest {
   durationMs: number
   exitCode: number
   git: GitEvidenceSnapshot
+  sourceKind: EvidenceSourceKind
+  sourceCommit: string | null
+  dirtyStateHash: string
+  releaseId: string | null
+  releaseManifestHash: string | null
+  releasePathIdentity: string | null
+  sourceIdentityValid: boolean
+  sourceIdentityError: string | null
   dqStatus: EvidenceTrust
   evidenceTrust: EvidenceTrust
   /** @deprecated Use evidenceTrust instead. businessStatus is user-supplied and can diverge from computed trust. */
@@ -47,23 +66,53 @@ export interface BuildEvidenceManifestInput {
   errorClass?: string | null
   gitSnapshot?: GitEvidenceSnapshot
   artifactHash?: string | null
+  releaseIdentity?: VerifiedReleaseIdentity
 }
+
+const SHA256_RE = /^[a-f0-9]{64}$/
+const COMMIT_RE = /^[a-f0-9]{40}$/
+const EMPTY_DIRTY_STATE_HASH = createHash('sha256').update('').digest('hex')
 
 export function buildEvidenceManifest(input: BuildEvidenceManifestInput): EvidenceManifest {
   const startedAt = toIso(input.startedAt)
   const finishedAt = toIso(input.finishedAt)
-  const git = input.gitSnapshot ?? readGitEvidenceSnapshot()
+  const releaseIdentity = input.releaseIdentity ?? readVerifiedReleaseIdentity()
+  const git = releaseIdentity
+    ? {
+        commit: releaseIdentity.sourceCommit,
+        dirty: releaseIdentity.dirtyStateHash !== EMPTY_DIRTY_STATE_HASH,
+        dirtyFilesCount: 0,
+        dirtyHash: releaseIdentity.dirtyStateHash,
+      }
+    : input.gitSnapshot ?? readGitEvidenceSnapshot()
   const artifactPath = resolve(input.artifactPath)
   const manifestPath = resolve(input.manifestPath ?? `${artifactPath}.manifest.json`)
   const exitCode = Number.isFinite(input.exitCode) ? input.exitCode : 1
+  const sourceIdentityValid = releaseIdentity
+    ? releaseIdentity.dirtyStateHash === EMPTY_DIRTY_STATE_HASH
+      && COMMIT_RE.test(releaseIdentity.sourceCommit)
+      && COMMIT_RE.test(releaseIdentity.releaseId)
+      && releaseIdentity.sourceCommit === releaseIdentity.releaseId
+      && SHA256_RE.test(releaseIdentity.dirtyStateHash)
+      && SHA256_RE.test(releaseIdentity.releaseManifestHash)
+      && Boolean(releaseIdentity.releasePathIdentity)
+    // A directory that is not a Git repository is not evidence of a clean
+    // worktree. Keep legacy Git-worktree behavior for test/fixture commits,
+    // but fail closed when Git identity is unavailable altogether.
+    : git.commit !== null
+  const sourceIdentityError = !sourceIdentityValid
+    ? releaseIdentity ? 'verified_release_identity_invalid' : 'git_identity_missing'
+    : null
   const evidenceTrust: EvidenceTrust = exitCode !== 0
     ? 'fail'
-    : git.dirty
+    : !sourceIdentityValid
+      ? 'quarantine'
+      : git.dirty
       ? 'quarantine'
       : 'pass'
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     job: input.job,
     runId: `${finishedAt}__${git.commit ?? 'unknown'}__${process.pid}`,
     artifactPath,
@@ -73,6 +122,14 @@ export function buildEvidenceManifest(input: BuildEvidenceManifestInput): Eviden
     durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
     exitCode,
     git,
+    sourceKind: releaseIdentity ? 'verified_release' : 'git_worktree',
+    sourceCommit: releaseIdentity?.sourceCommit ?? git.commit,
+    dirtyStateHash: releaseIdentity?.dirtyStateHash ?? git.dirtyHash,
+    releaseId: releaseIdentity?.releaseId ?? null,
+    releaseManifestHash: releaseIdentity?.releaseManifestHash ?? null,
+    releasePathIdentity: releaseIdentity?.releasePathIdentity ?? null,
+    sourceIdentityValid,
+    sourceIdentityError,
     dqStatus: evidenceTrust,
     evidenceTrust,
     businessStatus: input.businessStatus ?? 'unknown',
@@ -80,6 +137,34 @@ export function buildEvidenceManifest(input: BuildEvidenceManifestInput): Eviden
     recordsOut: input.recordsOut ?? null,
     artifactHash: input.artifactHash ?? hashFileIfExists(artifactPath),
     errorClass: input.errorClass ?? null,
+  }
+}
+
+export function readVerifiedReleaseIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+): VerifiedReleaseIdentity | null {
+  const requested = env.OPENALICE_SOURCE_KIND === 'verified_release'
+    || Boolean(env.OPENALICE_RELEASE_MANIFEST_HASH)
+    || Boolean(env.OPENALICE_RELEASE_ID)
+  if (!requested) return null
+  const sourceKind = env.OPENALICE_SOURCE_KIND
+  if (sourceKind !== 'verified_release') {
+    return {
+      sourceKind: 'verified_release',
+      sourceCommit: env.OPENALICE_SOURCE_COMMIT ?? '',
+      dirtyStateHash: env.OPENALICE_DIRTY_STATE_HASH ?? '',
+      releaseId: env.OPENALICE_RELEASE_ID ?? '',
+      releaseManifestHash: env.OPENALICE_RELEASE_MANIFEST_HASH ?? '',
+      releasePathIdentity: env.OPENALICE_RELEASE_PATH ?? '',
+    }
+  }
+  return {
+    sourceKind: 'verified_release',
+    sourceCommit: env.OPENALICE_SOURCE_COMMIT ?? '',
+    dirtyStateHash: env.OPENALICE_DIRTY_STATE_HASH ?? '',
+    releaseId: env.OPENALICE_RELEASE_ID ?? '',
+    releaseManifestHash: env.OPENALICE_RELEASE_MANIFEST_HASH ?? '',
+    releasePathIdentity: env.OPENALICE_RELEASE_PATH ?? '',
   }
 }
 

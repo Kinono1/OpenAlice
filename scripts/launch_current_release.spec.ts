@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { buildReleaseManifest } from '../src/runtime/release_manifest.js'
@@ -17,15 +17,34 @@ describe('stable current release launcher', () => {
     await mkdir(join(releasePath, 'dist'), { recursive: true })
     const entry = 'console.log("release")\n'
     await writeFile(join(releasePath, 'dist/main.js'), entry)
+    const closureFiles: Record<string, string> = {
+      'scripts/runner.sh': '#!/bin/sh\n',
+      'src/runtime.ts': 'export {}\n',
+      'ops/pipeline.json': '{}\n',
+      'default/config.json': '{}\n',
+      'package.json': '{"name":"openalice-test"}\n',
+      'release-metadata/pipeline_registry.v1.json': '{"schemaVersion":"pipeline_registry.v1","entries":[]}\n',
+    }
+    for (const [path, content] of Object.entries(closureFiles)) {
+      await mkdir(dirname(join(releasePath, path)), { recursive: true })
+      await writeFile(join(releasePath, path), content)
+    }
+    const artifactHashes = {
+      'dist/main.js': createHash('sha256').update(entry).digest('hex'),
+      ...Object.fromEntries(
+        Object.entries(closureFiles).map(([path, content]) => [
+          path,
+          createHash('sha256').update(content).digest('hex'),
+        ]),
+      ),
+    }
     const manifest = buildReleaseManifest({
       releaseId: commit,
       sourceCommit: commit,
-      dirtyStateHash: '2'.repeat(64),
+      dirtyStateHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       builtAt: '2026-08-01T12:00:00.000Z',
       runtimeEntry: 'dist/main.js',
-      artifactHashes: {
-        'dist/main.js': createHash('sha256').update(entry).digest('hex'),
-      },
+      artifactHashes,
       pipelineRegistryHash: '3'.repeat(64),
       dependencyLockHash: '4'.repeat(64),
       strategyConfigHash: '5'.repeat(64),
@@ -34,7 +53,7 @@ describe('stable current release launcher', () => {
         path: 'receipt.json',
         receiptHash: '6'.repeat(64),
         sourceCommit: commit,
-        dirtyStateHash: '2'.repeat(64),
+        dirtyStateHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
         executedAt: '2026-08-01T11:59:00.000Z',
         expiresAt: '2026-08-02T12:00:00.000Z',
         status: 'pass',
@@ -60,6 +79,21 @@ describe('stable current release launcher', () => {
       liveExecutionArmed: false,
     })
 
+    await symlink(commit, join(root, 'research-current'), 'dir')
+    const research = await execFileAsync(process.execPath, [launcher, '--verify-only'], {
+      env: {
+        ...process.env,
+        OPENALICE_RELEASE_DIR: root,
+        OPENALICE_RUNTIME_ROLE: 'research',
+      },
+    })
+    expect(JSON.parse(research.stdout)).toMatchObject({
+      status: 'pass',
+      sourceCommit: commit,
+      runtimeRole: 'research',
+      liveExecutionArmed: false,
+    })
+
     const canary = await execFileAsync('/bin/bash', [
       resolve('ops/release/launch_canary.sh'),
       '--verify-only',
@@ -69,6 +103,8 @@ describe('stable current release launcher', () => {
         HOME: root,
         OPENALICE_ENV_FILE: '',
         OPENALICE_RELEASE_DIR: root,
+        OPENALICE_CANARY_RELEASE_DIR: root,
+        OPENALICE_CANARY_SOURCE_RELEASE_DIR: root,
         OPENALICE_CANARY_ROOT: join(root, 'canary-state'),
       },
     })

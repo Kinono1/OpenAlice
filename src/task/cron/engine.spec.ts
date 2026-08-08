@@ -36,6 +36,112 @@ describe('cron engine', () => {
     try { await unlink(storePath) } catch { /* ok */ }
   })
 
+  it('fails closed for research when a registry job lacks an explicit role allowlist', async () => {
+    const previousRole = process.env.OPENALICE_RUNTIME_ROLE
+    const definitionPath = tempPath('definitions.json')
+    try {
+      process.env.OPENALICE_RUNTIME_ROLE = 'research'
+      await writeFile(definitionPath, JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        jobs: [{
+          id: 'missing-role', name: 'missing-role', enabled: true, kind: 'script',
+          schedule: { kind: 'every', every: '1h' }, payload: '',
+          entrypoint: 'scripts/cron_dirty_worktree_audit.sh', args: [], cwd: '.',
+        }],
+      }))
+      const researchEngine = createCronEngine({
+        eventLog,
+        storePath,
+        definitionPath,
+        now: () => clock,
+      })
+      await expect(researchEngine.start()).rejects.toThrow('cron_runtime_role_allowlist_missing:missing-role')
+      researchEngine.stop()
+    } finally {
+      if (previousRole === undefined) delete process.env.OPENALICE_RUNTIME_ROLE
+      else process.env.OPENALICE_RUNTIME_ROLE = previousRole
+      await unlink(definitionPath).catch(() => undefined)
+    }
+  })
+
+  it('fails closed for persisted dynamic jobs that bypass the static registry', async () => {
+    const previousRole = process.env.OPENALICE_RUNTIME_ROLE
+    const definitionPath = tempPath('definitions.json')
+    const dynamicDefinitionPath = tempPath('dynamic-definitions.json')
+    try {
+      process.env.OPENALICE_RUNTIME_ROLE = 'research'
+      await writeFile(definitionPath, JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        jobs: [{
+          id: 'allowed-static', name: 'allowed-static', enabled: false, kind: 'script',
+          schedule: { kind: 'every', every: '1h' }, payload: '',
+          entrypoint: 'scripts/cron_dirty_worktree_audit.sh', args: [], cwd: '.',
+          allowedRuntimeRoles: ['primary', 'research'],
+        }],
+      }))
+      await writeFile(dynamicDefinitionPath, JSON.stringify({
+        schemaVersion: 'cron_dynamic_definitions.v1',
+        definitions: [{
+          id: 'dynamic-missing-role', name: 'dynamic-missing-role', enabled: false,
+          kind: 'agent', schedule: { kind: 'every', every: '1h' }, payload: 'research',
+        }],
+      }))
+      const researchEngine = createCronEngine({
+        eventLog,
+        storePath,
+        definitionPath,
+        dynamicDefinitionPath,
+        now: () => clock,
+      })
+      await expect(researchEngine.start()).rejects.toThrow(
+        'cron_runtime_role_allowlist_missing:dynamic-missing-role',
+      )
+      researchEngine.stop()
+    } finally {
+      if (previousRole === undefined) delete process.env.OPENALICE_RUNTIME_ROLE
+      else process.env.OPENALICE_RUNTIME_ROLE = previousRole
+      await unlink(definitionPath).catch(() => undefined)
+      await unlink(dynamicDefinitionPath).catch(() => undefined)
+    }
+  })
+
+  it('excludes primary-only autonomous jobs while retaining research-safe jobs', async () => {
+    const previousRole = process.env.OPENALICE_RUNTIME_ROLE
+    const definitionPath = tempPath('definitions.json')
+    try {
+      process.env.OPENALICE_RUNTIME_ROLE = 'research'
+      await writeFile(definitionPath, JSON.stringify({
+        schemaVersion: 'cron_definition_registry.v1',
+        jobs: [
+          {
+            id: 'primary-heartbeat', name: '__heartbeat__', enabled: true, kind: 'agent',
+            schedule: { kind: 'every', every: '15m' }, payload: 'autonomous',
+            allowedRuntimeRoles: ['primary'],
+          },
+          {
+            id: 'research-audit', name: 'dirty_worktree_audit_daily', enabled: false, kind: 'script',
+            schedule: { kind: 'every', every: '1h' }, payload: '',
+            entrypoint: 'scripts/cron_dirty_worktree_audit.sh', args: [], cwd: '.',
+            allowedRuntimeRoles: ['primary', 'research'],
+          },
+        ],
+      }))
+      const researchEngine = createCronEngine({
+        eventLog,
+        storePath,
+        definitionPath,
+        now: () => clock,
+      })
+      await researchEngine.start()
+      expect(researchEngine.list().map((job) => job.id)).toEqual(['research-audit'])
+      researchEngine.stop()
+    } finally {
+      if (previousRole === undefined) delete process.env.OPENALICE_RUNTIME_ROLE
+      else process.env.OPENALICE_RUNTIME_ROLE = previousRole
+      await unlink(definitionPath).catch(() => undefined)
+    }
+  })
+
   // ==================== Job CRUD ====================
 
   describe('CRUD', () => {

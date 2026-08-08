@@ -1,7 +1,7 @@
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
-export type RuntimeRole = 'primary' | 'canary' | 'test'
+export type RuntimeRole = 'primary' | 'research' | 'canary' | 'test'
 
 export interface RuntimeCapabilities {
   ownsCron: boolean
@@ -53,6 +53,14 @@ const PRIMARY_CAPABILITIES: RuntimeCapabilities = {
   writesSharedData: true,
 }
 
+const RESEARCH_CAPABILITIES: RuntimeCapabilities = {
+  ownsCron: true,
+  initializesAccounts: false,
+  orderSubmissionPathEnabled: false,
+  writesPromotion: false,
+  writesSharedData: true,
+}
+
 const ISOLATED_CAPABILITIES: RuntimeCapabilities = {
   ownsCron: false,
   initializesAccounts: false,
@@ -67,7 +75,7 @@ export function resolveRuntimeRole(raw = process.env.OPENALICE_RUNTIME_ROLE): Ru
 
 function parseRuntimeRole(raw: string | undefined): RuntimeRole {
   const normalized = raw?.trim() || 'primary'
-  if (normalized === 'primary' || normalized === 'canary' || normalized === 'test') {
+  if (normalized === 'primary' || normalized === 'research' || normalized === 'canary' || normalized === 'test') {
     return normalized
   }
   throw new Error(`invalid OPENALICE_RUNTIME_ROLE: ${normalized}`)
@@ -111,6 +119,34 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
       releaseDir,
       capabilities: PRIMARY_CAPABILITIES,
       portOverrides: {},
+    })
+  }
+
+  if (role === 'research') {
+    const stateDir = resolveFrom(repoRoot, env.OPENALICE_STATE_DIR, primaryDataDir)
+    const artifactDir = resolveFrom(
+      repoRoot,
+      env.OPENALICE_ARTIFACT_DIR,
+      join(stateDir, 'runtime'),
+    )
+    const logDir = resolveFrom(repoRoot, env.OPENALICE_LOG_DIR, 'logs')
+    return buildRuntimePaths({
+      role,
+      repoRoot,
+      dataDir: stateDir,
+      sharedDataInputDir: resolveFrom(repoRoot, env.OPENALICE_SHARED_DATA_INPUT_DIR, primaryDataDir),
+      configDir: primaryConfigDir,
+      marketInputDir: primaryMarketInputDir,
+      stateDir,
+      artifactDir,
+      logDir,
+      releaseDir,
+      capabilities: RESEARCH_CAPABILITIES,
+      portOverrides: {
+        web: parseOptionalPort(env.OPENALICE_RESEARCH_WEB_PORT),
+        mcp: parseOptionalPort(env.OPENALICE_RESEARCH_MCP_PORT),
+        mcpAsk: undefined,
+      },
     })
   }
 

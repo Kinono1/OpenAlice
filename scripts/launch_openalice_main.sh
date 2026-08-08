@@ -9,6 +9,11 @@ if [[ -x "$STABLE_WRAPPER" ]]; then
   exec "$STABLE_WRAPPER" "$@"
 fi
 
+if [[ "${OPENALICE_RUNTIME_ROLE:-primary}" == "research" ]]; then
+  echo "research runtime requires a verified immutable release wrapper; source fallback is forbidden" >&2
+  exit 78
+fi
+
 source "$REPO_ROOT/scripts/openalice_env.sh"
 
 cd "$REPO_ROOT"

@@ -36,7 +36,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "106cef5e",
@@ -61,7 +64,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "14d3f645",
@@ -85,7 +92,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "242684fd",
@@ -112,7 +123,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "2db31e4c",
@@ -136,7 +151,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "2fe3538e",
@@ -162,7 +181,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "3eed0b62",
@@ -186,7 +208,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "43c28d0b",
@@ -217,7 +242,11 @@
         "missingState": "paused_external_dependency",
         "archiveCreationAllowed": false,
         "localDeletionAllowed": false
-      }
+      },
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "45c69946",
@@ -241,7 +270,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "4d5a7624",
@@ -267,7 +299,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "67efe604",
@@ -291,7 +327,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "69df13ea",
@@ -317,7 +356,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "6a6a9e58",
@@ -341,7 +384,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "6d7c0bb5",
@@ -367,7 +414,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "7e49a580",
@@ -393,7 +444,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "83ee1258",
@@ -419,7 +474,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "8b1b0281",
@@ -450,7 +509,11 @@
         "missingState": "paused_external_dependency",
         "archiveCreationAllowed": false,
         "localDeletionAllowed": false
-      }
+      },
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "8c511e37",
@@ -474,7 +537,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "8f219262",
@@ -505,7 +571,11 @@
         "missingState": "paused_external_dependency",
         "archiveCreationAllowed": false,
         "localDeletionAllowed": false
-      }
+      },
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "9bb305a9",
@@ -529,7 +599,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "a2607aa5",
@@ -553,7 +626,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "a759f507",
@@ -584,7 +661,11 @@
         "missingState": "paused_external_dependency",
         "archiveCreationAllowed": false,
         "localDeletionAllowed": false
-      }
+      },
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "a92bc474",
@@ -615,7 +696,11 @@
         "missingState": "paused_external_dependency",
         "archiveCreationAllowed": false,
         "localDeletionAllowed": false
-      }
+      },
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "bc6946b3",
@@ -639,7 +724,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "d1bcc634",
@@ -665,7 +753,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "d371079b",
@@ -691,7 +783,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "dbdc04ce",
@@ -715,7 +811,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "dc0695ed",
@@ -741,7 +841,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "de414b10",
@@ -765,7 +869,10 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary"
+      ]
     },
     {
       "id": "e5a55c70",
@@ -791,7 +898,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "e7d7dfed",
@@ -817,7 +928,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     },
     {
       "id": "edd10984",
@@ -843,7 +958,11 @@
       },
       "schedulerOwner": "openalice_cron_engine",
       "operatorReceiptRequiredToCloseCircuit": true,
-      "externalDependency": null
+      "externalDependency": null,
+      "allowedRuntimeRoles": [
+        "primary",
+        "research"
+      ]
     }
   ]
 }

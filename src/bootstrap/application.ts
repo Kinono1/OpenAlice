@@ -127,6 +127,33 @@ export async function startOpenAlice(): Promise<void> {
 
 export function applyRuntimeRole(config: Config, runtime: RuntimePaths): Config {
   if (runtime.role === 'primary') return config
+  if (runtime.role === 'research') {
+    return {
+      ...config,
+      agent: { ...config.agent, evolutionMode: false },
+      snapshot: { ...config.snapshot, enabled: false },
+      heartbeat: { ...config.heartbeat, enabled: false },
+      connectors: {
+        ...config.connectors,
+        web: {
+          ...config.connectors.web,
+          port: runtime.portOverrides.web ?? config.connectors.web.port,
+        },
+        mcp: {
+          ...config.connectors.mcp,
+          port: runtime.portOverrides.mcp ?? config.connectors.mcp.port,
+        },
+        mcpAsk: {
+          ...config.connectors.mcpAsk,
+          enabled: false,
+          port: runtime.portOverrides.mcpAsk,
+        },
+        // Research may report to Telegram, while the web role guard and
+        // execution permit still deny mutations and order submission.
+        telegram: { ...config.connectors.telegram, enabled: true },
+      },
+    }
+  }
   return {
     ...config,
     agent: { ...config.agent, evolutionMode: false },

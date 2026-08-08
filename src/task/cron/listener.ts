@@ -19,7 +19,7 @@ import type { ConnectorCenter } from '../../core/connector-center.js'
 import type { CronFirePayload } from './engine.js'
 import { execFile } from 'node:child_process'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { decideCronNotification } from './notification-policy.js'
 import { buildPipelineExecutionReceipt } from './pipeline-receipt.js'
@@ -57,21 +57,21 @@ interface CronNotification {
   receiptContext?: Record<string, unknown>
 }
 
-const ALLOWLISTED_SCRIPT_PATHS = [
-  resolve('scripts/cron_eth_carry_refresh_pipeline.sh'),
-  resolve('scripts/cron_paper_policy_shadow_capture.sh'),
-  resolve('scripts/cron_paper_policy_shadow_settle.sh'),
-  resolve('scripts/cron_paper_pnl_diagnostics.sh'),
-  resolve('scripts/cron_pro_policy_window.sh'),
-  resolve('scripts/cron_microstructure_stoploss_replay.sh'),
-  resolve('scripts/cron_dirty_worktree_audit.sh'),
-  resolve('scripts/cron_scheduler_security_audit.sh'),
-  resolve('scripts/cron_external_derivatives_data_collect.sh'),
-  resolve('scripts/cron_low_vol_research.sh'),
-  resolve('scripts/cron_gated_improvement_candidate.sh'),
-  resolve('scripts/cron_p1_trading_evidence.sh'),
-  resolve('scripts/cron_openalice_task.sh'),
-  resolve('scripts/cron_okx_warehouse_task.sh'),
+const ALLOWLISTED_SCRIPT_RELATIVE_PATHS = [
+  'scripts/cron_eth_carry_refresh_pipeline.sh',
+  'scripts/cron_paper_policy_shadow_capture.sh',
+  'scripts/cron_paper_policy_shadow_settle.sh',
+  'scripts/cron_paper_pnl_diagnostics.sh',
+  'scripts/cron_pro_policy_window.sh',
+  'scripts/cron_microstructure_stoploss_replay.sh',
+  'scripts/cron_dirty_worktree_audit.sh',
+  'scripts/cron_scheduler_security_audit.sh',
+  'scripts/cron_external_derivatives_data_collect.sh',
+  'scripts/cron_low_vol_research.sh',
+  'scripts/cron_gated_improvement_candidate.sh',
+  'scripts/cron_p1_trading_evidence.sh',
+  'scripts/cron_openalice_task.sh',
+  'scripts/cron_okx_warehouse_task.sh',
 ] as const
 
 /**
@@ -261,7 +261,8 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
       return
     }
 
-    const scriptPath = resolve(script.path)
+    const releaseRoot = resolve(process.env.OPENALICE_RELEASE_PATH ?? process.cwd())
+    const scriptPath = isAbsolute(script.path) ? resolve(script.path) : resolve(releaseRoot, script.path)
     if (!isAllowlistedCronScript(scriptPath)) {
       const endedMs = Date.now()
       await eventLog.append('cron.error', {
@@ -285,14 +286,20 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     }
 
     try {
+      const scriptCwd = script.cwd
+        ? (isAbsolute(script.cwd) ? resolve(script.cwd) : resolve(releaseRoot, script.cwd))
+        : undefined
+      if (scriptCwd && process.env.OPENALICE_RELEASE_PATH?.trim()) {
+        assertWithin(releaseRoot, scriptCwd)
+      }
       const result = await scriptRunner(scriptPath, script.args ?? [], {
-        cwd: script.cwd,
+        cwd: scriptCwd,
         timeoutMs: payload.pipelineContext?.timeoutSeconds
           ? payload.pipelineContext.timeoutSeconds * 1000
           : undefined,
       })
       const notification = script.notificationPath
-        ? await readCronNotification(script.notificationPath, { minMtimeMs: startMs })
+        ? await readCronNotification(resolveRuntimeArtifactPath(script.notificationPath, releaseRoot), { minMtimeMs: startMs })
         : null
       const notificationText = notification?.text ?? ''
       const policy = decideCronNotification({
@@ -337,7 +344,7 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err)
       const artifactNotification = script.notificationPath
-        ? await readCronNotification(script.notificationPath, { minMtimeMs: startMs })
+        ? await readCronNotification(resolveRuntimeArtifactPath(script.notificationPath, releaseRoot), { minMtimeMs: startMs })
         : null
       const notification = artifactNotification ?? buildScriptFailureFallbackNotification({
         jobId: payload.jobId,
@@ -457,7 +464,10 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     const reason = primary.delivered ? primary.reason : fallback.delivered ? 'fallback_delivered' : `${primary.reason};fallback=${fallback.reason}`
     if (notification?.deliveryReceiptPath) {
       try {
-        const receiptPath = resolve(notification.deliveryReceiptPath)
+        const receiptPath = resolveRuntimeArtifactPath(
+          notification.deliveryReceiptPath,
+          resolve(process.env.OPENALICE_RELEASE_PATH ?? process.cwd()),
+        )
         await mkdir(dirname(receiptPath), { recursive: true })
         await appendFile(receiptPath, `${JSON.stringify({
           generatedAt: new Date().toISOString(),
@@ -594,7 +604,46 @@ function buildScriptFailureFallbackNotification(input: {
 }
 
 function isAllowlistedCronScript(scriptPath: string): boolean {
-  return ALLOWLISTED_SCRIPT_PATHS.includes(resolve(scriptPath))
+  const releaseRoot = resolve(process.env.OPENALICE_RELEASE_PATH ?? process.cwd())
+  const relativePath = relative(releaseRoot, resolve(scriptPath)).replaceAll('\\', '/')
+  return ALLOWLISTED_SCRIPT_RELATIVE_PATHS.includes(relativePath as typeof ALLOWLISTED_SCRIPT_RELATIVE_PATHS[number])
+}
+
+function resolveRuntimeArtifactPath(path: string, releaseRoot: string): string {
+  if (isAbsolute(path)) {
+    const resolvedPath = resolve(path)
+    if (!process.env.OPENALICE_RELEASE_PATH?.trim()) return resolvedPath
+    const artifactRoot = process.env.OPENALICE_ARTIFACT_DIR?.trim()
+    const dataRoot = process.env.OPENALICE_DATA_DIR?.trim()
+    if (artifactRoot && isWithin(resolve(artifactRoot), resolvedPath)) return resolvedPath
+    if (dataRoot && isWithin(resolve(dataRoot), resolvedPath)) return resolvedPath
+    assertWithin(releaseRoot, resolvedPath)
+    return resolvedPath
+  }
+  const artifactRoot = process.env.OPENALICE_ARTIFACT_DIR?.trim()
+  const dataRoot = process.env.OPENALICE_DATA_DIR?.trim()
+  if (artifactRoot && path.startsWith('data/runtime/')) {
+    const resolvedPath = resolve(artifactRoot, path.slice('data/runtime/'.length))
+    if (!isWithin(resolve(artifactRoot), resolvedPath)) throw new Error(`runtime_artifact_path_escape:${path}`)
+    return resolvedPath
+  }
+  if (dataRoot && path.startsWith('data/')) {
+    const resolvedPath = resolve(dataRoot, path.slice('data/'.length))
+    if (!isWithin(resolve(dataRoot), resolvedPath)) throw new Error(`runtime_data_path_escape:${path}`)
+    return resolvedPath
+  }
+  const resolvedPath = resolve(releaseRoot, path)
+  if (process.env.OPENALICE_RELEASE_PATH?.trim()) assertWithin(releaseRoot, resolvedPath)
+  return resolvedPath
+}
+
+function isWithin(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+function assertWithin(parent: string, child: string): void {
+  if (!isWithin(parent, child)) throw new Error(`release_path_escape:${child}`)
 }
 
 async function defaultScriptRunner(

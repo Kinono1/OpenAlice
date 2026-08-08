@@ -20,6 +20,7 @@ import {
   pipelineRunContextV1Schema,
   type PipelineRunContextV1,
 } from './pipeline-receipt.js'
+import { resolveRuntimeRole, type RuntimeRole } from '../../runtime/runtime-paths.js'
 
 // ==================== Types ====================
 
@@ -55,6 +56,7 @@ export interface CronScriptSpec {
   args?: string[]
   cwd?: string
   notificationPath?: string
+  allowedRuntimeRoles?: RuntimeRole[]
 }
 
 export interface CronJob {
@@ -82,6 +84,7 @@ interface CronJobDefinition {
   schedule: CronSchedule
   payload: string
   script?: CronScriptSpec
+  allowedRuntimeRoles?: RuntimeRole[]
   retryPolicy?: CronRetryPolicy
   forcedDisabled?: boolean
   forcedDisabledReason?:
@@ -171,6 +174,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
   const dynamicDefinitionPath = opts.dynamicDefinitionPath ?? `${storePath}.definitions.local.v1.json`
   const now = opts.now ?? Date.now
   const managedDefinitions = definitionPath !== undefined
+  const runtimeRole = resolveRuntimeRole()
 
   let jobs: CronJob[] = []
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -219,6 +223,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
 
   async function loadManaged(): Promise<void> {
     const staticDefinitions = await readDefinitionRegistry(definitionPath!)
+    const allStaticDefinitionIds = new Set(staticDefinitions.map((definition) => definition.id))
     pipelineContextsByJobId.clear()
     if (pipelineRegistryPath) {
       const contexts = await readPipelineRegistry(pipelineRegistryPath)
@@ -234,13 +239,17 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       }
     }
     for (const definition of staticDefinitions) {
+      if (!assertRuntimeRoleAllowed(definition, runtimeRole)) continue
       staticDefinitionIds.add(definition.id)
       if (definition.forcedDisabled) forcedDisabledIds.add(definition.id)
     }
+    const permittedStaticDefinitions = staticDefinitions.filter((definition) =>
+      staticDefinitionIds.has(definition.id),
+    )
 
     const persistedDynamic = await readDynamicDefinitions(dynamicDefinitionPath)
     for (const definition of persistedDynamic) {
-      if (!staticDefinitionIds.has(definition.id)) {
+      if (!allStaticDefinitionIds.has(definition.id) && assertRuntimeRoleAllowed(definition, runtimeRole)) {
         dynamicDefinitions.set(definition.id, definition)
       }
     }
@@ -264,7 +273,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
             const legacy = parseLegacyJob(item)
             if (!legacy) continue
             runtimeRecords.set(legacy.id, runtimeRecordFromJob(legacy))
-            if (!staticDefinitionIds.has(legacy.id)) {
+            if (!allStaticDefinitionIds.has(legacy.id)) {
               dynamicDefinitions.set(legacy.id, definitionFromJob(legacy))
             }
           }
@@ -277,11 +286,18 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     }
 
     const allDefinitions = [
-      ...staticDefinitions,
+      ...permittedStaticDefinitions,
       ...[...dynamicDefinitions.values()].filter(
         (definition) => !staticDefinitionIds.has(definition.id),
       ),
     ]
+    // Validate the complete reconciled set, including persisted dynamic
+    // definitions. Research is fail-closed for both missing and disallowed
+    // role allowlists; validating only the static registry would permit an
+    // old dynamic entry to bypass the role boundary.
+    for (const definition of allDefinitions) {
+      assertRuntimeRoleAllowed(definition, runtimeRole)
+    }
     const knownIds = new Set(allDefinitions.map((definition) => definition.id))
     orphanedRuntimeRecords = [...runtimeRecords.values()].filter(
       (record) => !knownIds.has(record.id),
@@ -560,6 +576,9 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     },
 
     async add(params) {
+      if (runtimeRole === 'research') {
+        throw new Error('research_runtime_accepts_registry_script_jobs_only')
+      }
       if (managedDefinitions && (params.kind === 'script' || params.script)) {
         throw new Error(
           'managed Cron engine accepts new agent jobs only; script definitions require registry review',
@@ -922,6 +941,7 @@ function definitionFromJob(job: CronJob): CronJobDefinition {
     schedule: job.schedule,
     payload: job.payload,
     script: job.script,
+    allowedRuntimeRoles: job.script?.allowedRuntimeRoles,
     retryPolicy: normalizeRetryPolicy(job.retryPolicy),
   }
 }
@@ -935,6 +955,7 @@ function serializeDefinition(definition: CronJobDefinition): Record<string, unkn
     schedule: definition.schedule,
     payload: definition.payload,
     script: definition.script,
+    allowedRuntimeRoles: definition.allowedRuntimeRoles,
     retryPolicy: normalizeRetryPolicy(definition.retryPolicy),
   }
 }
@@ -1019,6 +1040,7 @@ async function readDefinitionRegistry(path: string): Promise<CronJobDefinition[]
     }
     ids.add(id)
     const entrypoint = typeof item.entrypoint === 'string' ? item.entrypoint : undefined
+    const allowedRuntimeRoles = parseRuntimeRoleList(item.allowedRuntimeRoles)
     const args = Array.isArray(item.args)
       ? item.args.filter((arg): arg is string => typeof arg === 'string')
       : undefined
@@ -1040,8 +1062,10 @@ async function readDefinitionRegistry(path: string): Promise<CronJobDefinition[]
             notificationPath: typeof item.notificationArtifact === 'string'
               ? item.notificationArtifact
               : undefined,
+            allowedRuntimeRoles,
           }
         : undefined,
+      allowedRuntimeRoles,
       retryPolicy: parseRetryPolicy(item.retryPolicy),
       forcedDisabled:
         initialState === 'paused_external_dependency'
@@ -1139,6 +1163,7 @@ async function readDynamicDefinitions(path: string): Promise<CronJobDefinition[]
       schedule: item.schedule,
       payload: item.payload,
       script: parseScriptSpec(item.script),
+      allowedRuntimeRoles: parseRuntimeRoleList(item.allowedRuntimeRoles),
       retryPolicy: parseRetryPolicy(item.retryPolicy),
     }
   })
@@ -1180,7 +1205,34 @@ function parseScriptSpec(value: unknown): CronScriptSpec | undefined {
     notificationPath: typeof raw.notificationPath === 'string'
       ? raw.notificationPath
       : undefined,
+    allowedRuntimeRoles: parseRuntimeRoleList(raw.allowedRuntimeRoles),
   }
+}
+
+function parseRuntimeRoleList(value: unknown): RuntimeRole[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const roles = value.filter((role): role is RuntimeRole => (
+    role === 'primary' || role === 'research' || role === 'canary' || role === 'test'
+  ))
+  if (roles.length !== value.length || roles.length === 0) {
+    throw new Error('invalid Cron allowedRuntimeRoles')
+  }
+  return [...new Set(roles)]
+}
+
+function assertRuntimeRoleAllowed(definition: CronJobDefinition, role: RuntimeRole): boolean {
+  const allowed = definition.allowedRuntimeRoles ?? definition.script?.allowedRuntimeRoles
+  if (!allowed || allowed.length === 0) {
+    if (role === 'research') throw new Error(`cron_runtime_role_allowlist_missing:${definition.id}`)
+    return true
+  }
+  if (role === 'research' && !allowed.includes(role)) {
+    // Primary-only/autonomous jobs remain in the declarative registry but are
+    // deliberately excluded from the research scheduler rather than taking
+    // down the entire research service.
+    return false
+  }
+  return true
 }
 
 function scheduleAfterFailure(

@@ -51,7 +51,7 @@ export const systemStatusV1Schema = z.object({
     currentCommit: z.string().regex(COMMIT_RE).nullable(),
     previousCommit: z.string().regex(COMMIT_RE).nullable(),
     manifestHash: z.string().regex(SHA256_RE).nullable(),
-    runtimeRole: z.enum(['primary', 'canary', 'test']),
+    runtimeRole: z.enum(['primary', 'research', 'canary', 'test']),
     dirtyState: z.enum(['clean', 'dirty', 'unknown']),
     evidenceTrust: z.enum(['trusted', 'stale', 'blocked']),
   }).strict(),
@@ -106,7 +106,7 @@ export async function loadSystemStatus(
   const now = options.now ?? new Date()
   const runtime = options.runtime
   const releaseDir = resolve(options.releaseDir ?? runtime.releaseDir)
-  const release = await loadReleaseSnapshot(releaseDir)
+  const release = await loadReleaseSnapshot(releaseDir, runtime.role)
   const dirtyState = release.manifest
     ? release.manifest.dirtyStateHash === EMPTY_DIRTY_STATE_HASH ? 'clean' : 'dirty'
     : 'unknown'
@@ -115,20 +115,30 @@ export async function loadSystemStatus(
       ?? join(runtime.sharedDataInputDir, 'runtime', 'admission_decision.v1.json'),
   )
   const admissionLoad = await tryLoadAdmissionDecision(admissionPath, { now })
-  const admission = admissionLoad.decision ?? await buildBlockedAdmission({
-    now,
-    currentCommit: release.currentCommit,
-    dirtyStateHash: release.manifest?.dirtyStateHash ?? EMPTY_DIRTY_STATE_HASH,
-    releaseManifestHash: release.manifest?.manifestHash ?? ZERO_HASH,
-  })
+  const admission = runtime.role === 'research'
+    ? await buildBlockedAdmission({
+        now,
+        currentCommit: release.currentCommit,
+        dirtyStateHash: release.manifest?.dirtyStateHash ?? EMPTY_DIRTY_STATE_HASH,
+        releaseManifestHash: release.manifest?.manifestHash ?? ZERO_HASH,
+      })
+    : admissionLoad.decision ?? await buildBlockedAdmission({
+        now,
+        currentCommit: release.currentCommit,
+        dirtyStateHash: release.manifest?.dirtyStateHash ?? EMPTY_DIRTY_STATE_HASH,
+        releaseManifestHash: release.manifest?.manifestHash ?? ZERO_HASH,
+      })
   const admissionBound = admissionLoad.kind === 'loaded'
+    && runtime.role === 'primary'
     && release.manifestValid
     && release.currentCommit !== null
     && dirtyState === 'clean'
     && admission.sourceCommit === release.currentCommit
     && admission.dirtyStateHash === release.manifest?.dirtyStateHash
     && admission.releaseManifestHash === release.manifest?.manifestHash
-  const statusSource: SystemStatusV1['statusSource'] = admissionBound
+  const statusSource: SystemStatusV1['statusSource'] = runtime.role === 'research'
+    ? 'missing'
+    : admissionBound
     ? 'executed_receipt'
     : admissionLoad.kind === 'stale' || admissionLoad.kind === 'loaded'
       ? 'stale'
@@ -211,16 +221,21 @@ function summarizeScheduler(
   }
 }
 
-async function loadReleaseSnapshot(releaseDir: string): Promise<ReleaseSnapshot> {
+async function loadReleaseSnapshot(
+  releaseDir: string,
+  runtimeRole: RuntimePaths['role'],
+): Promise<ReleaseSnapshot> {
+  const currentPointer = runtimeRole === 'research' ? 'research-current' : 'current'
+  const previousPointer = runtimeRole === 'research' ? 'research-previous' : 'previous'
   let currentCommit: string | null = null
   let previousCommit: string | null = null
   try {
-    currentCommit = await readReleasePointer(releaseDir, 'current')
+    currentCommit = await readReleasePointer(releaseDir, currentPointer)
   } catch {
     currentCommit = null
   }
   try {
-    previousCommit = await readReleasePointer(releaseDir, 'previous')
+    previousCommit = await readReleasePointer(releaseDir, previousPointer)
   } catch {
     previousCommit = null
   }

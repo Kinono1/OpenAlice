@@ -1,6 +1,6 @@
 import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -43,6 +43,18 @@ interface LaunchdConfig {
   openalicePaperMonitorSkipOptimize?: string
   openalicePaperMonitorSkipValidation?: string
   openalicePaperMonitorRequirePromotionV2?: string
+  openaliceRuntimeRole?: string
+  openaliceReleaseDir?: string
+  openaliceDataDir?: string
+  openaliceSharedDataInputDir?: string
+  openaliceConfigDir?: string
+  openaliceMarketInputDir?: string
+  openaliceStateDir?: string
+  openaliceArtifactDir?: string
+  openaliceLogDir?: string
+  openaliceLegacyWipRoot?: string
+  openaliceResearchWebPort?: string
+  openaliceResearchMcpPort?: string
 }
 
 async function main(): Promise<void> {
@@ -158,6 +170,18 @@ function buildLaunchdConfig(input: {
     openalicePaperMonitorSkipOptimize: process.env.OPENALICE_PAPER_MONITOR_SKIP_OPTIMIZE,
     openalicePaperMonitorSkipValidation: process.env.OPENALICE_PAPER_MONITOR_SKIP_VALIDATION,
     openalicePaperMonitorRequirePromotionV2: process.env.OPENALICE_PAPER_MONITOR_REQUIRE_PROMOTION_V2,
+    openaliceRuntimeRole: process.env.OPENALICE_RUNTIME_ROLE,
+    openaliceReleaseDir: process.env.OPENALICE_RELEASE_DIR,
+    openaliceDataDir: process.env.OPENALICE_DATA_DIR,
+    openaliceSharedDataInputDir: process.env.OPENALICE_SHARED_DATA_INPUT_DIR,
+    openaliceConfigDir: process.env.OPENALICE_CONFIG_DIR,
+    openaliceMarketInputDir: process.env.OPENALICE_MARKET_INPUT_DIR,
+    openaliceStateDir: process.env.OPENALICE_STATE_DIR,
+    openaliceArtifactDir: process.env.OPENALICE_ARTIFACT_DIR,
+    openaliceLogDir: process.env.OPENALICE_LOG_DIR,
+    openaliceLegacyWipRoot: process.env.OPENALICE_LEGACY_WIP_ROOT,
+    openaliceResearchWebPort: process.env.OPENALICE_RESEARCH_WEB_PORT,
+    openaliceResearchMcpPort: process.env.OPENALICE_RESEARCH_MCP_PORT,
   }
 }
 
@@ -182,6 +206,18 @@ function renderLaunchdPlist(config: LaunchdConfig): string {
     ['OPENALICE_PAPER_MONITOR_SKIP_OPTIMIZE', config.openalicePaperMonitorSkipOptimize],
     ['OPENALICE_PAPER_MONITOR_SKIP_VALIDATION', config.openalicePaperMonitorSkipValidation],
     ['OPENALICE_PAPER_MONITOR_REQUIRE_PROMOTION_V2', config.openalicePaperMonitorRequirePromotionV2],
+    ['OPENALICE_RUNTIME_ROLE', config.openaliceRuntimeRole],
+    ['OPENALICE_RELEASE_DIR', config.openaliceReleaseDir],
+    ['OPENALICE_DATA_DIR', config.openaliceDataDir],
+    ['OPENALICE_SHARED_DATA_INPUT_DIR', config.openaliceSharedDataInputDir],
+    ['OPENALICE_CONFIG_DIR', config.openaliceConfigDir],
+    ['OPENALICE_MARKET_INPUT_DIR', config.openaliceMarketInputDir],
+    ['OPENALICE_STATE_DIR', config.openaliceStateDir],
+    ['OPENALICE_ARTIFACT_DIR', config.openaliceArtifactDir],
+    ['OPENALICE_LOG_DIR', config.openaliceLogDir],
+    ['OPENALICE_LEGACY_WIP_ROOT', config.openaliceLegacyWipRoot],
+    ['OPENALICE_RESEARCH_WEB_PORT', config.openaliceResearchWebPort],
+    ['OPENALICE_RESEARCH_MCP_PORT', config.openaliceResearchMcpPort],
   ].filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
 
   for (const [key, value] of envEntries) {
@@ -224,8 +260,10 @@ ${envBlock}
 
 async function materializeStableLaunchWrapper(scriptPath: string): Promise<void> {
   const target = resolve(scriptPath)
-  const defaultTarget = resolve('runtime/bin/launch_openalice_current.sh')
-  if (target !== defaultTarget) return
+  // A research cutover may keep the stable wrapper outside the frozen legacy
+  // worktree.  Materialize any explicitly named stable wrapper, but never
+  // overwrite a legacy `scripts/launch_openalice_main.sh` entrypoint.
+  if (basename(target) !== 'launch_openalice_current.sh') return
   const binDir = dirname(target)
   await mkdir(binDir, { recursive: true })
   const files = [

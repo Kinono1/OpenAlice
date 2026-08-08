@@ -35,6 +35,8 @@ export const canaryReadinessReceiptV1Schema = z.object({
   scope: z.enum(['isolated_test', 'production_canary']),
   generatedAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
+  /** Wall-clock observation duration used by the production cutover gate. */
+  observationDurationSeconds: z.number().int().nonnegative().optional(),
   releaseId: z.string().regex(COMMIT_RE),
   manifestHash: z.string().regex(SHA256_RE),
   runtimeRole: z.enum(['primary', 'canary', 'test']),
@@ -101,7 +103,7 @@ export interface CanaryReadinessObservations {
 }
 
 function computeCanaryReasonCodes(input: {
-  runtimeRole: 'primary' | 'canary' | 'test'
+  runtimeRole: RuntimePaths['role']
   pathFingerprints: { state: string; artifact: string; log: string; sharedDataInput: string }
   paths: { state: string; artifact: string; log: string; sharedDataInput: string }
   pathIsolation: 'pass' | 'fail'
@@ -163,6 +165,7 @@ export function buildCanaryReadinessReceipt(input: {
   sharedDataBeforeHash: string
   sharedDataAfterHash: string
   evidenceRefs: string[]
+  observationDurationSeconds?: number
 }): CanaryReadinessReceiptV1 {
   const writeRoots = [
     input.runtime.stateDir,
@@ -179,6 +182,9 @@ export function buildCanaryReadinessReceipt(input: {
     expiresAt: input.expiresAt,
     releaseId: input.releaseId,
     manifestHash: input.manifestHash,
+    ...(input.observationDurationSeconds !== undefined
+      ? { observationDurationSeconds: input.observationDurationSeconds }
+      : {}),
     runtimeRole: input.runtime.role,
     pathFingerprints: {
       state: sha256Text(resolve(input.runtime.stateDir)),
