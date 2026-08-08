@@ -1,7 +1,7 @@
 {
   "schemaVersion": "pipeline_registry.v1",
   "scriptRoot": "scripts",
-  "entryCount": 618,
+  "entryCount": 626,
   "entries": [
     {
       "id": "pipeline.scripts_cron_trap_standard_md",
@@ -292,6 +292,26 @@
       "timeoutSeconds": 900,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_annotate_cron_runtime_roles_py",
+      "owner": "runtime-operations",
+      "domain": "scheduling",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/annotate_cron_runtime_roles.py",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
       "schedulerOwner": "manual",
       "cronTaskIds": []
     },
@@ -1924,6 +1944,46 @@
       "timeoutSeconds": 900,
       "networkPolicy": "denied",
       "evidenceTtlSeconds": 86400,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_build_dirty_worktree_notification_spec_ts",
+      "owner": "research",
+      "domain": "research",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/build_dirty_worktree_notification.spec.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "read_only",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 300,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_build_dirty_worktree_notification_ts",
+      "owner": "research",
+      "domain": "research",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/build_dirty_worktree_notification.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "artifact_write",
+      "lock": {
+        "policy": "required",
+        "key": "pipeline:pipeline.scripts_build_dirty_worktree_notification_ts"
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
       "schedulerOwner": "manual",
       "cronTaskIds": []
     },
@@ -6642,6 +6702,26 @@
       "cronTaskIds": []
     },
     {
+      "id": "pipeline.scripts_freeze_dirty_worktree_py",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/freeze_dirty_worktree.py",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
       "id": "pipeline.scripts_gate_summary_snapshot_py",
       "owner": "evidence-governance",
       "domain": "evidence",
@@ -8486,6 +8566,26 @@
       "cronTaskIds": []
     },
     {
+      "id": "pipeline.scripts_normalize_cron_jobs_py",
+      "owner": "runtime-operations",
+      "domain": "scheduling",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/normalize_cron_jobs.py",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
       "id": "pipeline.scripts_normalize_external_derivatives_data_spec_ts",
       "owner": "market-data",
       "domain": "market-data",
@@ -9148,6 +9248,26 @@
       "cronTaskIds": []
     },
     {
+      "id": "pipeline.scripts_prepare_canary_release_ts",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/prepare_canary_release.ts",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
       "id": "pipeline.scripts_profiles_cvar_next_gates_v3_shift_uncertainty_json",
       "owner": "evidence-governance",
       "domain": "evidence",
@@ -9753,6 +9873,26 @@
       "domain": "operations",
       "lifecycle": "manual",
       "entrypoint": "scripts/requirements-ml-ensemble.txt",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_research_cutover_ts",
+      "owner": "research",
+      "domain": "research",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/research_cutover.ts",
       "compatibilityAliases": [],
       "inputs": [],
       "outputs": [],
@@ -12921,6 +13061,26 @@
       "domain": "operations",
       "lifecycle": "manual",
       "entrypoint": "scripts/verify_freeze_manifest.py",
+      "compatibilityAliases": [],
+      "inputs": [],
+      "outputs": [],
+      "safetyLevel": "live_forbidden",
+      "lock": {
+        "policy": "none",
+        "key": null
+      },
+      "timeoutSeconds": 900,
+      "networkPolicy": "denied",
+      "evidenceTtlSeconds": 604800,
+      "schedulerOwner": "manual",
+      "cronTaskIds": []
+    },
+    {
+      "id": "pipeline.scripts_verify_wip_freeze_py",
+      "owner": "runtime-operations",
+      "domain": "operations",
+      "lifecycle": "manual",
+      "entrypoint": "scripts/verify_wip_freeze.py",
       "compatibilityAliases": [],
       "inputs": [],
       "outputs": [],
