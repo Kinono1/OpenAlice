@@ -43,6 +43,11 @@ interface BackupEntry {
   existed: boolean
 }
 
+interface CutoverBudget {
+  startedAt: number
+  maxDowntimeSeconds: number
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   const preflight = await runPreflight(args)
@@ -52,21 +57,23 @@ async function main(): Promise<void> {
   }
   if (preflight.status !== 'pass') throw new Error('research_cutover_preflight_blocked')
   const startedAt = Date.now()
+  const budget: CutoverBudget = { startedAt, maxDowntimeSeconds: args.maxDowntimeSeconds }
   const backups = await backupTargets(args)
   let researchActivated = false
   let postSwitchVerification: Record<string, unknown> | null = null
   try {
     await assertWithinDowntime(startedAt, args.maxDowntimeSeconds)
-    await bootoutLaunchd(args.launchdLabel)
+    await bootoutLaunchd(args.launchdLabel, budget)
     const eventDbPath = join(args.legacyRepoRoot, 'data/event-log/events.sqlite')
     await waitForNoWriters([
       args.jobsPath,
       eventDbPath,
       `${eventDbPath}-wal`,
       `${eventDbPath}-shm`,
-    ])
-    await assertNoCronLocks(join(args.legacyRepoRoot, 'data/runtime/locks'))
-    await normalizeCron(args)
+    ], budget)
+    await assertNoCronLocks(join(args.legacyRepoRoot, 'data/runtime/locks'), budget)
+    await normalizeCron(args, budget)
+    await assertWithinDowntime(startedAt, args.maxDowntimeSeconds)
     const activation = await activateResearchRelease({
       releaseRoot: args.releaseRoot,
       releaseId: args.releaseId,
@@ -74,9 +81,10 @@ async function main(): Promise<void> {
     })
     if (activation.status !== 'pass') throw new Error(`research_activation_blocked:${activation.reasonCodes.join('|')}`)
     researchActivated = true
-    await installResearchLaunchd(args)
     await assertWithinDowntime(startedAt, args.maxDowntimeSeconds)
-    postSwitchVerification = await verifyResearchLaunchd(args)
+    await installResearchLaunchd(args, budget)
+    await assertWithinDowntime(startedAt, args.maxDowntimeSeconds)
+    postSwitchVerification = await verifyResearchLaunchd(args, budget)
     const receipt = await writeReceipt(args, {
       status: 'pass',
       action: 'activate_research',
@@ -276,7 +284,13 @@ async function verifyFrozenWip(
 }
 
 async function backupTargets(args: Args): Promise<BackupEntry[]> {
-  const targets = [args.launchdPlist, args.launchWrapper, args.jobsPath]
+  const targets = [
+    args.launchdPlist,
+    args.launchWrapper,
+    join(dirname(resolve(args.launchWrapper)), 'launch_current.mjs'),
+    join(dirname(resolve(args.launchWrapper)), 'openalice_env.sh'),
+    args.jobsPath,
+  ]
   const entries: BackupEntry[] = []
   for (const source of targets) {
     const backup = join(resolve(args.backupDir), `${source.replaceAll('/', '_')}.bak`)
@@ -297,8 +311,8 @@ async function backupTargets(args: Args): Promise<BackupEntry[]> {
   return entries
 }
 
-async function normalizeCron(args: Args): Promise<void> {
-  await execFileAsync('python3', [
+async function normalizeCron(args: Args, budget: CutoverBudget): Promise<void> {
+  await runCutoverCommand(budget, 'python3', [
     join(resolve(process.cwd()), 'scripts/normalize_cron_jobs.py'),
     '--jobs', args.jobsPath,
     '--source-root', args.legacyRepoRoot,
@@ -309,7 +323,7 @@ async function normalizeCron(args: Args): Promise<void> {
   ], { cwd: process.cwd(), maxBuffer: 4 * 1024 * 1024 })
 }
 
-async function installResearchLaunchd(args: Args): Promise<void> {
+async function installResearchLaunchd(args: Args, budget: CutoverBudget): Promise<void> {
   const env = {
     ...process.env,
     OPENALICE_RUNTIME_ROLE: 'research',
@@ -325,7 +339,7 @@ async function installResearchLaunchd(args: Args): Promise<void> {
     OPENALICE_RESEARCH_WEB_PORT: process.env.OPENALICE_RESEARCH_WEB_PORT ?? '3002',
     OPENALICE_RESEARCH_MCP_PORT: process.env.OPENALICE_RESEARCH_MCP_PORT ?? '3001',
   }
-  await execFileAsync('./node_modules/.bin/tsx', [
+  await runCutoverCommand(budget, './node_modules/.bin/tsx', [
     'scripts/install_openalice_launchd.ts',
     '--dryRun', 'false',
     '--launch', 'false',
@@ -343,12 +357,12 @@ async function installResearchLaunchd(args: Args): Promise<void> {
     throw new Error(`research_launch_wrapper_invalid:${wrapperBlockers.join('|')}`)
   }
   const uid = String(process.getuid?.() ?? 501)
-  await execFileAsync('/bin/launchctl', ['bootstrap', `gui/${uid}`, resolve(args.launchdPlist)])
-  await execFileAsync('/bin/launchctl', ['kickstart', '-k', `gui/${uid}/${args.launchdLabel}`])
+  await runCutoverCommand(budget, '/bin/launchctl', ['bootstrap', `gui/${uid}`, resolve(args.launchdPlist)])
+  await runCutoverCommand(budget, '/bin/launchctl', ['kickstart', '-k', `gui/${uid}/${args.launchdLabel}`])
 }
 
-async function verifyResearchLaunchd(args: Args): Promise<Record<string, unknown>> {
-  const output = await execFileAsync('/bin/launchctl', ['print', `gui/${process.getuid?.() ?? 501}/${args.launchdLabel}`], { maxBuffer: 2 * 1024 * 1024 })
+async function verifyResearchLaunchd(args: Args, budget: CutoverBudget): Promise<Record<string, unknown>> {
+  const output = await runCutoverCommand(budget, '/bin/launchctl', ['print', `gui/${process.getuid?.() ?? 501}/${args.launchdLabel}`], { maxBuffer: 2 * 1024 * 1024 })
   const launchdText = String(output.stdout)
   if (!/state\s*=\s*running|pid\s*=\s*\d+/i.test(launchdText)) throw new Error('research_launchd_not_running')
   if (!/OPENALICE_RUNTIME_ROLE\s*=>\s*research\b/.test(launchdText)) {
@@ -376,25 +390,25 @@ async function verifyResearchLaunchd(args: Args): Promise<Record<string, unknown
   if (!Number.isInteger(webPort) || webPort < 1024 || webPort > 65535) {
     throw new Error('research_web_port_invalid')
   }
-  const webPids = await listListeningPids(webPort)
+  const webPids = await listListeningPids(webPort, budget)
   if (webPids.length !== 1) throw new Error(`research_web_listener_count_invalid:${webPids.length}`)
   const mainPid = webPids[0]
-  const mainCwd = await readProcessCwd(mainPid)
+  const mainCwd = await readProcessCwd(mainPid, budget)
   if (mainCwd !== expectedReleasePath) throw new Error(`research_process_cwd_invalid:${mainCwd}`)
-  const mainCommand = await readProcessCommand(mainPid)
+  const mainCommand = await readProcessCommand(mainPid, budget)
   if (!mainCommand.includes(`${expectedReleasePath}/dist/main.js`)) {
     throw new Error('research_process_not_immutable_release')
   }
-  const healthHttp = await probeHealth(webPort)
+  const healthHttp = await probeHealth(webPort, budget)
   if (healthHttp !== 200) throw new Error(`research_health_not_ready:${healthHttp}`)
 
   const mcpPort = Number(process.env.OPENALICE_RESEARCH_MCP_PORT ?? '3001')
   const mcpPids = Number.isInteger(mcpPort) && mcpPort >= 1024 && mcpPort <= 65535
-    ? await listListeningPids(mcpPort)
+    ? await listListeningPids(mcpPort, budget)
     : []
   if (mcpPids.length > 0) throw new Error(`research_mcp_listener_present:${mcpPids.join(',')}`)
 
-  const jobsWriterPids = await listFileWriters(args.jobsPath)
+  const jobsWriterPids = await listFileWriters(args.jobsPath, budget)
   if (jobsWriterPids.length > 1) throw new Error(`research_cron_writer_count_invalid:${jobsWriterPids.length}`)
   return {
     launchdState: 'running',
@@ -419,9 +433,9 @@ async function verifyResearchLaunchd(args: Args): Promise<Record<string, unknown
   }
 }
 
-async function listListeningPids(port: number): Promise<number[]> {
+async function listListeningPids(port: number, budget?: CutoverBudget): Promise<number[]> {
   try {
-    const { stdout } = await execFileAsync('/usr/sbin/lsof', [
+    const { stdout } = await runCommand(budget, '/usr/sbin/lsof', [
       '-nP', '-t', `-iTCP:${port}`, '-sTCP:LISTEN',
     ], { encoding: 'utf8', maxBuffer: 100_000 })
     return [...new Set(String(stdout).split(/\s+/).filter(Boolean).map(Number).filter(Number.isInteger))].sort((a, b) => a - b)
@@ -431,9 +445,9 @@ async function listListeningPids(port: number): Promise<number[]> {
   }
 }
 
-async function listFileWriters(path: string): Promise<number[]> {
+async function listFileWriters(path: string, budget?: CutoverBudget): Promise<number[]> {
   try {
-    const { stdout } = await execFileAsync('/usr/sbin/lsof', ['-nP', '-t', '--', resolve(path)], {
+    const { stdout } = await runCommand(budget, '/usr/sbin/lsof', ['-nP', '-t', '--', resolve(path)], {
       encoding: 'utf8',
       maxBuffer: 100_000,
     })
@@ -444,8 +458,8 @@ async function listFileWriters(path: string): Promise<number[]> {
   }
 }
 
-async function readProcessCwd(pid: number): Promise<string> {
-  const { stdout } = await execFileAsync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+async function readProcessCwd(pid: number, budget?: CutoverBudget): Promise<string> {
+  const { stdout } = await runCommand(budget, '/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
     encoding: 'utf8',
     maxBuffer: 100_000,
   })
@@ -454,8 +468,8 @@ async function readProcessCwd(pid: number): Promise<string> {
   return cwd
 }
 
-async function readProcessCommand(pid: number): Promise<string> {
-  const { stdout } = await execFileAsync('/bin/ps', ['-p', String(pid), '-o', 'command='], {
+async function readProcessCommand(pid: number, budget?: CutoverBudget): Promise<string> {
+  const { stdout } = await runCommand(budget, '/bin/ps', ['-p', String(pid), '-o', 'command='], {
     encoding: 'utf8',
     maxBuffer: 100_000,
   })
@@ -464,9 +478,9 @@ async function readProcessCommand(pid: number): Promise<string> {
   return command
 }
 
-async function probeHealth(port: number): Promise<number> {
+async function probeHealth(port: number, budget?: CutoverBudget): Promise<number> {
   try {
-    const { stdout } = await execFileAsync('/usr/bin/curl', [
+    const { stdout } = await runCommand(budget, '/usr/bin/curl', [
       '--noproxy', '*', '-sS', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5',
       `http://127.0.0.1:${port}/api/health`,
     ], { encoding: 'utf8', maxBuffer: 10_000 })
@@ -493,40 +507,100 @@ async function rollbackCutover(args: Args, backups: BackupEntry[]): Promise<Reco
   return { status: 'pass', productionPointerUntouched: true }
 }
 
-async function bootoutLaunchd(label: string): Promise<void> {
-  await execFileAsync('/bin/launchctl', ['bootout', `gui/${process.getuid?.() ?? 501}/${label}`])
+async function bootoutLaunchd(label: string, budget?: CutoverBudget): Promise<void> {
+  await runCommand(budget, '/bin/launchctl', ['bootout', `gui/${process.getuid?.() ?? 501}/${label}`])
 }
 
-async function waitForNoWriters(paths: string[]): Promise<void> {
+async function waitForNoWriters(paths: string[], budget?: CutoverBudget): Promise<void> {
+  const existingPaths = []
   for (const path of paths) {
-    if (!await isRegularFile(path)) continue
-    try {
-      const { stdout } = await execFileAsync('/usr/sbin/lsof', ['-t', '--', path], { maxBuffer: 100_000 })
-      if (stdout.trim()) throw new Error(`active_writer:${path}:${stdout.trim().replaceAll('\n', ',')}`)
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith('active_writer:')) throw error
-      if (!isCommandExitOne(error)) throw error
+    if (await isRegularFile(path)) existingPaths.push(path)
+  }
+  while (true) {
+    if (budget) await assertWithinDowntime(budget.startedAt, budget.maxDowntimeSeconds)
+    const active: string[] = []
+    for (const path of existingPaths) {
+      try {
+        const { stdout } = await runCommand(budget, '/usr/sbin/lsof', ['-t', '--', path], { maxBuffer: 100_000 })
+        if (stdout.trim()) active.push(`${path}:${stdout.trim().replaceAll('\n', ',')}`)
+      } catch (error) {
+        if (!isCommandExitOne(error)) throw error
+      }
     }
+    if (active.length === 0) return
+    if (!budget) throw new Error(`active_writer:${active.join('|')}`)
+    await sleepWithinDowntime(budget, 1000)
   }
 }
 
-async function assertNoCronLocks(lockRoot: string): Promise<void> {
-  try {
-    const entries = await readdir(resolve(lockRoot), { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) throw new Error(`cron_lock_symlink_forbidden:${entry.name}`)
-      if (entry.isDirectory() || entry.isFile()) {
-        throw new Error(`active_cron_lock:${join(resolve(lockRoot), entry.name)}`)
-      }
+async function assertNoCronLocks(lockRoot: string, budget?: CutoverBudget): Promise<void> {
+  while (true) {
+    if (budget) await assertWithinDowntime(budget.startedAt, budget.maxDowntimeSeconds)
+    try {
+      const entries = await readdir(resolve(lockRoot), { withFileTypes: true })
+      const active = entries.filter((entry) => entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())
+      const symlink = active.find((entry) => entry.isSymbolicLink())
+      if (symlink) throw new Error(`cron_lock_symlink_forbidden:${symlink.name}`)
+      if (active.length === 0) return
+      if (!budget) throw new Error(`active_cron_lock:${join(resolve(lockRoot), active[0]!.name)}`)
+    } catch (error) {
+      if (isEnoent(error)) return
+      if (error instanceof Error && error.message.startsWith('cron_lock_symlink_forbidden:')) throw error
+      if (error instanceof Error && error.message.startsWith('active_cron_lock:')) throw error
+      throw error
     }
+    await sleepWithinDowntime(budget!, 1000)
+  }
+}
+
+export async function assertWithinDowntime(startedAt: number, maxSeconds: number): Promise<void> {
+  if ((Date.now() - startedAt) / 1000 > maxSeconds) throw new Error('research_cutover_downtime_budget_exceeded')
+}
+
+export function remainingDowntimeMilliseconds(startedAt: number, maxSeconds: number): number {
+  const remaining = maxSeconds * 1000 - (Date.now() - startedAt)
+  if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('research_cutover_downtime_budget_exceeded')
+  return Math.max(1, Math.ceil(remaining))
+}
+
+async function sleepWithinDowntime(budget: CutoverBudget, requestedMilliseconds: number): Promise<void> {
+  const delay = Math.min(requestedMilliseconds, remainingDowntimeMilliseconds(budget.startedAt, budget.maxDowntimeSeconds))
+  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, delay))
+}
+
+async function runCommand(
+  budget: CutoverBudget | undefined,
+  file: string,
+  args: string[],
+  options: Record<string, unknown> = {},
+): Promise<{ stdout: string; stderr: string }> {
+  const timeout = budget ? remainingDowntimeMilliseconds(budget.startedAt, budget.maxDowntimeSeconds) : undefined
+  try {
+    return await execFileAsync(file, args, {
+      ...options,
+      ...(timeout === undefined ? {} : { timeout, killSignal: 'SIGTERM' }),
+    }) as { stdout: string; stderr: string }
   } catch (error) {
-    if (isEnoent(error)) return
+    if (budget && (isExecTimeout(error) || Date.now() - budget.startedAt >= budget.maxDowntimeSeconds * 1000)) {
+      throw new Error('research_cutover_downtime_budget_exceeded')
+    }
     throw error
   }
 }
 
-async function assertWithinDowntime(startedAt: number, maxSeconds: number): Promise<void> {
-  if ((Date.now() - startedAt) / 1000 > maxSeconds) throw new Error('research_cutover_downtime_budget_exceeded')
+async function runCutoverCommand(
+  budget: CutoverBudget,
+  file: string,
+  args: string[],
+  options: Record<string, unknown> = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return runCommand(budget, file, args, options)
+}
+
+function isExecTimeout(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const value = error as { code?: unknown; killed?: unknown; signal?: unknown }
+  return value.code === 'ETIMEDOUT' || (value.killed === true && value.signal === 'SIGTERM')
 }
 
 async function writeReceipt(args: Args, value: Record<string, unknown>): Promise<Record<string, unknown>> {

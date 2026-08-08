@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { assertWithinDowntime, remainingDowntimeMilliseconds } from './research_cutover.js'
 
 const remediationRoot = resolve('.')
 const releaseRoot = join(remediationRoot, 'runtime/releases')
@@ -82,5 +83,25 @@ describe('research_cutover preflight', () => {
     expect(result.blockers).toContain('legacy_wip_drift_detected')
     expect(verification.status).toBe('blocked')
     expect(verification.driftDetected).toBe(true)
+  })
+})
+
+describe('research_cutover downtime budget', () => {
+  it('rejects an already expired maintenance window', async () => {
+    await expect(assertWithinDowntime(Date.now() - 2_000, 1)).rejects.toThrow(
+      'research_cutover_downtime_budget_exceeded',
+    )
+  })
+
+  it('returns a bounded command timeout while the window remains', () => {
+    const remaining = remainingDowntimeMilliseconds(Date.now(), 5)
+    expect(remaining).toBeGreaterThan(0)
+    expect(remaining).toBeLessThanOrEqual(5_000)
+  })
+
+  it('rejects non-positive remaining command time', () => {
+    expect(() => remainingDowntimeMilliseconds(Date.now() - 2_000, 1)).toThrow(
+      'research_cutover_downtime_budget_exceeded',
+    )
   })
 })
