@@ -5,6 +5,15 @@ import { describe, expect, it } from 'vitest'
 import { collectArtifactHashes, copyReleaseTree, parseArgs } from './manage_local_release.js'
 
 describe('manage_local_release', () => {
+  it('keeps the TypeScript runner in production dependencies for immutable Cron scripts', async () => {
+    const packageJson = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, unknown>
+      devDependencies?: Record<string, unknown>
+    }
+    expect(packageJson.dependencies?.tsx).toBe('^4.21.0')
+    expect(packageJson.devDependencies?.tsx).toBeUndefined()
+  })
+
   it('keeps build, activation and rollback as distinct explicit commands', () => {
     const build = parseArgs([
       'build',
