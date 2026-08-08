@@ -30,6 +30,13 @@ import {
 
 const execFileAsync = promisify(execFile)
 const COMMIT_RE = /^[a-f0-9]{40}$/
+const REGENERABLE_RELEASE_CACHE_NAMES = new Set([
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.DS_Store',
+])
 
 type Command = 'build' | 'verify' | 'activate' | 'rollback' | 'activate-research' | 'rollback-research' | 'status'
 
@@ -333,6 +340,7 @@ export async function copyReleaseTree(source: string, destination: string): Prom
   if (!stat.isDirectory()) throw new Error(`release_artifact_type_forbidden:${source}`)
   await mkdir(destination, { recursive: true })
   for (const entry of await readdir(source)) {
+    if (REGENERABLE_RELEASE_CACHE_NAMES.has(entry)) continue
     await copyReleaseTree(join(source, entry), join(destination, entry))
   }
 }
@@ -363,6 +371,7 @@ async function collectFiles(root: string, path: string, files: Set<string>): Pro
   }
   if (!stat.isDirectory()) throw new Error(`release_artifact_type_forbidden:${path}`)
   for (const entry of await readdir(path)) {
+    if (REGENERABLE_RELEASE_CACHE_NAMES.has(entry)) continue
     const child = resolve(path, entry)
     assertWithin(root, child)
     await collectFiles(root, child, files)
