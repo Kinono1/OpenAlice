@@ -9,19 +9,22 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOCK_ROOT="$REPO_ROOT/data/runtime/locks"
-LOCK_DIR="$LOCK_ROOT/cron_${TASK}.lock"
 
 source "$REPO_ROOT/scripts/openalice_env.sh"
 source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
 
 export PATH="/Users/kino/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
-export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$REPO_ROOT/data}"
+DATA_ROOT="${OPENALICE_DATA_DIR:-$REPO_ROOT/data}"
+ARTIFACT_ROOT="${OPENALICE_ARTIFACT_DIR:-$DATA_ROOT/runtime}"
+LOG_ROOT="${OPENALICE_LOG_DIR:-$REPO_ROOT/logs}"
+LOCK_ROOT="$ARTIFACT_ROOT/locks"
+LOCK_DIR="$LOCK_ROOT/cron_${TASK}.lock"
+export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$DATA_ROOT}"
 
-mkdir -p "$LOCK_ROOT" "$REPO_ROOT/logs"
+mkdir -p "$LOCK_ROOT" "$LOG_ROOT"
 
-NOTIFICATION_PATH="$REPO_ROOT/data/runtime/cron_openalice_task/${TASK}_notification.json"
-LOG_FILE="$REPO_ROOT/logs/cron_openalice_task_${TASK}.log"
+NOTIFICATION_PATH="$ARTIFACT_ROOT/cron_openalice_task/${TASK}_notification.json"
+LOG_FILE="$LOG_ROOT/cron_openalice_task_${TASK}.log"
 
 if ! openalice_acquire_cron_lock "cron_openalice_task_${TASK}" "$LOCK_DIR" "$NOTIFICATION_PATH" "$LOG_FILE"; then
   exit 0

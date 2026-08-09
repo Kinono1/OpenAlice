@@ -7,11 +7,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$REPO_ROOT/scripts/openalice_env.sh"
 source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
 
-LOCK_DIR="$REPO_ROOT/data/runtime/locks/scheduler_security_audit.lock"
-LOG_DIR="$REPO_ROOT/logs/cron"
+DATA_ROOT="${OPENALICE_DATA_DIR:-$REPO_ROOT/data}"
+ARTIFACT_ROOT="${OPENALICE_ARTIFACT_DIR:-$DATA_ROOT/runtime}"
+LOG_ROOT="${OPENALICE_LOG_DIR:-$REPO_ROOT/logs}"
+LOCK_DIR="$ARTIFACT_ROOT/locks/scheduler_security_audit.lock"
+LOG_DIR="$LOG_ROOT/cron"
 LOG_FILE="$LOG_DIR/scheduler_security_audit.log"
-REPORT_PATH="$REPO_ROOT/data/runtime/scheduler_security_audit.latest.json"
-NOTIFICATION_PATH="$REPO_ROOT/data/runtime/scheduler_security_audit_notification.json"
+REPORT_PATH="$ARTIFACT_ROOT/scheduler_security_audit.latest.json"
+NOTIFICATION_PATH="$ARTIFACT_ROOT/scheduler_security_audit_notification.json"
 
 mkdir -p "$LOG_DIR" "$(dirname "$LOCK_DIR")" "$(dirname "$REPORT_PATH")" "$(dirname "$NOTIFICATION_PATH")"
 

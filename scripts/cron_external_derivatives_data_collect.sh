@@ -2,10 +2,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="$REPO_ROOT/logs"
-NOTIFICATION_PATH="$REPO_ROOT/data/runtime/external_derivatives_data_collect_notification.json"
 
 source "$REPO_ROOT/scripts/openalice_env.sh"
+
+DATA_ROOT="${OPENALICE_DATA_DIR:-$REPO_ROOT/data}"
+ARTIFACT_ROOT="${OPENALICE_ARTIFACT_DIR:-$DATA_ROOT/runtime}"
+LOG_ROOT="${OPENALICE_LOG_DIR:-$REPO_ROOT/logs}"
+export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$DATA_ROOT}"
+LOG_DIR="$LOG_ROOT"
+NOTIFICATION_PATH="$ARTIFACT_ROOT/external_derivatives_data_collect_notification.json"
 
 mkdir -p "$LOG_DIR" "$(dirname "$NOTIFICATION_PATH")"
 cd "$REPO_ROOT"
@@ -19,7 +24,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 LOG_PATH="$LOG_DIR/external_derivatives_data_collect.log"
-REPORT_STDOUT_PATH="$REPO_ROOT/data/runtime/external_derivatives_data_collect.current.stdout.json"
+REPORT_STDOUT_PATH="$ARTIFACT_ROOT/external_derivatives_data_collect.current.stdout.json"
+COLLECT_OUTPUT_PATH="${OPENALICE_EXTERNAL_OUTPUT_PATH:-$DATA_ROOT/external/derivatives/okx_swap_derivatives_events.jsonl}"
+COLLECT_REPORT_PATH="${OPENALICE_EXTERNAL_REPORT_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.latest.json}"
+RUN_LEDGER_PATH="${OPENALICE_EXTERNAL_RUN_LEDGER_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.runs.jsonl}"
+CHECKPOINT_PATH="${OPENALICE_EXTERNAL_CHECKPOINT_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.checkpoint.json}"
+COLLECTOR_LOCK_DIR="${OPENALICE_EXTERNAL_COLLECTOR_LOCK_DIR:-$ARTIFACT_ROOT/locks/external_derivatives_data_collect.collector.lock}"
+NORMALIZED_OUTPUT_PATH="${OPENALICE_EXTERNAL_NORMALIZED_OUTPUT_PATH:-$DATA_ROOT/normalized/derivatives/okx_swap_derivatives_events.normalized.jsonl}"
+NORMALIZE_REPORT_PATH="${OPENALICE_EXTERNAL_NORMALIZE_REPORT_PATH:-$ARTIFACT_ROOT/external_derivatives_data_normalize.latest.json}"
+AUDIT_PATH="${OPENALICE_EXTERNAL_AUDIT_PATH:-$ARTIFACT_ROOT/external_derivatives_data_audit.latest.json}"
 COLLECT_EXIT=0
 NORMALIZE_EXIT=0
 AUDIT_EXIT=0
@@ -32,21 +45,13 @@ COLLECT_ARGS=(
   --symbolBatchSize "${OPENALICE_EXTERNAL_SYMBOL_BATCH_SIZE:-25}"
   --json true
 )
-if [[ -n "${OPENALICE_EXTERNAL_OUTPUT_PATH:-}" ]]; then
-  COLLECT_ARGS+=(--outputPath "$OPENALICE_EXTERNAL_OUTPUT_PATH")
-fi
-if [[ -n "${OPENALICE_EXTERNAL_REPORT_PATH:-}" ]]; then
-  COLLECT_ARGS+=(--reportPath "$OPENALICE_EXTERNAL_REPORT_PATH")
-fi
-if [[ -n "${OPENALICE_EXTERNAL_RUN_LEDGER_PATH:-}" ]]; then
-  COLLECT_ARGS+=(--runLedgerPath "$OPENALICE_EXTERNAL_RUN_LEDGER_PATH")
-fi
-if [[ -n "${OPENALICE_EXTERNAL_CHECKPOINT_PATH:-}" ]]; then
-  COLLECT_ARGS+=(--checkpointPath "$OPENALICE_EXTERNAL_CHECKPOINT_PATH")
-fi
-if [[ -n "${OPENALICE_EXTERNAL_COLLECTOR_LOCK_DIR:-}" ]]; then
-  COLLECT_ARGS+=(--collectorLockDir "$OPENALICE_EXTERNAL_COLLECTOR_LOCK_DIR")
-fi
+COLLECT_ARGS+=(
+  --outputPath "$COLLECT_OUTPUT_PATH"
+  --reportPath "$COLLECT_REPORT_PATH"
+  --runLedgerPath "$RUN_LEDGER_PATH"
+  --checkpointPath "$CHECKPOINT_PATH"
+  --collectorLockDir "$COLLECTOR_LOCK_DIR"
+)
 if [[ -n "${OPENALICE_OKX_PUBLIC_HOST:-}" ]]; then
   COLLECT_ARGS+=(--baseUrl "$OPENALICE_OKX_PUBLIC_HOST")
 fi
@@ -57,15 +62,12 @@ fi
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] start external derivatives collect"
   if ./node_modules/.bin/tsx scripts/collect_okx_external_derivatives_data.ts "${COLLECT_ARGS[@]}" > "$REPORT_STDOUT_PATH"; then
     NORMALIZE_ARGS=(--json true)
-    if [[ -n "${OPENALICE_EXTERNAL_OUTPUT_PATH:-}" ]]; then
-      NORMALIZE_ARGS+=(--inputPath "$OPENALICE_EXTERNAL_OUTPUT_PATH")
-    fi
-    if [[ -n "${OPENALICE_EXTERNAL_NORMALIZED_OUTPUT_PATH:-}" ]]; then
-      NORMALIZE_ARGS+=(--outputPath "$OPENALICE_EXTERNAL_NORMALIZED_OUTPUT_PATH")
-    fi
-    if [[ -n "${OPENALICE_EXTERNAL_NORMALIZE_REPORT_PATH:-}" ]]; then
-      NORMALIZE_ARGS+=(--reportPath "$OPENALICE_EXTERNAL_NORMALIZE_REPORT_PATH")
-    fi
+    NORMALIZE_ARGS+=(
+      --inputPath "$COLLECT_OUTPUT_PATH"
+      --outputPath "$NORMALIZED_OUTPUT_PATH"
+      --reportPath "$NORMALIZE_REPORT_PATH"
+      --runLedgerPath "$RUN_LEDGER_PATH"
+    )
     if ./node_modules/.bin/tsx scripts/normalize_external_derivatives_data.ts "${NORMALIZE_ARGS[@]}"; then
       :
     else
@@ -75,12 +77,7 @@ fi
 
     if [[ $NORMALIZE_EXIT -eq 0 ]]; then
       AUDIT_ARGS=(--json true)
-      if [[ -n "${OPENALICE_EXTERNAL_NORMALIZED_OUTPUT_PATH:-}" ]]; then
-        AUDIT_ARGS+=(--inputPath "$OPENALICE_EXTERNAL_NORMALIZED_OUTPUT_PATH")
-      fi
-      if [[ -n "${OPENALICE_EXTERNAL_AUDIT_PATH:-}" ]]; then
-        AUDIT_ARGS+=(--outputPath "$OPENALICE_EXTERNAL_AUDIT_PATH")
-      fi
+      AUDIT_ARGS+=(--inputPath "$NORMALIZED_OUTPUT_PATH" --outputPath "$AUDIT_PATH")
       if ./node_modules/.bin/tsx scripts/audit_external_derivatives_data.ts "${AUDIT_ARGS[@]}"; then
         :
       else
@@ -95,7 +92,7 @@ fi
   fi
 } >> "$LOG_PATH" 2>&1
 
-node --input-type=module - "$REPORT_STDOUT_PATH" "$REPO_ROOT/data/runtime/external_derivatives_data_collect.latest.json" "$REPO_ROOT/data/runtime/external_derivatives_data_collect.latest.json.manifest.json" "$NOTIFICATION_PATH" "$COLLECT_EXIT" "$NORMALIZE_EXIT" "$AUDIT_EXIT" <<'NODE'
+node --input-type=module - "$REPORT_STDOUT_PATH" "$COLLECT_REPORT_PATH" "$COLLECT_REPORT_PATH.manifest.json" "$NOTIFICATION_PATH" "$COLLECT_EXIT" "$NORMALIZE_EXIT" "$AUDIT_EXIT" <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const [stdoutReportPath, latestReportPath, latestManifestPath, notificationPath, exitCodeRaw, normalizeExitRaw, auditExitRaw] = process.argv.slice(2)

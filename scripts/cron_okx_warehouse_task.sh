@@ -14,21 +14,24 @@ source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
 source "$REPO_ROOT/scripts/openalice_pnpm.sh"
 
 export PATH="/Users/kino/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
-export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$REPO_ROOT/data}"
+DATA_ROOT="${OPENALICE_DATA_DIR:-$REPO_ROOT/data}"
+ARTIFACT_ROOT="${OPENALICE_ARTIFACT_DIR:-$DATA_ROOT/runtime}"
+LOG_ROOT="${OPENALICE_LOG_DIR:-$REPO_ROOT/logs}"
+export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$DATA_ROOT}"
 
-LOCK_DIR="$REPO_ROOT/data/runtime/locks/cron_okx_warehouse_${TASK}.lock"
-LOG_FILE="$REPO_ROOT/logs/cron_okx_warehouse_${TASK}.log"
-NOTIFICATION_PATH="$REPO_ROOT/data/runtime/okx_warehouse/${TASK}_notification.json"
+LOCK_DIR="$ARTIFACT_ROOT/locks/cron_okx_warehouse_${TASK}.lock"
+LOG_FILE="$LOG_ROOT/cron_okx_warehouse_${TASK}.log"
+NOTIFICATION_PATH="$ARTIFACT_ROOT/okx_warehouse/${TASK}_notification.json"
 
 case "$TASK" in
-  instrument) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/okx_warehouse/okx_instrument_master_refresh_notification.json" ;;
-  fast) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/okx_warehouse/okx_public_fast_refresh_notification.json" ;;
-  broad) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/okx_warehouse/okx_public_broad_refresh_notification.json" ;;
-  health) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/okx_warehouse/okx_market_data_health_notification.json" ;;
-  compact) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/okx_warehouse/okx_warehouse_compact_notification.json" ;;
-  ssd_probe) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/storage/ssd_archive_notification.json" ;;
-  ssd_reminder_weekly|ssd_reminder_followup) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/storage/ssd_reminder_notification.json" ;;
-  retention) NOTIFICATION_PATH="$REPO_ROOT/data/runtime/storage/okx_warehouse_retention_notification.json" ;;
+  instrument) NOTIFICATION_PATH="$ARTIFACT_ROOT/okx_warehouse/okx_instrument_master_refresh_notification.json" ;;
+  fast) NOTIFICATION_PATH="$ARTIFACT_ROOT/okx_warehouse/okx_public_fast_refresh_notification.json" ;;
+  broad) NOTIFICATION_PATH="$ARTIFACT_ROOT/okx_warehouse/okx_public_broad_refresh_notification.json" ;;
+  health) NOTIFICATION_PATH="$ARTIFACT_ROOT/okx_warehouse/okx_market_data_health_notification.json" ;;
+  compact) NOTIFICATION_PATH="$ARTIFACT_ROOT/okx_warehouse/okx_warehouse_compact_notification.json" ;;
+  ssd_probe) NOTIFICATION_PATH="$ARTIFACT_ROOT/storage/ssd_archive_notification.json" ;;
+  ssd_reminder_weekly|ssd_reminder_followup) NOTIFICATION_PATH="$ARTIFACT_ROOT/storage/ssd_reminder_notification.json" ;;
+  retention) NOTIFICATION_PATH="$ARTIFACT_ROOT/storage/okx_warehouse_retention_notification.json" ;;
 esac
 
 mkdir -p "$(dirname "$LOCK_DIR")" "$(dirname "$LOG_FILE")" "$(dirname "$NOTIFICATION_PATH")"

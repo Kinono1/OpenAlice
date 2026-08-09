@@ -6,16 +6,19 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 source "$REPO_ROOT/scripts/openalice_env.sh"
 source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
-export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$REPO_ROOT/data}"
 
-LOCK_DIR="$REPO_ROOT/data/runtime/locks/eth_carry_refresh_pipeline.lock"
-LOG_DIR="$REPO_ROOT/logs/cron"
+DATA_ROOT="${OPENALICE_DATA_DIR:-$REPO_ROOT/data}"
+ARTIFACT_ROOT="${OPENALICE_ARTIFACT_DIR:-$DATA_ROOT/runtime}"
+LOG_ROOT="${OPENALICE_LOG_DIR:-$REPO_ROOT/logs}"
+export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$DATA_ROOT}"
+LOCK_DIR="$ARTIFACT_ROOT/locks/eth_carry_refresh_pipeline.lock"
+LOG_DIR="$LOG_ROOT/cron"
 LOG_FILE="$LOG_DIR/eth_carry_refresh_pipeline.log"
-DERIVATIVES_DIR="$REPO_ROOT/data/research/derivatives_history"
-NORMALIZED_DERIVATIVES_PATH="${OPENALICE_ETH_CARRY_NORMALIZED_PATH:-$REPO_ROOT/data/normalized/derivatives/okx_swap_derivatives_events.normalized.jsonl}"
+DERIVATIVES_DIR="$DATA_ROOT/research/derivatives_history"
+NORMALIZED_DERIVATIVES_PATH="${OPENALICE_ETH_CARRY_NORMALIZED_PATH:-$DATA_ROOT/normalized/derivatives/okx_swap_derivatives_events.normalized.jsonl}"
 ETH_FUNDING_PATH="$DERIVATIVES_DIR/okx_ETH_USDT_USDT_funding_history.json"
 BTC_FUNDING_PATH="$DERIVATIVES_DIR/okx_BTC_USDT_USDT_funding_history.json"
-NOTIFICATION_PATH="$REPO_ROOT/data/runtime/eth_carry_status/eth_carry_actionability_notification.json"
+NOTIFICATION_PATH="$ARTIFACT_ROOT/eth_carry_status/eth_carry_actionability_notification.json"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$(dirname "$LOCK_DIR")"
@@ -44,8 +47,9 @@ trap cleanup EXIT INT TERM
     exit 2
   fi
   ./node_modules/.bin/tsx scripts/refresh_eth_carry_pipeline.ts \
-    --ethFundingPath data/research/derivatives_history/okx_ETH_USDT_USDT_funding_history.json \
-    --btcFundingPath data/research/derivatives_history/okx_BTC_USDT_USDT_funding_history.json \
+    --ethFundingPath "$ETH_FUNDING_PATH" \
+    --btcFundingPath "$BTC_FUNDING_PATH" \
+    --snapshotBaseDir "$ARTIFACT_ROOT/eth_carry_status" \
     "$@"
   status=$?
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] end eth_carry_refresh_pipeline exit=$status"

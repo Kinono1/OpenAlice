@@ -7,11 +7,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$REPO_ROOT/scripts/openalice_env.sh"
 source "$REPO_ROOT/scripts/openalice_cron_lock.sh"
 
-LOCK_DIR="$REPO_ROOT/data/runtime/locks/paper_policy_shadow_settle.lock"
-LOG_DIR="$REPO_ROOT/logs/cron"
+DATA_ROOT="${OPENALICE_DATA_DIR:-$REPO_ROOT/data}"
+ARTIFACT_ROOT="${OPENALICE_ARTIFACT_DIR:-$DATA_ROOT/runtime}"
+LOG_ROOT="${OPENALICE_LOG_DIR:-$REPO_ROOT/logs}"
+export OPENALICE_DATA_ROOT="${OPENALICE_DATA_ROOT:-$DATA_ROOT}"
+LOCK_DIR="$ARTIFACT_ROOT/locks/paper_policy_shadow_settle.lock"
+LOG_DIR="$LOG_ROOT/cron"
 LOG_FILE="$LOG_DIR/paper_policy_shadow_settle.log"
-REPORT_PATH="$REPO_ROOT/data/runtime/paper_policy_shadow_settle.latest.json"
-NOTIFICATION_PATH="$REPO_ROOT/data/runtime/paper_policy_shadow_settle_notification.json"
+REPORT_PATH="$ARTIFACT_ROOT/paper_policy_shadow_settle.latest.json"
+NOTIFICATION_PATH="$ARTIFACT_ROOT/paper_policy_shadow_settle_notification.json"
 
 mkdir -p "$LOG_DIR" "$(dirname "$LOCK_DIR")" "$(dirname "$REPORT_PATH")"
 
@@ -30,6 +34,8 @@ trap cleanup EXIT INT TERM
   ./node_modules/.bin/tsx scripts/settle_paper_policy_shadow_ledger.ts \
     --timeframe 5m \
     --dryRun false \
+    --ledgerPath "$DATA_ROOT/paper_trading/paper_policy_shadow_ledger.jsonl" \
+    --dataDir "$DATA_ROOT/market/live_5m" \
     --outputPath "$REPORT_PATH" \
     --json true
   ./node_modules/.bin/tsx -e "const fs=require('fs'); const p=process.argv[1]; const out=process.argv[2]; const r=JSON.parse(fs.readFileSync(p,'utf8')); fs.writeFileSync(out, JSON.stringify({ shouldNotify: r.counts.appendedOutcomes > 0 || r.counts.missingCandleFiles > 0, deliveryDecision: r.counts.appendedOutcomes > 0 || r.counts.missingCandleFiles > 0 ? 'notify' : 'suppress', headline: 'Paper policy shadow settle: appended=' + r.counts.appendedOutcomes + ', due=' + r.counts.dueOutcomes + ', missingFiles=' + r.counts.missingCandleFiles, fullText: 'Paper policy shadow settle completed. appendedOutcomes=' + r.counts.appendedOutcomes + ', dueOutcomes=' + r.counts.dueOutcomes + ', notDue=' + r.counts.notDue + ', missingSymbols=' + r.missingSymbols.join(',') }, null, 2) + '\n')" "$REPORT_PATH" "$NOTIFICATION_PATH"
