@@ -27,6 +27,7 @@ LOG_PATH="$LOG_DIR/external_derivatives_data_collect.log"
 REPORT_STDOUT_PATH="$ARTIFACT_ROOT/external_derivatives_data_collect.current.stdout.json"
 COLLECT_OUTPUT_PATH="${OPENALICE_EXTERNAL_OUTPUT_PATH:-$DATA_ROOT/external/derivatives/okx_swap_derivatives_events.jsonl}"
 COLLECT_REPORT_PATH="${OPENALICE_EXTERNAL_REPORT_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.latest.json}"
+COLLECT_MANIFEST_PATH="${OPENALICE_EXTERNAL_MANIFEST_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.latest.json.manifest.json}"
 RUN_LEDGER_PATH="${OPENALICE_EXTERNAL_RUN_LEDGER_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.runs.jsonl}"
 CHECKPOINT_PATH="${OPENALICE_EXTERNAL_CHECKPOINT_PATH:-$ARTIFACT_ROOT/external_derivatives_data_collect.checkpoint.json}"
 COLLECTOR_LOCK_DIR="${OPENALICE_EXTERNAL_COLLECTOR_LOCK_DIR:-$ARTIFACT_ROOT/locks/external_derivatives_data_collect.collector.lock}"
@@ -92,7 +93,7 @@ fi
   fi
 } >> "$LOG_PATH" 2>&1
 
-node --input-type=module - "$REPORT_STDOUT_PATH" "$COLLECT_REPORT_PATH" "$COLLECT_REPORT_PATH.manifest.json" "$NOTIFICATION_PATH" "$COLLECT_EXIT" "$NORMALIZE_EXIT" "$AUDIT_EXIT" <<'NODE'
+ node --input-type=module - "$REPORT_STDOUT_PATH" "$COLLECT_REPORT_PATH" "$COLLECT_MANIFEST_PATH" "$NOTIFICATION_PATH" "$COLLECT_EXIT" "$NORMALIZE_EXIT" "$AUDIT_EXIT" <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const [stdoutReportPath, latestReportPath, latestManifestPath, notificationPath, exitCodeRaw, normalizeExitRaw, auditExitRaw] = process.argv.slice(2)
