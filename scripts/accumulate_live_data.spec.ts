@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mergeLatestRows, parseCSV, rowsToCSV } from './accumulate_live_data.js'
+import { buildOhlcvCollectorPitRows } from './lib/ohlcv_collector_pit.js'
 
 describe('accumulate_live_data CSV handling', () => {
   it('parses rows by header name instead of fixed offsets', () => {
@@ -70,5 +71,39 @@ describe('accumulate_live_data CSV handling', () => {
     const rows = csv.split('\n')
     expect(rows[1]?.startsWith('1,')).toBe(true)
     expect(rows[2]?.startsWith('2,')).toBe(true)
+  })
+
+  it('builds research-only row-explicit PIT sidecar rows for 1h collection', () => {
+    const rows = buildOhlcvCollectorPitRows({
+      generatedAt: '2026-05-07T01:00:00.000Z',
+      jobId: 'okx_public_ohlcv_1h_collector',
+      collectionRunId: 'run-1',
+      symbol: 'BTC-USDT',
+      storageSymbol: 'BTC_USDT_USDT',
+      instId: 'BTC-USDT-SWAP',
+      timeframe: '1h',
+      bar: '1H',
+      limit: 300,
+      requestStartedAt: '2026-05-07T01:00:01.000Z',
+      responseObservedAt: '2026-05-07T01:00:02.000Z',
+      candles: [{ timestamp: 1778112000000, open: 1, high: 2, low: 1, close: 1.5, volume: 10 }],
+    })
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      researchOnly: true,
+      promotionEligible: false,
+      paperTradingAllowed: false,
+      liveTradingAllowed: false,
+      executionAllowed: false,
+      timeframe: '1h',
+      bar: '1H',
+      availableAtBasis: 'row_explicit_collector_response_time_research_availability',
+      observedAtBasis: 'row_explicit_collector_response_time',
+      fetchedAtBasis: 'row_explicit_collector_request_start_time',
+      quality: {
+        promotionGrade: false,
+      },
+    })
   })
 })

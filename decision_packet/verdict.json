@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "generatedAt": "2026-03-02T10:41:16Z",
+  "generatedAt": "2026-05-04T21:03:51Z",
   "packetDir": "decision_packet",
   "evidencePackPath": "decision_packet/evidence_pack.json",
   "verdict": "NO_GO",
@@ -9,12 +9,14 @@
     "all": [
       "HARD_HARD_GATE_CHECK_FAILED",
       "HARD_RELEASE_GATE_BLOCKED",
-      "HARD_THRESHOLD_BREACH"
+      "HARD_THRESHOLD_BREACH",
+      "HARD_RELEASE_GATE_EXPIRED"
     ],
     "hard": [
       "HARD_HARD_GATE_CHECK_FAILED",
       "HARD_RELEASE_GATE_BLOCKED",
-      "HARD_THRESHOLD_BREACH"
+      "HARD_THRESHOLD_BREACH",
+      "HARD_RELEASE_GATE_EXPIRED"
     ],
     "warn": [],
     "info": []
@@ -113,8 +115,8 @@
           "measuredKey": "releaseGateStatusAgeHours",
           "operator": "<=",
           "threshold": 24,
-          "measured": 0.005569448888888889,
-          "passed": true,
+          "measured": 1522.38216569,
+          "passed": false,
           "missingMeasured": false
         }
       ]
@@ -153,8 +155,8 @@
       "measuredKey": "releaseGateStatusAgeHours",
       "operator": "<=",
       "threshold": 24,
-      "measured": 0.005569448888888889,
-      "passed": true,
+      "measured": 1522.38216569,
+      "passed": false,
       "missingMeasured": false
     }
   ],

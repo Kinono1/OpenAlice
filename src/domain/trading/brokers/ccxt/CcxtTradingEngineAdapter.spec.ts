@@ -879,17 +879,41 @@ describe('CcxtTradingEngineAdapter', () => {
         },
       },
       cryptoClient: {
-        getHistorical: vi.fn().mockResolvedValue(Array.from({ length: 48 }, (_, index) => ({
-          date: `2026-01-${String((index % 28) + 1).padStart(2, '0')}`,
-          open: 100 + index,
-          high: 101 + index,
-          low: 99 + index,
-          close: 100 + index,
-          volume: 1000 + index * 10,
-        }))),
+        getHistorical: vi.fn().mockResolvedValue(Array.from({ length: 48 }, (_, index) => {
+          const startMs = Date.now() - 47 * 60 * 60_000
+          return {
+            date: new Date(startMs + index * 60 * 60_000).toISOString(),
+            open: 100 + index,
+            high: 101 + index,
+            low: 99 + index,
+            close: 100 + index,
+            volume: 1000 + index * 10,
+          }
+        })),
       } as any,
       accountManager: {
-        resolve: vi.fn().mockReturnValue([]),
+        resolve: vi.fn().mockReturnValue([
+          {
+            id: 'bybit-main',
+            broker,
+            getAccount: vi.fn(async () => ({ netLiquidation: 10000 })),
+            getPositions: vi.fn(async () => Array.from({ length: 5 }, (_, index) => {
+              const positionContract = new Contract()
+              positionContract.localSymbol = 'BTC/USDT:USDT'
+              positionContract.symbol = 'BTC/USDT:USDT'
+              return {
+                contract: positionContract,
+                side: 'long',
+                quantity: new Decimal('1'),
+                avgCost: 100,
+                marketPrice: 100,
+                marketValue: 100,
+                unrealizedPnL: 0,
+                realizedPnL: 0,
+              }
+            })),
+          },
+        ]),
       } as any,
     }))
 

@@ -19,7 +19,13 @@ import {
   fetchLiveCandles,
   type LiveCandle,
 } from '../src/domain/market-data/live-fetcher.js'
-import { defaultPaperUniverseAssets } from './lib/paper_universe.js'
+import {
+  appendOhlcvCollectorPitRows,
+  buildCollectorRunId,
+  buildOhlcvCollectorPitRows,
+  resolveCollectorPitRowsPath,
+} from './lib/ohlcv_collector_pit.js'
+import { defaultMarketDataUniverseAssets } from './lib/paper_universe.js'
 
 interface CandleRow {
   timestamp: number
@@ -123,11 +129,16 @@ async function main() {
   const outDir = join(import.meta.dirname ?? '.', '..', 'data', 'market', 'live_accumulated')
   await mkdir(outDir, { recursive: true })
   const now = new Date()
+  const generatedAt = now.toISOString()
+  const jobId = 'okx_public_ohlcv_1h_collector'
+  const collectionRunId = buildCollectorRunId({ jobId, generatedAt, timeframe: '1h' })
+  const pitRowsPath = resolveCollectorPitRowsPath()
   let totalNew = 0
+  let totalPitRows = 0
 
   console.log(`=== Accumulate Live Data - ${now.toISOString().slice(0, 19)} ===\n`)
 
-  for (const asset of defaultPaperUniverseAssets()) {
+  for (const asset of defaultMarketDataUniverseAssets()) {
     const filePath = join(outDir, asset.file)
 
     // Load existing data
@@ -144,20 +155,38 @@ async function main() {
 
     // Fetch latest from OKX
     try {
+      const requestStartedAt = new Date().toISOString()
       const latest = await fetchLiveCandles(asset.okxInstId, '1H', 300).catch(async (err) => {
         await new Promise(r => setTimeout(r, 2000))
         return fetchLiveCandles(asset.okxInstId, '1H', 300)
       })
+      const responseObservedAt = new Date().toISOString()
       const merged = mergeLatestRows(existingRows, latest)
 
       // Save
       const csv = rowsToCSV(header, merged.rows, asset.storageSymbol, 'okx')
       await writeFile(filePath, csv)
+      const pitRows = buildOhlcvCollectorPitRows({
+        generatedAt,
+        jobId,
+        collectionRunId,
+        symbol: asset.paperSymbol,
+        storageSymbol: asset.storageSymbol,
+        instId: asset.okxInstId,
+        timeframe: '1h',
+        bar: '1H',
+        limit: 300,
+        requestStartedAt,
+        responseObservedAt,
+        candles: latest,
+      })
+      const pitWrite = await appendOhlcvCollectorPitRows(pitRowsPath, pitRows)
+      totalPitRows += pitWrite.rowsWritten
 
       const oldest = [...merged.rows.values()].sort((a, b) => a.timestamp - b.timestamp)[0]
       const newest = [...merged.rows.values()].sort((a, b) => b.timestamp - a.timestamp)[0]
       const status = merged.newBars > 0 ? 'updated' : 'unchanged'
-      console.log(`${status} ${asset.okxInstId}: ${merged.rows.size} bars (${merged.newBars} new, ${merged.replacedBars} refreshed) | ${new Date(oldest.timestamp).toISOString().slice(0, 10)} -> ${new Date(newest.timestamp).toISOString().slice(0, 10)}`)
+      console.log(`${status} ${asset.okxInstId}: ${merged.rows.size} bars (${merged.newBars} new, ${merged.replacedBars} refreshed, ${pitWrite.rowsWritten} pit rows) | ${new Date(oldest.timestamp).toISOString().slice(0, 10)} -> ${new Date(newest.timestamp).toISOString().slice(0, 10)}`)
       totalNew += merged.newBars
     } catch (err) {
       console.log(`error ${asset.okxInstId}: ${err instanceof Error ? err.message : err}`)
@@ -165,7 +194,9 @@ async function main() {
   }
 
   console.log(`\nTotal new bars: ${totalNew}`)
+  console.log(`Total PIT sidecar rows: ${totalPitRows}`)
   console.log(`Next run: hourly. Data dir: ${outDir}`)
+  console.log(`PIT sidecar: ${pitRowsPath ?? 'disabled'}`)
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : ''

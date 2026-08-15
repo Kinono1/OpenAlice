@@ -7,6 +7,23 @@ import { MockBroker, makeContract, makePosition, makeOpenOrder } from './brokers
 import type { Operation } from './git/types.js'
 import './contract-ext.js'
 
+/**
+ * Mock release_gate_status so UTA.push() does not throw GATE_BLOCKED.
+ * Tests that need specific gate states can override via
+ * vi.mocked(loadReleaseGateStatus).mockResolvedValue(...)
+ */
+vi.mock('../../runtime/release_gate_status.js', () => ({
+  loadReleaseGateStatus: vi.fn().mockResolvedValue({
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    allowPaperTrading: true,
+    allowLiveTrading: true,
+    failedChecks: [],
+    warningChecks: [],
+  }),
+  isReleaseGateStatusBlocking: vi.fn().mockReturnValue({ blocking: false }),
+}))
+
 function createUTA(broker?: MockBroker, options?: UnifiedTradingAccountOptions): { uta: UnifiedTradingAccount; broker: MockBroker } {
   const b = broker ?? new MockBroker()
   const uta = new UnifiedTradingAccount(b, options)

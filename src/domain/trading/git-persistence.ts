@@ -4,8 +4,9 @@
  * Extracted from main.ts. Pure functions + file IO, no instance dependencies.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, rename } from 'fs/promises'
 import { resolve, dirname } from 'path'
+import { randomUUID } from 'crypto'
 import type { GitExportState } from './git/types.js'
 
 // ==================== Paths ====================
@@ -28,7 +29,12 @@ export async function loadGitState(accountId: string): Promise<GitExportState | 
   const primary = gitFilePath(accountId)
   try {
     return JSON.parse(await readFile(primary, 'utf-8')) as GitExportState
-  } catch { /* try legacy */ }
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn(`[git-persistence] error reading primary state for ${accountId}:`, err)
+    }
+    /* ENOENT — try legacy */
+  }
   const legacy = LEGACY_GIT_PATHS[accountId]
   if (legacy) {
     try {
@@ -38,11 +44,13 @@ export async function loadGitState(accountId: string): Promise<GitExportState | 
   return undefined
 }
 
-/** Create a callback that persists git state to disk on each commit. */
+/** Create a callback that persists git state to disk on each commit. Atomic write via temp+rename. */
 export function createGitPersister(accountId: string): (state: GitExportState) => Promise<void> {
   const filePath = gitFilePath(accountId)
   return async (state: GitExportState) => {
     await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, JSON.stringify(state, null, 2))
+    const tmp = `${filePath}.tmp.${randomUUID().slice(0, 8)}`
+    await writeFile(tmp, JSON.stringify(state, null, 2))
+    await rename(tmp, filePath)
   }
 }

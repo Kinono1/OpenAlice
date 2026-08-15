@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.openalice.okx-market-data</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/scripts/collect_okx_market_data.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>1</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/logs/okx_market_data_collect.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/logs/okx_market_data_collect.err.log</string>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>

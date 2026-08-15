@@ -380,6 +380,259 @@ describe('preTradeRiskCheck', () => {
     expect(res.reason).toContain('Consecutive loss breaker')
   })
 
+  it('blocks new opens when risk-if-filled breaches maxSingleTradeLossUsd', async () => {
+    const engine = new MockEngine(healthyAccount, [])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2_000,
+        price: 100,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxSingleTradeLossUsd: 150,
+      },
+      {
+        stopLossPrice: 90,
+      },
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.reason).toContain('maxSingleTradeLossUsd')
+    expect(res.details).toMatchObject({
+      riskIfFilledUsd: 200,
+      maxSingleTradeLossUsd: 150,
+    })
+  })
+
+  it('blocks new opens when projected total exposure breaches maxTotalExposurePctOfEquity', async () => {
+    const engine = new MockEngine(healthyAccount, [
+      {
+        ...existingPosition,
+        symbol: 'BTC/USD',
+        positionValue: 4_000,
+      },
+    ])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2_500,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxPositionPctOfEquity: 50,
+        maxTotalExposurePctOfEquity: 60,
+      },
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.reason).toContain('maxTotalExposurePctOfEquity')
+    expect(res.details).toMatchObject({
+      projectedTotalExposureNotional: 6_500,
+      projectedTotalExposurePct: 65,
+      maxTotalExposurePctOfEquity: 60,
+    })
+  })
+
+  it('allows reduce-only orders when total exposure is already above the cap', async () => {
+    const engine = new MockEngine(healthyAccount, [
+      {
+        ...existingPosition,
+        symbol: 'BTC/USD',
+        positionValue: 6_500,
+      },
+    ])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'BTC/USD',
+        side: 'sell',
+        type: 'market',
+        size: 0.1,
+        reduceOnly: true,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxPositionPctOfEquity: 30,
+        maxTotalExposurePctOfEquity: 60,
+        maxSingleTradeLossUsd: 50,
+      },
+      {
+        dailyLossPct: -8,
+        riskIfFilledUsd: 1_000,
+      },
+    )
+
+    expect(res.approved).toBe(true)
+  })
+
+  it('blocks new opens when projected symbol concentration breaches maxSymbolExposurePctOfEquity', async () => {
+    const engine = new MockEngine(healthyAccount, [
+      {
+        ...existingPosition,
+        symbol: 'ETH/USD',
+        positionValue: 2_500,
+      },
+    ])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2_000,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxPositionPctOfEquity: 60,
+        maxTotalExposurePctOfEquity: 80,
+        maxSymbolExposurePctOfEquity: 40,
+      },
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.reason).toContain('maxSymbolExposurePctOfEquity')
+    expect(res.details).toMatchObject({
+      symbol: 'ETH/USD',
+      projectedSymbolExposure: 4_500,
+      projectedSymbolExposurePct: 45,
+      maxSymbolExposurePctOfEquity: 40,
+    })
+  })
+
+  it('blocks new opens when projected net directional exposure breaches maxNetDirectionalExposurePctOfEquity', async () => {
+    const engine = new MockEngine(healthyAccount, [
+      {
+        ...existingPosition,
+        symbol: 'BTC/USD',
+        side: 'long',
+        positionValue: 3_000,
+      },
+      {
+        ...existingPosition,
+        symbol: 'SOL/USD',
+        side: 'short',
+        positionValue: 1_000,
+      },
+    ])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'ETH/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2_500,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxPositionPctOfEquity: 60,
+        maxTotalExposurePctOfEquity: 80,
+        maxNetDirectionalExposurePctOfEquity: 40,
+      },
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.reason).toContain('maxNetDirectionalExposurePctOfEquity')
+    expect(res.details).toMatchObject({
+      projectedNetDirectionalNotional: 4_500,
+      projectedNetDirectionalExposurePct: 45,
+      maxNetDirectionalExposurePctOfEquity: 40,
+    })
+  })
+
+  it('allows reduce-only orders that bring net directional exposure back under the cap', async () => {
+    const engine = new MockEngine(healthyAccount, [
+      {
+        ...existingPosition,
+        symbol: 'BTC/USD',
+        side: 'long',
+        positionValue: 5_000,
+      },
+    ])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'BTC/USD',
+        side: 'sell',
+        type: 'market',
+        size: 0.04,
+        reduceOnly: true,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxPositionPctOfEquity: 60,
+        maxTotalExposurePctOfEquity: 80,
+        maxSymbolExposurePctOfEquity: 60,
+        maxNetDirectionalExposurePctOfEquity: 40,
+      },
+    )
+
+    expect(res.approved).toBe(true)
+  })
+
+  it('blocks new opens when projected correlated group exposure breaches maxCorrelatedGroupExposurePctOfEquity', async () => {
+    const engine = new MockEngine(healthyAccount, [
+      {
+        ...existingPosition,
+        symbol: 'BTC/USD',
+        positionValue: 2_500,
+      },
+      {
+        ...existingPosition,
+        symbol: 'ETH/USD',
+        positionValue: 1_500,
+      },
+    ])
+
+    const res = await preTradeRiskCheck(
+      engine,
+      {
+        symbol: 'SOL/USD',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2_500,
+      },
+      {
+        ...baseRisk,
+        maxOrderUsd: 5_000,
+        maxPositionPctOfEquity: 60,
+        maxTotalExposurePctOfEquity: 80,
+        maxNetDirectionalExposurePctOfEquity: 80,
+        maxCorrelatedGroupExposurePctOfEquity: 60,
+        correlatedExposureGroups: {
+          crypto_beta: ['BTC/USD', 'ETH/USD', 'SOL/USD'],
+        },
+      },
+    )
+
+    expect(res.approved).toBe(false)
+    expect(res.reason).toContain('maxCorrelatedGroupExposurePctOfEquity')
+    expect(res.details).toMatchObject({
+      groupId: 'crypto_beta',
+      projectedGroupExposure: 6_500,
+      projectedCorrelatedGroupExposurePct: 65,
+      maxCorrelatedGroupExposurePctOfEquity: 60,
+    })
+  })
+
   it('applies high-volatility leverage clamp from capital scale rules', async () => {
     const engine = new MockEngine(healthyAccount, [])
 

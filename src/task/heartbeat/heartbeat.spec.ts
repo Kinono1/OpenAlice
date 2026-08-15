@@ -175,6 +175,11 @@ describe('heartbeat', () => {
         reply: 'Market alert: BTC dropped 5%',
         delivered: true,
       })
+      await vi.waitFor(() => expect(cronEngine.list()[0].state.lastStatus).toBe('ok'))
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        jobId: cronEngine.list()[0].id,
+        jobName: '__heartbeat__',
+      })
     })
 
     it('should skip HEARTBEAT_OK responses', async () => {
@@ -347,7 +352,44 @@ describe('heartbeat', () => {
       })
 
       const errors = eventLog.recent({ type: 'heartbeat.error' })
-      expect(errors[0].payload).toMatchObject({ error: 'AI down' })
+      expect(errors[0].payload).toMatchObject({
+        error: 'AI down',
+        errorClass: 'ai_provider',
+        deliveryAttempted: false,
+      })
+      await vi.waitFor(() => expect(cronEngine.list()[0].state.lastStatus).toBe('ok'))
+      expect(cronEngine.list()[0].state.lastErrorClass).toBeNull()
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        jobId: cronEngine.list()[0].id,
+        jobName: '__heartbeat__',
+        parsedReason: 'degraded_ai_provider',
+      })
+    })
+
+    it('classifies provider error text separately and never attempts delivery', async () => {
+      const send = vi.fn(async () => ({ delivered: true }))
+      connectorCenter.register({
+        channel: 'telegram', to: 'user1', capabilities: { push: true, media: false }, send,
+      })
+      mockEngine.setResponse('[error] Agent SDK error: provider unavailable')
+      heartbeat = createHeartbeat({
+        config: makeConfig(), connectorCenter, cronEngine, eventLog,
+        agentCenter: mockEngine as any, session,
+      })
+      await heartbeat.start()
+      await cronEngine.runNow(cronEngine.list()[0].id)
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'heartbeat.error' })).toHaveLength(1))
+      expect(send).not.toHaveBeenCalled()
+      expect(eventLog.recent({ type: 'heartbeat.done' })).toHaveLength(0)
+      expect(eventLog.recent({ type: 'heartbeat.error' })[0].payload).toMatchObject({
+        error: 'Agent SDK error: provider unavailable',
+        errorClass: 'ai_provider',
+        deliveryAttempted: false,
+      })
+      await vi.waitFor(() => expect(cronEngine.list()[0].state.lastStatus).toBe('ok'))
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        parsedReason: 'degraded_ai_provider',
+      })
     })
 
     it('should handle delivery failure gracefully', async () => {

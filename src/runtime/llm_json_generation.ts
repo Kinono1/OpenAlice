@@ -26,12 +26,20 @@ export function shouldUseTextJsonMode(modelOverride?: ModelOverride): boolean {
   const provider = modelOverride?.provider?.trim().toLowerCase()
   const model = modelOverride?.model?.trim().toLowerCase() ?? ''
   const baseUrl = (modelOverride?.baseUrl ?? modelOverride?.baseURL ?? '').trim().toLowerCase()
-  return provider === 'openai-compatible' || model.includes('deepseek') || baseUrl.includes('deepseek')
+  // inferai endpoint does not support structured output (tool_use);
+  // use text generation + JSON extraction for both openai-compatible and anthropic providers
+  return provider === 'openai-compatible' || model.includes('deepseek') || baseUrl.includes('deepseek') || baseUrl.includes('newapis')
 }
 
 function buildProviderOptions(providerName?: string): SharedV3ProviderOptions | undefined {
-  if (providerName !== 'openai-compatible') return undefined
-  return { 'openai-compatible': { reasoningEffort: 'xhigh', forceReasoning: true } }
+  if (providerName === 'openai-compatible') {
+    return { 'openai-compatible': { reasoningEffort: 'max', forceReasoning: true } }
+  }
+  if (providerName === 'anthropic') {
+    // NOTE: inferai endpoint does not support anthropic thinking parameter
+    return { anthropic: {} }
+  }
+  return undefined
 }
 
 export function summarizeLlmUsage(usage: LanguageModelUsage): LlmUsageSnapshot {

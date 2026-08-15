@@ -3,17 +3,26 @@ import { dirname } from 'node:path'
 import type { ReleaseGateCheck, ReleaseGateResult } from '../backtest/release_gate.js'
 import { writeEvidenceManifestForArtifact } from './evidence_manifest.js'
 
+export type PersistedReleaseGateCheckName =
+  | ReleaseGateCheck['name']
+  | 'paper_gate'
+  | 'live_gate'
+
+export type PersistedReleaseGateCheck = Omit<ReleaseGateCheck, 'name'> & {
+  name: PersistedReleaseGateCheckName
+}
+
 export interface PersistedReleaseGateStatus {
   version: 1
   generatedAt: string
   allowPaperTrading: boolean
   allowLiveTrading: boolean
   allowTinyCapLiveTrading?: boolean
-  failedChecks: ReleaseGateCheck['name'][]
-  warningChecks: ReleaseGateCheck['name'][]
-  result?: 'GO' | 'NO_GO'
+  failedChecks: PersistedReleaseGateCheckName[]
+  warningChecks: PersistedReleaseGateCheckName[]
+  result?: 'GO' | 'NO_GO' | 'RESEARCH_ONLY'
   reasonCodes?: string[]
-  checks?: ReleaseGateCheck[]
+  checks?: PersistedReleaseGateCheck[]
   sourceReportPath?: string
   expiresAt?: string
 }
@@ -39,7 +48,7 @@ export async function writeReleaseGateStatus(
     sourceReportPath?: string
     expiresAt?: string
     allowTinyCapLiveTrading?: boolean
-    result?: 'GO' | 'NO_GO'
+    result?: PersistedReleaseGateStatus['result']
     reasonCodes?: string[]
     checks?: ReleaseGateCheck[]
   },
@@ -78,7 +87,7 @@ export async function writeReleaseGateStatus(
 
 export type ReleaseGateMode = 'paper' | 'live'
 
-const REQUIRED_LIVE_CHECK_NAMES: ReleaseGateCheck['name'][] = [
+const REQUIRED_LIVE_CHECK_NAMES: PersistedReleaseGateCheckName[] = [
   'execution_quality',
   'ramp_up',
   'regime_shift',
@@ -86,14 +95,14 @@ const REQUIRED_LIVE_CHECK_NAMES: ReleaseGateCheck['name'][] = [
 
 export function getSkippedRequiredLiveChecks(
   status: PersistedReleaseGateStatus | null,
-): ReleaseGateCheck['name'][] {
+): PersistedReleaseGateCheckName[] {
   if (!status?.checks) {
     return []
   }
 
   return status.checks
     .filter(
-      (check): check is ReleaseGateCheck =>
+      (check): check is PersistedReleaseGateCheck =>
         REQUIRED_LIVE_CHECK_NAMES.includes(check.name) && check.status === 'skipped',
     )
     .map((check) => check.name)
@@ -177,7 +186,7 @@ export function normalizeReleaseGateStatus(raw: unknown): PersistedReleaseGateSt
   }
 }
 
-function cloneReleaseGateChecks(checks: ReleaseGateCheck[]): ReleaseGateCheck[] {
+function cloneReleaseGateChecks(checks: ReleaseGateCheck[]): PersistedReleaseGateCheck[] {
   return checks.map((check) => ({
     ...check,
     metrics: { ...check.metrics },
@@ -187,7 +196,7 @@ function cloneReleaseGateChecks(checks: ReleaseGateCheck[]): ReleaseGateCheck[] 
 function normalizeReleaseGateResult(
   value: PersistedReleaseGateStatus['result'],
 ): PersistedReleaseGateStatus['result'] {
-  if (value === undefined || value === 'GO' || value === 'NO_GO') {
+  if (value === undefined || value === 'GO' || value === 'NO_GO' || value === 'RESEARCH_ONLY') {
     return value
   }
   throw new Error('Malformed release gate status.')
@@ -206,7 +215,7 @@ function normalizeOptionalStringArray(
   return [...value]
 }
 
-function normalizeOptionalReleaseGateChecks(value: unknown): ReleaseGateCheck[] | undefined {
+function normalizeOptionalReleaseGateChecks(value: unknown): PersistedReleaseGateCheck[] | undefined {
   if (value === undefined) {
     return undefined
   }
@@ -217,7 +226,7 @@ function normalizeOptionalReleaseGateChecks(value: unknown): ReleaseGateCheck[] 
   return value.map((item) => normalizeReleaseGateCheck(item))
 }
 
-function normalizeReleaseGateCheck(raw: unknown): ReleaseGateCheck {
+function normalizeReleaseGateCheck(raw: unknown): PersistedReleaseGateCheck {
   if (!raw || typeof raw !== 'object') {
     throw new Error('Malformed release gate status checks.')
   }
@@ -251,7 +260,7 @@ function normalizeReleaseGateCheck(raw: unknown): ReleaseGateCheck {
   }
 }
 
-function isReleaseGateCheckName(value: unknown): value is ReleaseGateCheck['name'] {
+function isReleaseGateCheckName(value: unknown): value is PersistedReleaseGateCheckName {
   return (
     value === 'wfo' ||
     value === 'significance' ||
@@ -260,7 +269,9 @@ function isReleaseGateCheckName(value: unknown): value is ReleaseGateCheck['name
     value === 'strategy_plan_evidence' ||
     value === 'execution_quality' ||
     value === 'ramp_up' ||
-    value === 'regime_shift'
+    value === 'regime_shift' ||
+    value === 'paper_gate' ||
+    value === 'live_gate'
   )
 }
 

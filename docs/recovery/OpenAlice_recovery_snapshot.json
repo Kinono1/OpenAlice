@@ -1,0 +1,951 @@
+{
+  "generatedAt": "2026-05-08T08:23:11Z",
+  "sourceFile": "docs/recovery/scripts/generate_snapshot.sh",
+  "truth": {
+    "systemStatus": {
+      "generatedAt": "2026-05-08T08:12:03.743Z",
+      "overallPlanCompletionPct": 49,
+      "effectiveActionability": "research_only_blocked",
+      "paperTradingAllowed": false,
+      "liveTradingAllowed": false,
+      "canPromote": false,
+      "reasonChainCount": 25,
+      "components": [
+        {
+          "name": "Live data",
+          "status": "observation_only"
+        },
+        {
+          "name": "OKX public connectivity",
+          "status": "available"
+        },
+        {
+          "name": "OpenAlice data catalog",
+          "status": "blocked"
+        },
+        {
+          "name": "WFO",
+          "status": "not_available"
+        },
+        {
+          "name": "IC",
+          "status": "not_available"
+        },
+        {
+          "name": "Research incubation",
+          "status": "not_available"
+        },
+        {
+          "name": "Research line retirement",
+          "status": "blocked"
+        },
+        {
+          "name": "Research next hypothesis",
+          "status": "observation_only"
+        },
+        {
+          "name": "ETH carry research",
+          "status": "blocked"
+        },
+        {
+          "name": "ETH carry confluence candidate",
+          "status": "blocked"
+        },
+        {
+          "name": "ETH carry data gaps",
+          "status": "blocked"
+        },
+        {
+          "name": "ETH carry prospective watchdog",
+          "status": "observation_only"
+        },
+        {
+          "name": "OKX route-cost/slippage readiness",
+          "status": "blocked"
+        },
+        {
+          "name": "AI-Scientist crypto intake",
+          "status": "observation_only"
+        },
+        {
+          "name": "AI-Scientist second-validation queue",
+          "status": "observation_only"
+        },
+        {
+          "name": "OHLCV collector PIT contract",
+          "status": "observation_only"
+        },
+        {
+          "name": "Strategy defect monitor",
+          "status": "blocked"
+        },
+        {
+          "name": "Strategy quality gate coverage",
+          "status": "blocked"
+        },
+        {
+          "name": "Quant framework benchmark",
+          "status": "blocked"
+        },
+        {
+          "name": "Crypto factor family",
+          "status": "not_available"
+        },
+        {
+          "name": "Liquidity-conditioned prospective",
+          "status": "observation_only"
+        },
+        {
+          "name": "Scheduler security",
+          "status": "available"
+        },
+        {
+          "name": "Goal completion audit",
+          "status": "blocked"
+        },
+        {
+          "name": "Allocator",
+          "status": "blocked"
+        },
+        {
+          "name": "CP bridge",
+          "status": "observation_only"
+        }
+      ]
+    },
+    "liveDataFreshness": {
+      "generatedAt": "2026-05-08T08:22:44.970Z",
+      "expectedAssets": 13,
+      "presentAssets": 13,
+      "freshAssets": 12
+    },
+    "routeCostBudget": {
+      "generatedAt": "2026-05-08T08:12:00.049Z",
+      "makerFeeBps": 2,
+      "takerFeeBps": 5,
+      "verifiedByRuntime": true,
+      "routes": {
+        "passive_passive": {
+          "route": "passive_passive",
+          "feeBps": 4,
+          "spreadBps": 2,
+          "slippageBps": 4,
+          "adverseSelectionBufferBps": 5,
+          "queueMissBufferBps": 3,
+          "fundingBps": 0,
+          "totalExpectedCostBps": 18,
+          "maxAllowedCostBps": 20,
+          "breakEvenEdgeBps": 18
+        },
+        "passive_taker": {
+          "route": "passive_taker",
+          "feeBps": 7,
+          "spreadBps": 4,
+          "slippageBps": 8,
+          "adverseSelectionBufferBps": 3,
+          "queueMissBufferBps": 2,
+          "fundingBps": 0,
+          "totalExpectedCostBps": 24,
+          "maxAllowedCostBps": 20,
+          "breakEvenEdgeBps": 24
+        },
+        "taker_taker": {
+          "route": "taker_taker",
+          "feeBps": 10,
+          "spreadBps": 6,
+          "slippageBps": 8,
+          "adverseSelectionBufferBps": 2,
+          "queueMissBufferBps": 0,
+          "fundingBps": 0,
+          "totalExpectedCostBps": 26,
+          "maxAllowedCostBps": 20,
+          "breakEvenEdgeBps": 26
+        },
+        "twap": {
+          "route": "twap",
+          "feeBps": 10,
+          "spreadBps": 4,
+          "slippageBps": 10,
+          "adverseSelectionBufferBps": 3,
+          "queueMissBufferBps": 0,
+          "fundingBps": 0,
+          "totalExpectedCostBps": 27,
+          "maxAllowedCostBps": 20,
+          "breakEvenEdgeBps": 27
+        }
+      }
+    },
+    "strategyPromotion": {
+      "generatedAt": "2026-05-07T04:41:08.905Z",
+      "finalVerdict": "quarantined",
+      "researchGate": {
+        "status": "fail",
+        "hardBlocks": [
+          "wfo_failed",
+          "pbo_indeterminate",
+          "dsr_missing",
+          "fdr_missing",
+          "trial_ledger_fail:trial_ledger_missing,cross_sectional_trial_ledger_missing"
+        ]
+      },
+      "paperGate": {
+        "status": "fail",
+        "hardBlockCount": 36,
+        "metricSnapshot": {
+          "status": "blocked",
+          "dataMode": "live_only",
+          "paperDaysObserved": 7,
+          "paperTradesObserved": 12,
+          "supportingEvidenceCount": 2,
+          "paperEvidencePointerStatus": "stale_report_halt",
+          "paperEvidenceBlockNewOpens": true,
+          "paperEvidenceForceCloseExisting": false,
+          "paperEvidenceAlert": true,
+          "paperEvidenceFreshnessStatus": "stale",
+          "paperEvidenceAgeSeconds": 157286,
+          "p1GateStatus": "insufficient_data",
+          "p1GateStatusBasis": "insufficient_data",
+          "p1GateStratifiedItems": 196,
+          "p1GateStratifiedCostCoverageRequired": 182,
+          "p1GateStratifiedCollectMoreData": 14,
+          "p1GateStratifiedKeepBlocked": 0,
+          "p1GateStratifiedTopHarmfulKeys": [],
+          "p1AcceptedCostCoverage": "2/947",
+          "p1CostQuarantine": true,
+          "p1StopLossTrades": 42,
+          "p1StopLossDiagnosticsOk": 42,
+          "p1StopLossDiagnosticsCoveragePct": 100,
+          "p1StoplossRiskPolicyStatus": "blocked",
+          "p1StoplossRiskPolicyHighestSeverity": "critical",
+          "p1StoplossRiskPolicyBlockedBy": [
+            "stoploss_lane:microstructure_100x:block",
+            "stoploss_lane_symbol_side:microstructure_100x|DOGE-USDT|long:block",
+            "stoploss_lane_symbol_side:microstructure_100x|DOGE-USDT|short:block",
+            "stoploss_lane_symbol_side:microstructure_100x|ADA-USDT|long:block",
+            "stoploss_lane_symbol_side:microstructure_100x|ADA-USDT|short:block"
+          ],
+          "p1CostNewWindowStatus": "ok",
+          "p1CostNewWindowCoverage": "0/2",
+          "p1CostNewWindowCoveragePct": 0,
+          "p1TrialLedgerStatus": "skeleton",
+          "p1TrialLedgerRawM": 1292,
+          "p1TrialLedgerEffectiveM": 420,
+          "p1TrialLedgerRawMCompleteness": "visible_sources_only",
+          "p1TrialLedgerFdrGateStatus": "blocked_missing_complete_trial_universe",
+          "p1TrialLedgerFdrStatus": "skeleton_no_pvalues",
+          "p1TrialLedgerReadinessBlockers": [
+            "missing_complete_trial_universe_marker",
+            "missing_p_value_trials:1292",
+            "fdr_inputs_incomplete_trials:1292",
+            "pit_audit_not_implemented_trials:1291",
+            "pit_proxy_only_trials:1",
+            "fdr_p_value_non_promotion_grade_trials:1"
+          ],
+          "strategyLanePolicyStatus": "loaded",
+          "strategyLanePolicyDiagnosticOnly": true,
+          "strategyLanePolicyPolicyMutationAllowed": false,
+          "strategyLanePolicyPaperExecutionAllowed": false,
+          "strategyLanePolicyLiveExecutionAllowed": false,
+          "strategyLanePolicyLanesReviewed": 9,
+          "strategyLanePolicyBlockNewOrders": 5,
+          "strategyLanePolicyShadowOnly": 3,
+          "strategyLanePolicyProbation": 1,
+          "strategyLanePolicyWorstLane": "cross_sectional",
+          "strategyLanePolicyBestPositiveLowSampleLane": "cross_sectional_10x",
+          "strategyLanePolicyTopBlockedLanes": "volume_breakout_1x,volume_breakout_3x,microstructure_100x,cross_sectional_100x,volume_breakout_100x",
+          "strategyLanePolicyShadowLanes": "cross_sectional,volume_breakout_10x,microstructure_10x",
+          "strategyLanePolicyProbationLanes": "cross_sectional_10x"
+        }
+      }
+    },
+    "paperPnLDiagnostics": {
+      "generatedAt": "2026-05-08T08:04:00.310Z",
+      "closedTrades": 947,
+      "contextBuckets": {
+        "ok": {
+          "bucket": "ok",
+          "count": 0,
+          "sharePct": 0
+        }
+      },
+      "costEvidence": {
+        "status": "partial",
+        "closedTrades": 947,
+        "tradesWithAnyPredictedCost": 2,
+        "tradesMissingAnyPredictedCost": 945,
+        "anyPredictedCostCoveragePct": 0.21119324181626187,
+        "tradesWithRouteCostBps": 2,
+        "tradesWithRoundTripCostBps": 2,
+        "tradesWithEstimatedRoundTripCostPct": 2,
+        "tradesWithEstimatedRoundTripCostPctOfMargin": 2,
+        "tradesWithExpectedGrossEdge": 0,
+        "tradesWithExpectedNetEdge": 0,
+        "tradesWithExpectedEdgeSource": 0,
+        "tradesWithOpenTimeMarkMatchEvidence": 0,
+        "tradesWithCompletePredictedOpenEvidence": 0,
+        "completePredictedOpenEvidenceCoveragePct": 0,
+        "tradesWithAnyRealizedCost": 0,
+        "tradesWithFillAdjustedCost": 0,
+        "tradesWithPaperModelCostEvidence": 2,
+        "tradesWithExchangeReconciledCostEvidence": 0,
+        "markMatchStatusCounts": {
+          "missing": 945,
+          "stale_or_missing": 2
+        },
+        "markMatchPenaltyTrades": 0,
+        "staleOrMissingMarkMatchTrades": 2,
+        "invalidMarkMatchTrades": 0,
+        "newWindow": {
+          "cutoverTs": "2026-05-02T00:00:00.000Z",
+          "enforcementTs": "2026-05-02T06:30:00.000Z",
+          "producerGuardEnforcementTs": "2026-05-04T00:44:00.000Z",
+          "status": "ok",
+          "closedTrades": 2,
+          "tradesWithCompletePredictedOpenEvidence": 0,
+          "tradesMissingCompletePredictedOpenEvidence": 2,
+          "transitionalDirtyMissingPredictedOpenEvidence": 2,
+          "producerGuardMissingPredictedOpenEvidence": 0,
+          "completePredictedOpenEvidenceCoveragePct": 0
+        },
+        "byLane": [
+          {
+            "lane": "microstructure_100x",
+            "closedTrades": 378,
+            "coveredTrades": 0,
+            "missingTrades": 378,
+            "coveragePct": 0
+          },
+          {
+            "lane": "microstructure_10x",
+            "closedTrades": 301,
+            "coveredTrades": 0,
+            "missingTrades": 301,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_1x",
+            "closedTrades": 106,
+            "coveredTrades": 0,
+            "missingTrades": 106,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_3x",
+            "closedTrades": 106,
+            "coveredTrades": 0,
+            "missingTrades": 106,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_10x",
+            "closedTrades": 17,
+            "coveredTrades": 0,
+            "missingTrades": 17,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_100x",
+            "closedTrades": 9,
+            "coveredTrades": 0,
+            "missingTrades": 9,
+            "coveragePct": 0
+          },
+          {
+            "lane": "cross_sectional_10x",
+            "closedTrades": 5,
+            "coveredTrades": 0,
+            "missingTrades": 5,
+            "coveragePct": 0
+          },
+          {
+            "lane": "cross_sectional_100x",
+            "closedTrades": 1,
+            "coveredTrades": 0,
+            "missingTrades": 1,
+            "coveragePct": 0
+          },
+          {
+            "lane": "cross_sectional",
+            "closedTrades": 24,
+            "coveredTrades": 2,
+            "missingTrades": 22,
+            "coveragePct": 8.333333333333332
+          }
+        ]
+      },
+      "mfeMaeEvidence": {
+        "status": "partial",
+        "ledgerStatus": "partial",
+        "closedTrades": 947,
+        "tradesWithMfeBps": 10,
+        "tradesWithMaeBps": 10,
+        "tradesWithBothMfeMaeBps": 10,
+        "tradesMissingBothMfeMaeBps": 937,
+        "bothMfeMaeCoveragePct": 1.0559662090813093,
+        "tradesWithTimeToMfeSec": 10,
+        "tradesWithTimeToMaeSec": 10,
+        "stopLossTrades": 42,
+        "stopLossTradesWithTimeToStopSec": 0,
+        "stopLossTimeCoveragePct": 0,
+        "byLane": [
+          {
+            "lane": "microstructure_100x",
+            "closedTrades": 378,
+            "coveredTrades": 0,
+            "missingTrades": 378,
+            "coveragePct": 0
+          },
+          {
+            "lane": "microstructure_10x",
+            "closedTrades": 301,
+            "coveredTrades": 0,
+            "missingTrades": 301,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_1x",
+            "closedTrades": 106,
+            "coveredTrades": 0,
+            "missingTrades": 106,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_3x",
+            "closedTrades": 106,
+            "coveredTrades": 0,
+            "missingTrades": 106,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_10x",
+            "closedTrades": 17,
+            "coveredTrades": 0,
+            "missingTrades": 17,
+            "coveragePct": 0
+          },
+          {
+            "lane": "volume_breakout_100x",
+            "closedTrades": 9,
+            "coveredTrades": 0,
+            "missingTrades": 9,
+            "coveragePct": 0
+          },
+          {
+            "lane": "cross_sectional_10x",
+            "closedTrades": 5,
+            "coveredTrades": 0,
+            "missingTrades": 5,
+            "coveragePct": 0
+          },
+          {
+            "lane": "cross_sectional_100x",
+            "closedTrades": 1,
+            "coveredTrades": 0,
+            "missingTrades": 1,
+            "coveragePct": 0
+          },
+          {
+            "lane": "cross_sectional",
+            "closedTrades": 24,
+            "coveredTrades": 10,
+            "missingTrades": 14,
+            "coveragePct": 41.66666666666667
+          }
+        ],
+        "pathDiagnostics": {
+          "status": "ok",
+          "sourcePath": "/Users/kino/Files/work_projects/code/expCode/effeciency/crypto/OpenAlice/data/runtime/p1_trading_evidence/mfe_mae_stoploss_report.latest.json",
+          "matchedTrades": 947,
+          "missingTradeDiagnostics": 0,
+          "unmatchedDiagnostics": 0,
+          "diagnosticsOk": 947,
+          "missingPricePath": 0,
+          "pricePathMismatch": 0,
+          "invalidTradePrices": 0,
+          "stopLossTrades": 42,
+          "stopLossDiagnosticsOk": 42,
+          "notes": [
+            "Path diagnostics are read-only OHLC reconstruction from P1 evidence, not decision-time ledger fields.",
+            "ledgerStatus remains the promotion-relevant coverage for fields persisted on paper_trade_result rows."
+          ]
+        }
+      },
+      "overallPf": 0.864644703254676
+    },
+    "defectMonitor": {
+      "summary": {
+        "findings": 16,
+        "blocked": 5
+      },
+      "findings": [
+        {
+          "id": "strategy_report_loaded",
+          "status": "watch"
+        },
+        {
+          "id": "retired_line_guard",
+          "status": "pass"
+        },
+        {
+          "id": "cross_sectional_holding_window",
+          "status": "pass"
+        },
+        {
+          "id": "cross_sectional_spread_filter",
+          "status": "watch"
+        },
+        {
+          "id": "route_cost_slippage_readiness",
+          "status": "blocked"
+        },
+        {
+          "id": "volume_breakout_stop_loss",
+          "status": "watch"
+        },
+        {
+          "id": "volume_breakout_hold_liquidity",
+          "status": "watch"
+        },
+        {
+          "id": "microstructure_noise_channels",
+          "status": "watch"
+        },
+        {
+          "id": "atr_trailing_exit_integration",
+          "status": "watch"
+        },
+        {
+          "id": "entry_timing_quality",
+          "status": "blocked"
+        },
+        {
+          "id": "stale_data_no_open_gate",
+          "status": "pass"
+        },
+        {
+          "id": "panic_regime_no_open_gate",
+          "status": "pass"
+        },
+        {
+          "id": "strategy_risk_caps",
+          "status": "pass"
+        },
+        {
+          "id": "carry_pit_basis_economics",
+          "status": "blocked"
+        },
+        {
+          "id": "carry_prospective_evidence",
+          "status": "blocked"
+        },
+        {
+          "id": "ai_scientist_second_validation",
+          "status": "blocked"
+        }
+      ]
+    },
+    "defectRegistry": {
+      "defects": [
+        {
+          "id": "1.1.1",
+          "status": "watch"
+        },
+        {
+          "id": "1.1.2",
+          "status": "partial"
+        },
+        {
+          "id": "1.1.3",
+          "status": "partial"
+        },
+        {
+          "id": "1.1.4",
+          "status": "partial"
+        },
+        {
+          "id": "1.1.5",
+          "status": "open"
+        },
+        {
+          "id": "1.1.6",
+          "status": "partial"
+        },
+        {
+          "id": "1.1.7",
+          "status": "partial"
+        },
+        {
+          "id": "1.2.1",
+          "status": "partial"
+        },
+        {
+          "id": "1.2.2",
+          "status": "partial"
+        },
+        {
+          "id": "1.2.3",
+          "status": "partial"
+        },
+        {
+          "id": "1.2.4",
+          "status": "partial"
+        },
+        {
+          "id": "1.2.5",
+          "status": "partial"
+        },
+        {
+          "id": "1.3.1",
+          "status": "watch"
+        },
+        {
+          "id": "1.3.2",
+          "status": "open"
+        },
+        {
+          "id": "2.1",
+          "status": "watch"
+        },
+        {
+          "id": "2.2",
+          "status": "watch"
+        },
+        {
+          "id": "2.3",
+          "status": "watch"
+        },
+        {
+          "id": "2.4",
+          "status": "partial"
+        },
+        {
+          "id": "2.5",
+          "status": "open"
+        },
+        {
+          "id": "2.6",
+          "status": "partial"
+        },
+        {
+          "id": "2.7",
+          "status": "watch"
+        },
+        {
+          "id": "2.8",
+          "status": "open"
+        },
+        {
+          "id": "3.1",
+          "status": "partial"
+        },
+        {
+          "id": "3.2",
+          "status": "open"
+        },
+        {
+          "id": "3.3",
+          "status": "watch"
+        },
+        {
+          "id": "3.4",
+          "status": "watch"
+        },
+        {
+          "id": "3.5",
+          "status": "watch"
+        },
+        {
+          "id": "3.6",
+          "status": "open"
+        },
+        {
+          "id": "3.7",
+          "status": "watch"
+        },
+        {
+          "id": "4.1",
+          "status": "open"
+        },
+        {
+          "id": "4.2",
+          "status": "open"
+        },
+        {
+          "id": "4.3",
+          "status": "partial"
+        },
+        {
+          "id": "4.4",
+          "status": "watch"
+        },
+        {
+          "id": "5.1",
+          "status": "open"
+        },
+        {
+          "id": "5.2",
+          "status": "open"
+        },
+        {
+          "id": "5.3",
+          "status": "partial"
+        },
+        {
+          "id": "5.4",
+          "status": "open"
+        },
+        {
+          "id": "5.5",
+          "status": "partial"
+        },
+        {
+          "id": "5.6",
+          "status": "partial"
+        },
+        {
+          "id": "6.1",
+          "status": "open"
+        },
+        {
+          "id": "6.2",
+          "status": "open"
+        },
+        {
+          "id": "6.3",
+          "status": "open"
+        },
+        {
+          "id": "6.4",
+          "status": "open"
+        },
+        {
+          "id": "6.5",
+          "status": "partial"
+        },
+        {
+          "id": "7.1",
+          "status": "open"
+        },
+        {
+          "id": "7.2",
+          "status": "watch"
+        },
+        {
+          "id": "7.3",
+          "status": "watch"
+        },
+        {
+          "id": "7.4",
+          "status": "watch"
+        }
+      ]
+    },
+    "qualityGateCoverage": {
+      "coveragePct": 35,
+      "p0p1OpenOrPartialUncovered": 17,
+      "uncoveredDefects": [
+        {
+          "id": "1.1.2"
+        },
+        {
+          "id": "1.1.3"
+        },
+        {
+          "id": "1.1.4"
+        },
+        {
+          "id": "1.1.5"
+        },
+        {
+          "id": "1.1.6"
+        },
+        {
+          "id": "1.1.7"
+        },
+        {
+          "id": "1.2.2"
+        },
+        {
+          "id": "1.2.5"
+        },
+        {
+          "id": "3.2"
+        },
+        {
+          "id": "3.6"
+        },
+        {
+          "id": "4.2"
+        },
+        {
+          "id": "4.3"
+        },
+        {
+          "id": "5.3"
+        },
+        {
+          "id": "6.3"
+        },
+        {
+          "id": "6.4"
+        },
+        {
+          "id": "6.5"
+        },
+        {
+          "id": "7.1"
+        }
+      ]
+    }
+  },
+  "locks": [
+    {
+      "lockName": "paper_policy_shadow_settle.lock",
+      "age": "316963s",
+      "pid": null
+    },
+    {
+      "lockName": "realtime_shadow_monitor.lock",
+      "age": "158733s",
+      "pid": 90153
+    }
+  ],
+  "gitState": {
+    "modified": 55,
+    "untracked": 187
+  },
+  "new_blockers": {
+    "critical": [
+      {
+        "id": "CR-1",
+        "title": "accounts.json 为空是唯一实时交易隔离",
+        "file": "data/config/accounts.json",
+        "detail": "一旦填入账户，sandbox=false + demoTrading=true (crypto.json:9-10) 即可触发实时交易",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-2",
+        "title": "Black-Litterman 协方差矩阵为对角线近似",
+        "file": "src/portfolio/allocator.ts:553-562",
+        "detail": "假设相关性为零，BL 模型从根本上被破坏",
+        "phase": "P2"
+      },
+      {
+        "id": "CR-3",
+        "title": "Lock 死锁永不自动释放",
+        "file": "scripts/openalice_cron_lock.sh:37-51",
+        "detail": "检测到 stale 只发通知不移除锁目录。若进程 SIGKILL 完锁永久存在",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-4",
+        "title": "账户文件损坏静默重置 equity=100k",
+        "file": "scripts/paper_trade_microstructure_stress.ts:307-316 + volume_breakout.ts:384-397",
+        "detail": "JSON 解析失败静默回退到新账户，所有历史丢失",
+        "phase": "P1"
+      }
+    ],
+    "high": [
+      {
+        "id": "CR-5",
+        "title": "Leverage guard 仅阻止 ≥100x",
+        "file": "src/domain/trading/production-leverage-guard.ts:3-9",
+        "detail": "50x/75x/99x 均通过门控",
+        "phase": "P2"
+      },
+      {
+        "id": "CR-6",
+        "title": "execution.ts reduce/close 绕过所有仓位门控",
+        "file": "src/domain/strategy/execution.ts:84-102",
+        "detail": "若错误归类可执行任意订单",
+        "phase": "P2"
+      },
+      {
+        "id": "CR-7",
+        "title": "资金费率魔法数字 ×3 无依据",
+        "file": "src/domain/strategy/cross-sectional-momentum.ts:154",
+        "detail": "不可配置的硬编码缩放因子",
+        "phase": "P2"
+      },
+      {
+        "id": "CR-8",
+        "title": "Dirty worktree quarantine 未传播到 evidence chain",
+        "file": "scripts/build_system_status_reason_chain.ts:403",
+        "detail": "Allocator reason 不接收 dirty worktree audit 数据",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-9",
+        "title": "effectiveActionability 缺失 not_available_warmup 检查",
+        "file": "scripts/build_system_status_reason_chain.ts:431-435",
+        "detail": "暖机状态错误标记为 paper_execution_blocked",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-10",
+        "title": "Zod schema 无 sandbox/demoTrading 交叉验证",
+        "file": "src/core/config.ts:275-286 + 441-449",
+        "detail": "brokerConfig 完全不受约束",
+        "phase": "P0"
+      }
+    ],
+    "medium": [
+      {
+        "id": "CR-11",
+        "title": "Paper-monitor 五个 SKIP flags 全 true，空转 no-op",
+        "file": "scripts/launch_realtime_shadow_monitor.sh:37-41",
+        "detail": "进程运行但不做任何事",
+        "phase": "P1"
+      },
+      {
+        "id": "CR-12",
+        "title": "featuresAvailableAtDecisionTime 等价于非 stale",
+        "file": "src/runtime/paper_open_context.ts:89",
+        "detail": "而非真实特征可用性",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-13",
+        "title": "flashContextStatus 是 contextStatus 完全重复",
+        "file": "src/runtime/paper_open_context.ts:93",
+        "detail": "无独立信息",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-14",
+        "title": "evidence_manifest exit code ≠ 0 掩盖 dirty 信号",
+        "file": "src/runtime/evidence_manifest.ts:58-62",
+        "detail": "dirty 被 fail 掩盖",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-15",
+        "title": "risk_reduced riskMode 被忽略（等价于 risk_on）",
+        "file": "src/runtime/paper_open_context.ts:102-131",
+        "detail": "风险降低模式无独立处理",
+        "phase": "P0"
+      },
+      {
+        "id": "CR-16",
+        "title": "volume_breakout stopLossPct 文档 0.5% 实际 3.0%",
+        "file": "src/domain/strategy/volume-breakout.ts:21 vs 52",
+        "detail": "文档与默认值严重不一致",
+        "phase": "P2"
+      },
+      {
+        "id": "CR-17",
+        "title": "Paper trader 无路由选择逻辑",
+        "file": "scripts/paper_trade_*.ts",
+        "detail": "taker_taker vs passive_passive 未实现",
+        "phase": "P1"
+      },
+      {
+        "id": "CR-18",
+        "title": "cron 脚本硬编码 node_modules/.bin/tsx",
+        "file": "多个 cron .sh",
+        "detail": "pnpm isolated linker 下不可用",
+        "phase": "P0"
+      }
+    ]
+  }
+}

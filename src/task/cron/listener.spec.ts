@@ -2,12 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { utimes, writeFile } from 'node:fs/promises'
+import { readFile, utimes, writeFile } from 'node:fs/promises'
 import { createEventLog, type EventLog, type EventLogEntry } from '../../core/event-log.js'
 import { createCronListener, parseCronResponse, type CronListener } from './listener.js'
 import { SessionStore } from '../../core/session.js'
 import type { CronFirePayload } from './engine.js'
 import { ConnectorCenter } from '../../core/connector-center.js'
+import { fingerprintCronError } from './notification-policy.js'
 
 function tempPath(ext: string): string {
   return join(tmpdir(), `cron-listener-test-${randomUUID()}.${ext}`)
@@ -403,6 +404,7 @@ describe('cron listener', () => {
       'scripts/cron_scheduler_security_audit.sh',
       'scripts/cron_external_derivatives_data_collect.sh',
       'scripts/cron_p1_trading_evidence.sh',
+      'scripts/cron_openalice_task.sh',
     ])('runs allowlisted paper diagnostic script %s without routing to the AI', async (scriptPath) => {
       const runner = vi.fn(async () => ({ stdout: 'script ok\n', stderr: '' }))
 
@@ -440,8 +442,94 @@ describe('cron listener', () => {
       })
     })
 
+    it('passes explicit task args to the shared OpenAlice cron wrapper', async () => {
+      const runner = vi.fn(async () => ({ stdout: 'script ok\n', stderr: '' }))
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: runner,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'okx-public-1s',
+        jobName: 'okx_public_1s_accumulate_5m',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_openalice_task.sh'),
+          args: ['accumulate_1s_data'],
+          cwd: '/repo/OpenAlice',
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done).toHaveLength(1)
+      })
+
+      expect(mockEngine.askWithSession).not.toHaveBeenCalled()
+      expect(runner).toHaveBeenCalledWith(
+        resolve('scripts/cron_openalice_task.sh'),
+        ['accumulate_1s_data'],
+        { cwd: '/repo/OpenAlice' },
+      )
+    })
+
+    it('runs unrelated allowlisted script jobs concurrently', async () => {
+      let releaseFast!: () => void
+      let releaseHealth!: () => void
+      const fastBlocked = new Promise<void>((resolveBlocked) => { releaseFast = resolveBlocked })
+      const healthBlocked = new Promise<void>((resolveBlocked) => { releaseHealth = resolveBlocked })
+      const runner = vi.fn(async (_scriptPath: string, args: string[]) => {
+        if (args[0] === 'fast') await fastBlocked
+        if (args[0] === 'health') await healthBlocked
+        return { stdout: 'script ok\n', stderr: '' }
+      })
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: runner,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'okx-fast',
+        jobName: 'okx_public_fast_refresh_1m',
+        kind: 'script',
+        payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['fast'] },
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1))
+
+      await eventLog.append('cron.fire', {
+        jobId: 'okx-health',
+        jobName: 'okx_market_data_health_5m',
+        kind: 'script',
+        payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['health'] },
+      } satisfies CronFirePayload)
+
+      // The health job must start before the still-blocked fast job completes.
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(2))
+      expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(0)
+
+      releaseFast()
+      releaseHealth()
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(2))
+    })
+
     it('does not notify when script notification artifact suppresses delivery', async () => {
       const notifySpy = vi.spyOn(connectorCenter, 'notify')
+      const macosNotificationSender = vi.fn(async () => ({ attempted: true, delivered: true, reason: 'delivered' }))
       const notificationPath = tempPath('json')
 
       listener.stop()
@@ -450,12 +538,14 @@ describe('cron listener', () => {
         eventLog,
         agentCenter: mockEngine as any,
         session,
+        macosNotificationSender,
         scriptRunner: async () => {
           await writeFile(notificationPath, JSON.stringify({
             shouldNotify: false,
             deliveryDecision: 'suppress',
             headline: 'ETH carry unchanged.',
             fullText: 'ETH carry unchanged.',
+            macosFallback: true,
           }), 'utf-8')
           return { stdout: 'script ok\n', stderr: '' }
         },
@@ -480,11 +570,254 @@ describe('cron listener', () => {
 
       expect(mockEngine.askWithSession).not.toHaveBeenCalled()
       expect(notifySpy).not.toHaveBeenCalled()
+      expect(macosNotificationSender).not.toHaveBeenCalled()
       const done = eventLog.recent({ type: 'cron.done' })
       expect(done[0].payload).toMatchObject({
         delivered: false,
         parsedStatus: 'CRON_SKIP',
         parsedReason: 'ETH carry unchanged.',
+      })
+    })
+
+    it('keeps routine research notifications in the event log without pushing them', async () => {
+      const notifySpy = vi.spyOn(connectorCenter, 'notify')
+      const notificationPath = tempPath('json')
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: true,
+            headline: 'P1 evidence updated.',
+            fullText: 'gateStatus=insufficient_data accepted=951',
+          }), 'utf-8')
+          return { stdout: '', stderr: '' }
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'p1-log-only',
+        jobName: 'p1_trading_evidence_hourly',
+        kind: 'script',
+        payload: '',
+        script: { path: resolve('scripts/cron_p1_trading_evidence.sh'), notificationPath },
+        notificationState: { previousConsecutiveErrors: 0, previousErrorFingerprint: null, circuitOpenAfter: 0 },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(1))
+      expect(notifySpy).not.toHaveBeenCalled()
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        reply: 'gateStatus=insufficient_data accepted=951',
+        delivered: false,
+        deliveryReason: 'suppressed:log_only',
+        notificationPolicyReason: 'log_only',
+        notificationClass: 'log_only',
+      })
+    })
+
+    it('suppresses repeated script failures but retains the complete cron.error record', async () => {
+      const notifySpy = vi.spyOn(connectorCenter, 'notify')
+      const notificationPath = tempPath('json')
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => {
+          throw new Error('corepack: command not found')
+        },
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'ssd-repeat',
+        jobName: 'okx_ssd_presence_archive_probe_15m',
+        kind: 'script',
+        payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['ssd_probe'], notificationPath },
+        notificationState: {
+          previousConsecutiveErrors: 8,
+          previousErrorFingerprint: fingerprintCronError(
+            'okx_ssd_presence_archive_probe_15m',
+            'corepack: command not found',
+          ),
+          circuitOpenAfter: 0,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.error' })).toHaveLength(1))
+      expect(notifySpy).not.toHaveBeenCalled()
+      expect(eventLog.recent({ type: 'cron.error' })[0].payload).toMatchObject({
+        error: 'corepack: command not found',
+        delivered: false,
+        deliveryReason: 'suppressed:duplicate_failure',
+        notificationPolicyReason: 'duplicate_failure',
+        failureCount: 9,
+      })
+    })
+
+    it('pushes one recovery transition for a previously failing log-only job', async () => {
+      const delivered: string[] = []
+      connectorCenter.register({
+        channel: 'telegram',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async (payload) => { delivered.push(payload.text); return { delivered: true } },
+      })
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: async () => ({ stdout: 'compact ok\n', stderr: '' }),
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'warehouse-recovered',
+        jobName: 'okx_warehouse_compact_hourly',
+        kind: 'script',
+        payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['compact'] },
+        notificationState: {
+          previousConsecutiveErrors: 12,
+          previousErrorFingerprint: 'prior',
+          circuitOpenAfter: 0,
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(1))
+      expect(delivered).toHaveLength(1)
+      expect(delivered[0]).toContain('OpenAlice cron job recovered.')
+      expect(delivered[0]).toContain('previousConsecutiveErrors=12')
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        delivered: true,
+        notificationPolicyReason: 'recovered',
+        notificationClass: 'recovery',
+      })
+    })
+
+    it('does not invoke macOS fallback when the primary connector delivers', async () => {
+      connectorCenter.register({
+        channel: 'telegram',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async () => ({ delivered: true }),
+      })
+      const macosNotificationSender = vi.fn(async () => ({ attempted: true, delivered: true, reason: 'delivered' }))
+      const notificationPath = tempPath('json')
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        macosNotificationSender,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: true,
+            fullText: 'Connect shield.',
+            macosFallback: true,
+          }), 'utf-8')
+          return { stdout: '', stderr: '' }
+        },
+      })
+      listener.start()
+      await eventLog.append('cron.fire', {
+        jobId: 'ssd-reminder-primary', jobName: 'okx_ssd_weekly_reminder_sunday', kind: 'script', payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['ssd_reminder_weekly'], notificationPath },
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(1))
+      expect(macosNotificationSender).not.toHaveBeenCalled()
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        delivered: true, primaryDelivered: true, fallbackDelivered: false, deliveryChannel: 'telegram',
+      })
+    })
+
+    it('uses macOS fallback and records success when the primary connector cannot deliver', async () => {
+      connectorCenter.register({
+        channel: 'telegram',
+        to: 'user1',
+        capabilities: { push: true, media: false },
+        send: async () => ({ delivered: false, reason: 'connector_not_ready' }),
+      })
+      const macosNotificationSender = vi.fn(async () => ({ attempted: true, delivered: true, reason: 'delivered' }))
+      const notificationPath = tempPath('json')
+      const receiptPath = tempPath('jsonl')
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        macosNotificationSender,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: true,
+            fullText: 'Connect shield.',
+            macosFallback: true,
+            deliveryReceiptPath: receiptPath,
+            receiptContext: { weekId: '2026-W29', messageType: 'connect_ssd' },
+          }), 'utf-8')
+          return { stdout: '', stderr: '' }
+        },
+      })
+      listener.start()
+      await eventLog.append('cron.fire', {
+        jobId: 'ssd-reminder-fallback', jobName: 'okx_ssd_weekly_reminder_sunday', kind: 'script', payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['ssd_reminder_weekly'], notificationPath },
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(1))
+      expect(macosNotificationSender).toHaveBeenCalledWith('Connect shield.')
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        delivered: true, primaryDelivered: false, fallbackDelivered: true,
+        deliveryReason: 'fallback_delivered', deliveryChannel: 'macos_notification_center',
+      })
+      await expect(readFile(receiptPath, 'utf-8')).resolves.toContain('"fallback":{"attempted":true,"delivered":true')
+    })
+
+    it('records structured failure when both primary and macOS fallback fail', async () => {
+      const macosNotificationSender = vi.fn(async () => ({ attempted: true, delivered: false, reason: 'notification_center_unavailable' }))
+      const notificationPath = tempPath('json')
+      const receiptPath = tempPath('jsonl')
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        macosNotificationSender,
+        scriptRunner: async () => {
+          await writeFile(notificationPath, JSON.stringify({
+            shouldNotify: true,
+            fullText: 'Connect shield.',
+            macosFallback: true,
+            deliveryReceiptPath: receiptPath,
+          }), 'utf-8')
+          return { stdout: '', stderr: '' }
+        },
+      })
+      listener.start()
+      await eventLog.append('cron.fire', {
+        jobId: 'ssd-reminder-both-fail', jobName: 'okx_ssd_weekly_reminder_sunday', kind: 'script', payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['ssd_reminder_weekly'], notificationPath },
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(1))
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        delivered: false, primaryDelivered: false, fallbackDelivered: false,
+        deliveryReason: 'no_push_connector;fallback=notification_center_unavailable',
+      })
+      const receipt = JSON.parse((await readFile(receiptPath, 'utf-8')).trim())
+      expect(receipt).toMatchObject({
+        delivered: false,
+        primary: { delivered: false, reason: 'no_push_connector' },
+        fallback: { attempted: true, delivered: false, reason: 'notification_center_unavailable' },
       })
     })
 
@@ -721,6 +1054,64 @@ describe('cron listener', () => {
         expect(done).toHaveLength(1)
       })
     })
+
+    it('does not drop allowlisted script jobs while an AI cron job is processing', async () => {
+      let release!: () => void
+      const blocker = new Promise<void>(resolveBlocker => { release = resolveBlocker })
+      const runner = vi.fn(async () => ({ stdout: 'script ok\n', stderr: '' }))
+      mockEngine.askWithSession.mockImplementationOnce(async () => {
+        await blocker
+        return { text: 'STATUS: CRON_SKIP\nREASON: done', media: [] }
+      })
+
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: runner,
+      })
+      listener.start()
+
+      await eventLog.append('cron.fire', {
+        jobId: 'long-ai-job',
+        jobName: 'long-ai-job',
+        payload: 'long job',
+      } satisfies CronFirePayload)
+      await vi.waitFor(() => {
+        expect(mockEngine.askWithSession).toHaveBeenCalledTimes(1)
+      })
+
+      await eventLog.append('cron.fire', {
+        jobId: 'okx-public-5m',
+        jobName: 'okx_public_5m_accumulate_5m',
+        kind: 'script',
+        payload: '',
+        script: {
+          path: resolve('scripts/cron_openalice_task.sh'),
+          args: ['accumulate_5m_data'],
+        },
+      } satisfies CronFirePayload)
+
+      await vi.waitFor(() => {
+        expect(runner).toHaveBeenCalledTimes(1)
+      })
+      expect(runner).toHaveBeenCalledWith(
+        resolve('scripts/cron_openalice_task.sh'),
+        ['accumulate_5m_data'],
+        { cwd: undefined },
+      )
+      expect(eventLog.recent({ type: 'cron.dropped' })).toHaveLength(0)
+
+      release()
+      await vi.waitFor(() => {
+        const done = eventLog.recent({ type: 'cron.done' })
+        expect(done.map(entry => (entry.payload as any).jobId)).toEqual(
+          expect.arrayContaining(['long-ai-job', 'okx-public-5m']),
+        )
+      })
+    })
   })
 
   // ==================== Lifecycle ====================
@@ -815,6 +1206,64 @@ describe('cron listener', () => {
         jobId: 'legacy-job',
         sourceFireSeq: latestFire.seq,
       })
+    })
+
+    it('does not replay an accumulated backlog of unmatched fires for the same job', async () => {
+      await eventLog.append('cron.fire', {
+        jobId: 'one-minute-job',
+        jobName: 'one-minute-job',
+        payload: 'stale tick 1',
+      } satisfies CronFirePayload)
+      await eventLog.append('cron.fire', {
+        jobId: 'one-minute-job',
+        jobName: 'one-minute-job',
+        payload: 'stale tick 2',
+      } satisfies CronFirePayload)
+      const latestFire = await eventLog.append('cron.fire', {
+        jobId: 'one-minute-job',
+        jobName: 'one-minute-job',
+        payload: 'latest tick',
+      } satisfies CronFirePayload)
+
+      listener.start()
+
+      await vi.waitFor(() => expect(mockEngine.askWithSession).toHaveBeenCalledTimes(1))
+      expect(mockEngine.askWithSession).toHaveBeenCalledWith(
+        'latest tick',
+        session,
+        expect.objectContaining({ historyPreamble: expect.any(String) }),
+      )
+      await vi.waitFor(() => expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(1))
+      expect(eventLog.recent({ type: 'cron.done' })[0].payload).toMatchObject({
+        jobId: 'one-minute-job',
+        sourceFireSeq: latestFire.seq,
+      })
+    })
+
+    it('does not replay periodic script fires after restart', async () => {
+      const runner = vi.fn(async () => ({ stdout: 'script ok\n', stderr: '' }))
+      listener.stop()
+      listener = createCronListener({
+        connectorCenter,
+        eventLog,
+        agentCenter: mockEngine as any,
+        session,
+        scriptRunner: runner,
+      })
+      await eventLog.append('cron.fire', {
+        jobId: 'okx-fast-before-restart',
+        jobName: 'okx_public_fast_refresh_1m',
+        kind: 'script',
+        payload: '',
+        script: { path: resolve('scripts/cron_okx_warehouse_task.sh'), args: ['fast'] },
+      } satisfies CronFirePayload)
+
+      listener.start()
+
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50))
+      expect(runner).not.toHaveBeenCalled()
+      expect(eventLog.recent({ type: 'cron.done' })).toHaveLength(0)
+      expect(eventLog.recent({ type: 'cron.error' })).toHaveLength(0)
     })
 
     it('should stop receiving events after stop()', async () => {

@@ -13,7 +13,7 @@ import '../contract-ext.js'
 
 // ==================== Errors ====================
 
-export type BrokerErrorCode = 'CONFIG' | 'AUTH' | 'NETWORK' | 'EXCHANGE' | 'MARKET_CLOSED' | 'UNKNOWN'
+export type BrokerErrorCode = 'CONFIG' | 'AUTH' | 'NETWORK' | 'EXCHANGE' | 'MARKET_CLOSED' | 'GATE_BLOCKED' | 'UNKNOWN'
 
 /**
  * Structured broker error.
@@ -28,7 +28,7 @@ export class BrokerError extends Error {
     super(message)
     this.name = 'BrokerError'
     this.code = code
-    this.permanent = code === 'CONFIG' || code === 'AUTH'
+    this.permanent = code === 'CONFIG' || code === 'AUTH' || code === 'GATE_BLOCKED'
   }
 
   /** Wrap any error as a BrokerError, classifying by message patterns. */

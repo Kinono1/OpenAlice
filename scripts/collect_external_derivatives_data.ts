@@ -829,7 +829,7 @@ async function fetchEndpointRowsWithRetries(input: {
         },
       }
     } catch (error) {
-      const rawError = error instanceof Error ? error.message : String(error)
+      const rawError = describeExternalFetchError(error)
       lastError = redactExternalDiagnosticText(rawError)
       lastErrorClass = classifyExternalFetchError(error)
       attemptErrors.push({
@@ -1029,20 +1029,47 @@ function assertPayloadSymbolMatches(
 }
 
 function classifyExternalFetchError(error: unknown): ExternalFetchErrorClass {
-  const message = error instanceof SyntaxError
-    ? `json_parse ${error.message}`
-    : error instanceof Error
-      ? error.message
-      : String(error)
-  const lower = message.toLowerCase()
+  const lower = describeExternalFetchError(error).toLowerCase()
   if (error instanceof SyntaxError || lower.includes('json_parse') || lower.includes('unexpected token')) return 'json_parse'
   if (lower.includes('payload symbol mismatch') || lower.includes('invalid payload')) return 'payload_schema'
-  if (lower.includes('timeout') || lower.includes('aborted') || lower.includes('etimedout')) return 'timeout'
+  if (lower.includes('timeout') || lower.includes('aborted') || lower.includes('etimedout') || lower.includes('und_err_connect_timeout')) return 'timeout'
   if (lower.includes('http 4') || lower.includes('http 5')) return 'http'
   if (lower.includes('enotfound') || lower.includes('eai_again') || lower.includes('getaddrinfo')) return 'dns'
   if (lower.includes('proxy')) return 'proxy'
   if (lower.includes('tls') || lower.includes('certificate') || lower.includes('ssl')) return 'tls'
   return 'network_or_unknown'
+}
+
+function describeExternalFetchError(error: unknown): string {
+  const parts: string[] = []
+  collectExternalErrorParts(error, parts, 0)
+  return parts.length > 0 ? parts.join(' | ') : 'unknown fetch error'
+}
+
+function collectExternalErrorParts(error: unknown, parts: string[], depth: number): void {
+  if (depth > 3 || error == null) return
+  if (error instanceof SyntaxError) {
+    parts.push(`json_parse ${error.message}`)
+    return
+  }
+  if (error instanceof Error) {
+    if (error.message) parts.push(error.message)
+    const record = error as Error & { code?: unknown; cause?: unknown }
+    if (typeof error.name === 'string' && error.name && error.name !== 'Error') parts.push(error.name)
+    if (typeof record.code === 'string' && record.code) parts.push(record.code)
+    if (record.cause) collectExternalErrorParts(record.cause, parts, depth + 1)
+    return
+  }
+  if (typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    for (const key of ['name', 'code', 'message']) {
+      const value = record[key]
+      if (typeof value === 'string' && value) parts.push(value)
+    }
+    if (record.cause) collectExternalErrorParts(record.cause, parts, depth + 1)
+    return
+  }
+  parts.push(String(error))
 }
 
 function redactExternalDiagnosticText(value: string): string {
@@ -1207,14 +1234,32 @@ function sha256Hex(value: string): string {
 
 function buildDefaultExternalFetch(proxyUrl: string | undefined): FetchLike {
   if (!proxyUrl) return globalThis.fetch as FetchLike
+
+  // Return a fetch function with automatic fallback to direct connection
   return async (url: string) => {
-    const dispatcher = proxyDispatcher(proxyUrl)
-    const response = await request(url, { dispatcher })
-    const body = await response.body.text()
-    return {
-      ok: response.statusCode >= 200 && response.statusCode < 300,
-      status: response.statusCode,
-      text: async () => body,
+    try {
+      const dispatcher = proxyDispatcher(proxyUrl)
+      const response = await request(url, { dispatcher })
+      const body = await response.body.text()
+      return {
+        ok: response.statusCode >= 200 && response.statusCode < 300,
+        status: response.statusCode,
+        text: async () => body,
+      }
+    } catch (proxyError) {
+      // If proxy fails with TLS/connection error, fallback to direct connection
+      const errorMsg = proxyError instanceof Error ? proxyError.message : String(proxyError)
+      if (errorMsg.includes('ECONNRESET') || errorMsg.includes('ETIMEDOUT') || errorMsg.includes('TLS')) {
+        console.warn(`[external-derivatives] Proxy failed (${errorMsg}), falling back to direct connection`)
+        const directResponse = await globalThis.fetch(url)
+        const body = await directResponse.text()
+        return {
+          ok: directResponse.ok,
+          status: directResponse.status,
+          text: async () => body,
+        }
+      }
+      throw proxyError
     }
   }
 }

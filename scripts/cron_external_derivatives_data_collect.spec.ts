@@ -11,12 +11,15 @@ describe('cron_external_derivatives_data_collect.sh', () => {
     expect(script).not.toContain('external_derivatives_data_collect.lock')
     expect(script).not.toMatch(/mkdir\s+"\$LOCK_DIR"/)
     expect(script).toContain('external_derivatives_data_collect.current.stdout.json')
-    expect(script).toContain('./node_modules/.bin/tsx scripts/collect_external_derivatives_data.ts "${COLLECT_ARGS[@]}" > "$REPORT_STDOUT_PATH"')
+    expect(script).toContain('./node_modules/.bin/tsx scripts/collect_okx_external_derivatives_data.ts "${COLLECT_ARGS[@]}" > "$REPORT_STDOUT_PATH"')
+    expect(script).toContain('normalizeExitCode')
+    expect(script).toContain('auditExitCode')
     expect(script).toContain('date -u +%Y-%m-%dT%H:%M:%SZ')
     expect(script).toContain('OPENALICE_EXTERNAL_OUTPUT_PATH')
     expect(script).toContain('OPENALICE_EXTERNAL_REPORT_PATH')
     expect(script).toContain('OPENALICE_EXTERNAL_RUN_LEDGER_PATH')
     expect(script).toContain('OPENALICE_EXTERNAL_COLLECTOR_LOCK_DIR')
+    expect(script).toContain('OPENALICE_EXTERNAL_SYMBOL_BATCH_SIZE')
     expect(script).toContain('JSON.parse(readFileSync(stdoutReportPath')
     expect(script).toContain('stdoutLatestMismatch')
     expect(script).toContain('external_derivatives_data_collect.latest.json.manifest.json')
@@ -57,7 +60,7 @@ describe('cron_external_derivatives_data_collect.sh', () => {
     expect(notification.content).toContain('runId=external-test-errors')
     expect(notification.content).toContain('latestRunId=external-test-errors')
     expect(notification.content).toContain('stdoutLatestMismatch=false')
-    expect(notification.content).toContain('exitCode=1')
+    expect(notification.content).toContain('collectExit=1')
     expect(notification.content).toContain('errors=1')
     expect(notification.content).toContain('firstError=BTCUSDT/fundingRate:network:timeout')
   })
@@ -238,9 +241,13 @@ async function runWrapperWithCollectorOutput(input: {
   await mkdir(join(root, 'node_modules', '.bin'), { recursive: true })
   await writeFile(tsxPath, [
     '#!/usr/bin/env bash',
-    'printf "%s\\n" "$@" > "$OPENALICE_TEST_COLLECTOR_INVOCATION_PATH"',
-    'cat "$OPENALICE_TEST_COLLECTOR_STDOUT_PATH"',
-    'exit "$OPENALICE_TEST_COLLECTOR_EXIT_CODE"',
+    'if [[ "$1" == "scripts/collect_okx_external_derivatives_data.ts" ]]; then',
+    '  printf "%s\\n" "$@" > "$OPENALICE_TEST_COLLECTOR_INVOCATION_PATH"',
+    '  cat "$OPENALICE_TEST_COLLECTOR_STDOUT_PATH"',
+    '  exit "$OPENALICE_TEST_COLLECTOR_EXIT_CODE"',
+    'fi',
+    'printf "{}\\n"',
+    'exit 0',
     '',
   ].join('\n'), 'utf-8')
   await chmod(tsxPath, 0o755)

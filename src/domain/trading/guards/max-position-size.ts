@@ -1,6 +1,7 @@
 import { UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type { Order } from '@traderalice/ibkr'
 import type { OperationGuard, GuardContext } from './types.js'
+import { isRiskReducingOrder } from './helpers.js'
 
 const DEFAULT_MAX_PERCENT = 25
 
@@ -30,17 +31,6 @@ function estimateAddedNotionalUsd(
   }
 
   return null
-}
-
-function isRiskReducingOrder(
-  order: Order,
-  existing: { side: 'long' | 'short' } | undefined,
-): boolean {
-  if (!existing) return false
-  return (
-    (existing.side === 'long' && order.action === 'SELL') ||
-    (existing.side === 'short' && order.action === 'BUY')
-  )
 }
 
 export class MaxPositionSizeGuard implements OperationGuard {

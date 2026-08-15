@@ -1,5 +1,5 @@
 import type { MarketIntelLane } from './market_intel_constants.js'
-import type { MarketIntelContext } from './market_intel_context.js'
+import { isMarketIntelSymbolBanned, type MarketIntelContext } from './market_intel_context.js'
 
 export type PaperOpenContextStatus =
   | 'ok'
@@ -8,6 +8,7 @@ export type PaperOpenContextStatus =
   | 'severe_news'
   | 'semantic_block'
   | 'lane_blocked'
+  | 'symbol_blocked'
   | 'cold_start'
 
 export interface PaperOpenContextSnapshot {
@@ -75,8 +76,9 @@ export function buildPaperOpenContextSnapshot(
   context: MarketIntelContext,
   lane: MarketIntelLane,
   now = new Date(),
+  symbol?: string,
 ): PaperOpenContextSnapshot {
-  const status = resolvePaperOpenContextStatus(context, lane, now)
+  const status = resolvePaperOpenContextStatus(context, lane, now, symbol)
   const decisionTime = now.toISOString()
   const watermark = context.generatedAt
   return {
@@ -101,6 +103,7 @@ function resolvePaperOpenContextStatus(
   context: MarketIntelContext,
   lane: MarketIntelLane,
   now: Date,
+  symbol?: string,
 ): { status: PaperOpenContextStatus; reason: string | null } {
   const validUntil = Date.parse(context.validUntil)
   if (!Number.isFinite(validUntil) || validUntil <= now.getTime()) {
@@ -120,6 +123,9 @@ function resolvePaperOpenContextStatus(
   }
   if (context.allowNewPositionsByLane[lane] !== true) {
     return { status: 'lane_blocked', reason: `lane_not_allowed:${lane}` }
+  }
+  if (symbol && isMarketIntelSymbolBanned(context, symbol)) {
+    return { status: 'symbol_blocked', reason: `symbol_blocked:${symbol}` }
   }
   return { status: 'ok', reason: null }
 }

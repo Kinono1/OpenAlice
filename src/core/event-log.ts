@@ -160,14 +160,14 @@ export async function createEventLog(opts?: {
       buffer = buffer.slice(buffer.length - bufferSize)
     }
 
-    // Fan-out to subscribers (swallow errors)
+    // Fan-out to subscribers (swallow errors to keep pipeline alive)
     for (const fn of listeners) {
-      try { fn(entry) } catch { /* swallow */ }
+      try { fn(entry) } catch (err) { console.warn('[event-log] subscriber error:', err) }
     }
     const tSet = typeListeners.get(type)
     if (tSet) {
       for (const fn of tSet) {
-        try { fn(entry) } catch { /* swallow */ }
+        try { fn(entry) } catch (err) { console.warn('[event-log] type subscriber error:', err) }
       }
     }
 

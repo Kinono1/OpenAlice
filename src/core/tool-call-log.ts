@@ -142,7 +142,7 @@ export async function createToolCallLog(opts?: {
     }
 
     for (const fn of listeners) {
-      try { fn(record) } catch { /* swallow */ }
+      try { fn(record) } catch (err) { console.warn('[tool-call-log] listener error:', err) }
     }
   }
 
@@ -264,7 +264,10 @@ async function readAll(logPath: string, filterName?: string): Promise<ToolCallRe
       const record: ToolCallRecord = JSON.parse(line)
       if (filterName && record.name !== filterName) continue
       results.push(record)
-    } catch { /* skip malformed */ }
+    } catch (err) {
+      console.warn('[tool-call-log] malformed line skipped:', err)
+      continue
+    }
   }
   return results
 }

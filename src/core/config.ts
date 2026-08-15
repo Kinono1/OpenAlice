@@ -166,10 +166,12 @@ const connectorsSchema = z.object({
   }).default({ enabled: false, allowOrigins: [] }),
   telegram: z.object({
     enabled: z.boolean().default(false),
+    botTokenEnv: z.string().min(1).default('TELEGRAM_BOT_TOKEN'),
+    /** Legacy read-only compatibility. New writes must use botTokenEnv. */
     botToken: z.string().optional(),
     botUsername: z.string().optional(),
     chatIds: z.array(z.number()).default([]),
-  }).default({ enabled: false, chatIds: [] }),
+  }).default({ enabled: false, botTokenEnv: 'TELEGRAM_BOT_TOKEN', chatIds: [] }),
 })
 
 const heartbeatSchema = z.object({
@@ -344,6 +346,12 @@ export const strategySchema = z.object({
         requiresCoreNotRiskOff: true,
       },
     ]),
+    portfolioRiskOverlay: z.object({
+      enabled: z.boolean().default(false),
+      maxGrossExposurePctOfEquity: z.number().positive().default(3),
+      maxNetExposurePctOfEquity: z.number().positive().default(1),
+      maxSingleAssetPctOfEquity: z.number().positive().default(0.5),
+    }).optional(),
   }).default({
     enabled: true,
     method: 'fixed',
@@ -535,6 +543,10 @@ export async function loadConfig(): Promise<Config> {
 
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
   const connectorsRaw = raws[11] as Record<string, unknown> | undefined
+  const telegramRaw = connectorsRaw?.telegram as Record<string, unknown> | undefined
+  if (typeof telegramRaw?.botToken === 'string' && telegramRaw.botToken.length > 0) {
+    console.warn('[config] connectors.telegram.botToken is deprecated; move the rotated token to the botTokenEnv environment variable')
+  }
   if (connectorsRaw === undefined) {
     const oldTelegram = await loadJsonFile('telegram.json')
     const oldEngine = raws[0] as Record<string, unknown> | undefined
@@ -617,54 +629,42 @@ export async function writeAccountsConfig(accounts: AccountConfig[]): Promise<vo
 
 // ==================== Hot-read helpers ====================
 
+/** Read a typed config section from disk, returning defaults on any failure (with logging for non-ENOENT errors). */
+async function readConfigSection<T>(filename: string, schema: z.ZodType<T>): Promise<T> {
+  try {
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, filename), 'utf-8'))
+    return schema.parse(raw)
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn(`[config] error reading ${filename}, falling back to defaults:`, err)
+    }
+    return schema.parse({})
+  }
+}
+
 /** Read agent config from disk (called per-request for hot-reload). */
 export async function readAgentConfig() {
-  try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'agent.json'), 'utf-8'))
-    return agentSchema.parse(raw)
-  } catch {
-    return agentSchema.parse({})
-  }
+  return readConfigSection('agent.json', agentSchema)
 }
 
 /** Read AI provider config from disk (called per-request for hot-reload). */
 export async function readAIProviderConfig() {
-  try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), 'utf-8'))
-    return aiProviderSchema.parse(raw)
-  } catch {
-    return aiProviderSchema.parse({})
-  }
+  return readConfigSection('ai-provider-manager.json', aiProviderSchema)
 }
 
 /** Read market data config from disk (called per-request for hot-reload). */
 export async function readMarketDataConfig() {
-  try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'market-data.json'), 'utf-8'))
-    return marketDataSchema.parse(raw)
-  } catch {
-    return marketDataSchema.parse({})
-  }
+  return readConfigSection('market-data.json', marketDataSchema)
 }
 
 /** Read strategy config from disk (called per-request for hot-reload). */
 export async function readStrategyConfig() {
-  try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'strategy.json'), 'utf-8'))
-    return strategySchema.parse(raw)
-  } catch {
-    return strategySchema.parse({})
-  }
+  return readConfigSection('strategy.json', strategySchema)
 }
 
 /** Read tools config from disk (called per-request for hot-reload). */
 export async function readToolsConfig() {
-  try {
-    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'tools.json'), 'utf-8'))
-    return toolsSchema.parse(raw)
-  } catch {
-    return toolsSchema.parse({})
-  }
+  return readConfigSection('tools.json', toolsSchema)
 }
 
 // ==================== AI Backend Helpers ====================
@@ -728,11 +728,24 @@ export const validSections = Object.keys(sectionSchemas) as ConfigSection[]
 
 /** Validate and write a config section to disk. Returns the validated config. */
 export async function writeConfigSection(section: ConfigSection, data: unknown): Promise<unknown> {
+  if (section === 'connectors' && data && typeof data === 'object') {
+    const telegram = (data as { telegram?: Record<string, unknown> }).telegram
+    if (telegram && Object.hasOwn(telegram, 'botToken')) {
+      delete telegram.botToken
+    }
+  }
   const schema = sectionSchemas[section]
   const validated = schema.parse(data)
   await mkdir(CONFIG_DIR, { recursive: true })
   await writeFile(resolve(CONFIG_DIR, sectionFiles[section]), JSON.stringify(validated, null, 2) + '\n')
   return validated
+}
+
+export function resolveTelegramBotToken(config: Config['connectors']['telegram']): string | undefined {
+  const envName = config.botTokenEnv || 'TELEGRAM_BOT_TOKEN'
+  const fromEnv = process.env[envName]?.trim()
+  if (fromEnv) return fromEnv
+  return config.botToken?.trim() || undefined
 }
 
 /** Read web sub-channel definitions from disk. Returns empty array if file missing. */

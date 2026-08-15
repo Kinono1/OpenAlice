@@ -33,7 +33,11 @@ export function createDevRoutes(connectorCenter: ConnectorCenter, opts?: DevRout
       to: cn.to,
       capabilities: cn.capabilities,
     }))
-    return c.json({ connectors, lastInteraction: connectorCenter.getLastInteraction() })
+    return c.json({
+      connectors,
+      statuses: connectorCenter.getChannelStatuses?.() ?? {},
+      lastInteraction: connectorCenter.getLastInteraction(),
+    })
   })
 
   /** Manually send a test message through a connector. */
@@ -56,9 +60,33 @@ export function createDevRoutes(connectorCenter: ConnectorCenter, opts?: DevRout
       if (body.channel) {
         // Send to a specific channel
         const target = connectorCenter.get(body.channel)
-        if (!target) return c.json({ error: `No connector for channel: ${body.channel}` }, 404)
-        const result = await target.send({ text: body.text, ...opts })
-        return c.json({ channel: target.channel, to: target.to, ...result })
+        if (!target) {
+          const status = connectorCenter.getChannelStatuses?.()[body.channel]
+          return c.json({
+            channel: body.channel,
+            delivered: false,
+            reason: status ? 'connector_not_ready' : 'no_push_connector',
+            connectorStatus: status ?? null,
+          })
+        }
+        try {
+          const result = await target.send({ text: body.text, ...opts })
+          return c.json({
+            channel: target.channel,
+            to: target.to,
+            ...result,
+            reason: result.delivered ? 'delivered' : (result.reason ?? 'remote_rejected'),
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return c.json({
+            channel: target.channel,
+            to: target.to,
+            delivered: false,
+            reason: /timeout|timed out/i.test(message) ? 'send_timeout' : 'remote_rejected',
+            error: message,
+          })
+        }
       }
 
       // Default: notify via last-interacted connector

@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenAlice Strategy Architecture</title>
+<style type="text/css">
+  :root {
+    --bg: #0b0d0b;
+    --bg-2: #10140f;
+    --panel: rgba(19, 24, 19, 0.92);
+    --panel-2: rgba(13, 17, 14, 0.96);
+    --line: rgba(170, 157, 118, 0.22);
+    --line-strong: rgba(223, 196, 126, 0.42);
+    --text: #e6e0cf;
+    --muted: #9f9989;
+    --dim: #777363;
+    --blue: #68b7ff;
+    --green: #5ee18a;
+    --amber: #f2b84b;
+    --red: #ff6b5f;
+    --violet: #c6a7ff;
+    --ink-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 18% 0%, rgba(94, 225, 138, 0.13), transparent 28rem),
+      radial-gradient(circle at 82% 12%, rgba(242, 184, 75, 0.12), transparent 25rem),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(225deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      var(--bg);
+    background-size: auto, auto, 32px 32px, 32px 32px, auto;
+    color: var(--text);
+    font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+    padding: 44px 20px 64px;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.025), transparent 18%, transparent 82%, rgba(255,255,255,0.025)),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 4px);
+    mix-blend-mode: screen;
+    opacity: 0.25;
+  }
+
+  h1 {
+    width: min(1100px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    margin: 0 auto 10px;
+    text-align: left;
+    font-family: "DIN Alternate", "Avenir Next Condensed", "PingFang SC", sans-serif;
+    font-size: clamp(34px, 5vw, 62px);
+    line-height: 0.95;
+    color: #fff3cf;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-title-break { display: none; }
+
+  .subtitle {
+    width: min(1100px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    margin: 0 auto 28px;
+    text-align: left;
+    font-size: 14px;
+    color: var(--muted);
+    border-left: 3px solid var(--amber);
+    padding-left: 14px;
+    line-height: 1.7;
+  }
+
+  .flow {
+    width: min(1100px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    margin: 0 auto;
+    position: relative;
+    counter-reset: layer;
+  }
+
+  .flow::before {
+    content: "";
+    position: absolute;
+    left: 18px;
+    top: 108px;
+    bottom: 18px;
+    width: 1px;
+    background: linear-gradient(var(--green), var(--amber), var(--red), transparent);
+    opacity: 0.35;
+  }
+
+  .arrow {
+    width: 38px;
+    height: 38px;
+    margin: 8px 0 8px;
+    display: grid;
+    place-items: center;
+    color: var(--bg);
+    background: linear-gradient(135deg, var(--green), var(--amber));
+    border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 50%;
+    font-size: 19px;
+    font-family: "SF Mono", "Menlo", monospace;
+    box-shadow: 0 10px 30px rgba(94, 225, 138, 0.16);
+  }
+
+  .layer {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.01)),
+      var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 22px 24px 24px;
+    margin-bottom: 0;
+    box-shadow: var(--ink-shadow);
+    backdrop-filter: blur(18px);
+    overflow: hidden;
+    counter-increment: layer;
+    max-width: 100%;
+  }
+
+  .layer::before {
+    content: counter(layer, decimal-leading-zero);
+    position: absolute;
+    right: 18px;
+    top: 14px;
+    color: rgba(242, 184, 75, 0.15);
+    font-family: "DIN Alternate", "SF Mono", monospace;
+    font-size: 52px;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .layer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
+    transform: translateX(-100%);
+    transition: transform 700ms ease;
+  }
+
+  .layer:hover::after { transform: translateX(100%); }
+
+  .layer:hover {
+    border-color: var(--line-strong);
+    transform: translateY(-1px);
+    transition: border-color 180ms ease, transform 180ms ease;
+  }
+
+  .layer-title {
+    position: relative;
+    z-index: 1;
+    font-size: 18px;
+    font-weight: bold;
+    color: #fff0c2;
+    margin-bottom: 6px;
+    letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .layer-subtitle {
+    position: relative;
+    z-index: 1;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 16px;
+    line-height: 1.6;
+  }
+
+  .factors {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+  }
+
+  .factor {
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.035), transparent),
+      var(--panel-2);
+    border: 1px solid rgba(170, 157, 118, 0.16);
+    border-radius: 6px;
+    padding: 12px 13px;
+    font-size: 12px;
+    min-height: 86px;
+    transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    min-width: 0;
+  }
+
+  .factor:hover {
+    transform: translateY(-2px);
+    border-color: rgba(242, 184, 75, 0.45);
+    background: rgba(20, 24, 18, 0.98);
+  }
+
+  .factor-name {
+    color: var(--amber);
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 6px;
+    font-family: "SF Mono", "Menlo", monospace;
+    overflow-wrap: anywhere;
+  }
+
+  .factor-desc {
+    color: var(--muted);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .adjust-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .adjust-card {
+    background: var(--panel-2);
+    border: 1px solid rgba(104, 183, 255, 0.2);
+    border-radius: 6px;
+    padding: 14px 15px;
+    min-width: 0;
+  }
+
+  .adjust-card h3 { color: var(--blue); font-size: 13px; margin-bottom: 8px; }
+  .adjust-card p { color: var(--muted); font-size: 12px; line-height: 1.65; }
+  .adjust-card code { color: #9fd0ff; font-size: 11px; }
+
+  .side-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .side-card {
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.03), transparent),
+      var(--panel-2);
+    border: 1px solid rgba(170, 157, 118, 0.18);
+    border-radius: 6px;
+    padding: 15px;
+    min-width: 0;
+  }
+
+  .side-card h3 { color: var(--green); font-size: 13px; margin-bottom: 10px; }
+  .side-card .items { list-style: none; }
+
+  .side-card .items li {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.75;
+    padding-left: 18px;
+    position: relative;
+    overflow-wrap: anywhere;
+  }
+
+  .side-card .items li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.72em;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 12px rgba(94, 225, 138, 0.5);
+  }
+
+  .meta-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+  }
+
+  .meta-item {
+    background: var(--panel-2);
+    border: 1px solid rgba(198, 167, 255, 0.2);
+    border-radius: 6px;
+    padding: 13px 14px;
+    min-width: 0;
+  }
+
+  .meta-item h3 { color: var(--violet); font-size: 13px; margin-bottom: 6px; }
+  .meta-item p { color: var(--muted); font-size: 12px; line-height: 1.65; }
+
+  .output-card {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-top: 8px;
+  }
+
+  .output-card code { color: #9fd0ff; font-size: 12px; }
+  .guard-list { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  .guard-item {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 14px;
+    flex: 1;
+    min-width: 140px;
+    text-align: center;
+  }
+
+  .guard-item .name { color: var(--amber); font-size: 12px; font-weight: bold; }
+  .guard-item .desc { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+  .tag {
+    display: inline-block;
+    background: rgba(94, 225, 138, 0.13);
+    border: 1px solid rgba(94, 225, 138, 0.25);
+    color: var(--green);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin: 2px;
+    vertical-align: middle;
+    font-family: "SF Mono", "Menlo", monospace;
+  }
+
+  .tag-warn {
+    background: rgba(255, 107, 95, 0.12);
+    border: 1px solid rgba(255, 107, 95, 0.28);
+    color: var(--red);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-family: "SF Mono", "Menlo", monospace;
+  }
+
+  .note {
+    position: relative;
+    z-index: 1;
+    background: rgba(104, 183, 255, 0.08);
+    border: 1px solid rgba(104, 183, 255, 0.16);
+    border-left: 3px solid var(--blue);
+    padding: 12px 14px;
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--muted);
+    border-radius: 0 6px 6px 0;
+    line-height: 1.65;
+  }
+
+  .scope-banner {
+    position: relative;
+    background:
+      linear-gradient(135deg, rgba(94, 225, 138, 0.12), rgba(242, 184, 75, 0.06)),
+      var(--panel);
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--green);
+    border-radius: 0 6px 6px 0;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+    box-shadow: var(--ink-shadow);
+  }
+
+  .scope-banner strong, .boundary strong { color: var(--green); }
+
+  .boundary {
+    background: rgba(19, 24, 19, 0.82);
+    border: 1px dashed rgba(242, 184, 75, 0.35);
+    border-radius: 6px;
+    padding: 13px 16px;
+    margin: 12px 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+    box-shadow: var(--ink-shadow);
+  }
+
+  code {
+    font-family: "SF Mono", "Menlo", "Monaco", monospace;
+    color: #9fd0ff;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .subtitle,
+  .scope-banner,
+  .layer-subtitle,
+  .note,
+  .boundary,
+  .sequence {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .boundary code, .sequence code { color: #9fd0ff; }
+
+  .sequence {
+    position: relative;
+    z-index: 1;
+    background: #080a08;
+    border: 1px solid rgba(242, 184, 75, 0.24);
+    border-radius: 6px;
+    padding: 14px 15px;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.75;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+  }
+
+  .sequence strong { color: var(--amber); margin-right: 10px; }
+
+  strong { color: #fff0c2; }
+
+  @media (max-width: 700px) {
+    body { padding: 26px 0 42px; }
+    h1 {
+      width: min(354px, calc(100vw - 36px));
+      max-width: min(354px, calc(100vw - 36px));
+      font-size: clamp(28px, 7.7vw, 32px);
+      line-height: 1.08;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .mobile-title-break { display: block; }
+    h1 span {
+      display: inline-block;
+      max-width: 100%;
+    }
+    h1, .subtitle { text-align: left; }
+    .subtitle {
+      width: min(354px, calc(100vw - 36px));
+      max-width: min(354px, calc(100vw - 36px));
+      padding-right: 0;
+      font-size: 13px;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .flow {
+      width: min(354px, calc(100vw - 36px));
+      max-width: min(354px, calc(100vw - 36px));
+    }
+    .flow::before { display: none; }
+    .arrow { margin-left: auto; margin-right: auto; }
+    .layer {
+      width: 100%;
+      max-width: 100%;
+      padding: 18px 15px;
+    }
+    .layer-title {
+      font-size: 17px;
+      line-height: 1.35;
+      padding-right: 0;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+    }
+    .scope-banner,
+    .layer-subtitle,
+    .note,
+    .boundary,
+    .sequence {
+      word-break: break-all;
+      overflow-wrap: anywhere;
+    }
+    .layer::before { font-size: 36px; right: 12px; top: 12px; }
+    .adjust-grid, .side-grid { grid-template-columns: 1fr; }
+    .factors, .meta-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 430px) {
+    .subtitle,
+    .scope-banner,
+    .layer-subtitle {
+      word-break: break-all;
+    }
+  }
+</style>
+</head>
+<body>
+
+<h1><span>OpenAlice Runtime</span> <br class="mobile-title-break"><span>Strategy Path</span></h1>
+<p class="subtitle">单资产评估子图 + CCXT 条件执行接入；paper lanes 与 validation pipeline 为独立路径</p>
+
+<div class="flow">
+
+  <div class="scope-banner">
+    <strong>范围声明：</strong>本图描述 <code>runtime-evaluator</code> 如何生成单资产策略快照，以及 CCXT 账户下单时如何有条件地调用该评估链。
+    它不是全部 paper 策略或验证/发布流水线的总图。源码核验基线：当前 checkout，2026-06-02。
+  </div>
+
+  <!-- Inputs -->
+  <div class="layer" style="border-color: #1f6feb;">
+    <div class="layer-title">输入层 Inputs</div>
+    <div class="layer-subtitle">RuntimeFactorSnapshotInput — runtime-evaluator.ts:68</div>
+    <div class="factors">
+      <div class="factor">
+        <div class="factor-name">K线</div>
+        <div class="factor-desc">candles (OHLCV)<br>ret1h / ret6h / ret24h / ret7d<br>realizedVolPct / avgVolume</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">资金费率</div>
+        <div class="factor-desc">fundingRatePct<br>fundingRateHistoryPct / 8h<br>rollingFundingRateStats</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">清算 / OI</div>
+        <div class="factor-desc">liquidationCount24h / Notional<br>liquidationHistory[]<br>openInterest / openInterestValue</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">Basis</div>
+        <div class="factor-desc">futuresPrice / spotPrice<br>daysToExpiry (可选)</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">账户状态</div>
+        <div class="factor-desc">equity / winRate / avgWinLossRatio<br>currentOpenPositions / coreRiskOff<br>assetLayer</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">IC / State Inputs</div>
+        <div class="factor-desc">icMonitorSnapshot (factor + symbol)<br>icMonitorConfig<br>icSharpeByState (外部可选输入)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- Factors -->
+  <div class="layer" style="border-color: #f0883e;">
+    <div class="layer-title">运行时候选因子 — 10 个 evaluator，单次最多发出 8 个信号</div>
+    <div class="layer-subtitle">runtime-evaluator.ts:449-610 — 8 个配置开关；carry-spread 替代 funding-rate + basis；liquidation-aftermath 为数据触发信号</div>
+    <div class="factors">
+      <div class="factor">
+        <div class="factor-name">momentum-composite</div>
+        <div class="factor-desc">1h/6h/24h/7d 回报率加权<br>realizedVolPct 归一化</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">mean-reversion</div>
+        <div class="factor-desc">基于收盘价序列的<br>均值回归信号</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">volume-surge</div>
+        <div class="factor-desc">currentVolume / avgVolume<br>+ priceReturnPct 方向</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">liquidation-pressure</div>
+        <div class="factor-desc">volume-surge 分支内启用<br>3组件加权 (默认各1/3):<br>funding + cascade + OI</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">funding-rate</div>
+        <div class="factor-desc">z-score + winsorized 百分位<br>pegged regime 冻结<br><span class="tag-warn">或被 carry-spread 替代</span></div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">basis</div>
+        <div class="factor-desc">期货-现货基差<br>daysToExpiry 衰减<br><span class="tag-warn">若 carry-spread 可用则跳过</span></div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">carry-spread</div>
+        <div class="factor-desc">funding + basis 合并信号<br><span class="tag-warn">仅当两者均可用时激活</span></div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">volatility-regime</div>
+        <div class="factor-desc">3组件: volExpansion<br>+ volClustering + volOfVol</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">liquidation-aftermath</div>
+        <div class="factor-desc">24h 累计清算 &gt; P90 → 事件<br>4-12h 反向窗口<br>反向信号 ±1</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">cross-timeframe-divergence</div>
+        <div class="factor-desc">1h/6h/24h 时间框架分歧<br>对 mean-reversion 惩罚<br>对 momentum 修正置信度</div>
+      </div>
+    </div>
+    <div class="note"><code>order-book-imbalance</code> 与 <code>stablecoin-flow</code> 从 factors index 导出，但未被 <code>runtime-evaluator</code> 导入或发出，不属于此实时评估子图。</div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- Signal Adjustment -->
+  <div class="layer" style="border-color: #d2a8ff;">
+    <div class="layer-title">信号调整层 Signal Adjustment</div>
+    <div class="layer-subtitle">runtime-evaluator.ts:665-726 — 三路乘数叠加后 ensemble 聚合</div>
+    <div class="adjust-grid">
+      <div class="adjust-card">
+        <h3>HMM 状态条件化</h3>
+        <p><code>calibrateStateConditionedFactorWeights()</code><br>
+        基于 HMM 输出（bull/bear/calm/stress）<br>
+        对每个因子的 <strong>权重</strong> 和 <strong>方向</strong> 做条件化调整<br>
+        例：vol-stress 下降低 momentum 权重</p>
+      </div>
+      <div class="adjust-card">
+        <h3>IC 衰减</h3>
+        <p><code>FactorIcMonitor.getConditioning()</code><br>
+        追踪每个因子的 IC（Information Coefficient）<br>
+        按 <strong>factor + symbol</strong> 记录，不存储 HMM 状态<br>
+        IC 衰减 → <code>icConditioning.multipliers</code><br>
+        状态 IC 权重另由可选 <code>icSharpeByState</code> 提供</p>
+      </div>
+      <div class="adjust-card">
+        <h3>时间框架分歧滤波器</h3>
+        <p><code>cross-timeframe-divergence</code> 作为 conditioning filter<br>
+        <code>meanReversionPenalty</code> → 惩罚 mean-reversion<br>
+        <code>momentumConfidenceModifier</code> → 修正 momentum 置信度</p>
+      </div>
+      <div class="adjust-card">
+        <h3>Ensemble 聚合</h3>
+        <p><code>combineFactorSignalsWithGovernance()</code><br>
+        最终权重 = base × HMM × IC × 分歧滤波器<br>
+        → <code>aggregateValue</code> (加权平均 [-1,1])<br>
+        → <code>aggregateConfidence</code><br>
+        → <code>consensusScore</code> (一致性)<br>
+        → <code>decisionStrength</code> (D1-D5)</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- Regime + Governance -->
+  <div class="layer" style="border-color: #3fb950;">
+    <div class="layer-title">市场状态 + 治理层</div>
+    <div class="layer-subtitle">classifier.ts:90 + governance/types.ts</div>
+    <div class="side-grid">
+      <div class="side-card">
+        <h3>Regime Classifier (单资产)</h3>
+        <ul class="items">
+          <li><strong>event-risk-freeze</strong> — 宏观事件冻结（最高优先）</li>
+          <li><strong>vol-stress</strong> — 波动率 Pct ≥ 0.9 或成交量冲击 ≥ 2.5x</li>
+          <li><strong>trend-follow</strong> — 趋势强度 ≥ 0.65 且波动率 ≤ 0.75</li>
+          <li><strong>range-rotation</strong> — 范围压缩 ≥ 0.6 且波动率 ≤ 0.45</li>
+          <li><strong>spot-defensive</strong> — 默认兜底</li>
+          <li>可选 HMM 覆盖（method=hmm 且 confidence ≥ floor）: bull→trend, bear→bear, calm→range, stress→vol</li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h3>Signal Governance (L/U/D/S)</h3>
+        <ul class="items">
+          <li><strong>SourceTier</strong> — L1-L5（数据源质量）</li>
+          <li><strong>UseType</strong> — U1-U4（用途分类）</li>
+          <li><strong>DecisionStrength</strong> — D1-D5（|value|×confidence 推算）</li>
+          <li><strong>SentimentCrowding</strong> — S+2 到 S-2</li>
+          <li><strong>ActionStatus</strong>: attack / attack-lite / probe / hold / reduce / exit / no-trade</li>
+          <li>事件冻结时 cap 为 reduce/exit/no-trade/hold</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- Meta-labeling + Position Sizing -->
+  <div class="layer" style="border-color: #d2a8ff;">
+    <div class="layer-title">准入 + 仓位层</div>
+    <div class="layer-subtitle">meta-labeling/index.ts + position-sizing/</div>
+    <div class="meta-grid">
+      <div class="meta-item">
+        <h3>Meta-Labeling (可选)</h3>
+        <p><code>evaluateMetaLabelAdmission()</code><br>
+        规则型二次准入评分器，不是训练后的 ML meta-label 模型<br>
+        加权使用 ensemble / governance / source / execution / regime / consensus 特征<br>
+        <code>minConfidenceToTrade</code> + dynamic threshold + penalty<br>
+        → <code>shadow_only</code> 仅记录；<code>gate</code> 可阻止新开仓</p>
+      </div>
+      <div class="meta-item">
+        <h3>Position Sizing</h3>
+        <p>三选一方法：<br>
+        <code>fractionalKelly()</code> — Kelly 公式<br>
+        <code>volatilityTargetSize()</code> — 波动率目标<br>
+        固定比例 — <code>maxPctOfEquity</code><br>
+        → <code>evaluateLayerLimits()</code> 分层限额</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- Output -->
+  <div class="layer" style="border-color: #58a6ff;">
+    <div class="layer-title">输出 RuntimeFactorSnapshot</div>
+    <div class="layer-subtitle">runtime-evaluator.ts:798 — 完整评估快照</div>
+    <div class="factors">
+      <div class="factor">
+        <div class="factor-name">factorSignals</div>
+        <div class="factor-desc">FactorSignal[] — 各因子完整信号</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">ensemble</div>
+        <div class="factor-desc">aggregateValue / Confidence<br>consensusScore / decisionStrength</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">regimeEvaluation</div>
+        <div class="factor-desc">regime + confidence + reasons<br>+ hmm (可选)</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">governance</div>
+        <div class="factor-desc">ActionStatus + ConfidenceBreakdown<br>+ event window 状态</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">positionSizing</div>
+        <div class="factor-desc">recommendedPctOfEquity<br>recommendedNotionalUsd<br>assetLayer + layerLimits</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">metaLabeling?</div>
+        <div class="factor-desc">admission decision<br>+ confidence gate result</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">researchDiagnostics</div>
+        <div class="factor-desc">HMM状态/IC衰减/因子权重<br>完整诊断信息</div>
+      </div>
+      <div class="factor">
+        <div class="factor-name">icMonitorSnapshot</div>
+        <div class="factor-desc">IC 追踪状态快照<br>用于下次评估的连续性</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="boundary">
+    <strong>调用边界：</strong><code>RuntimeFactorSnapshot</code> 可通过 strategy tool / web strategy route 独立查询。
+    在 CCXT 下单链中，它由下方 <code>preparePlaceOrder</code> 预检有条件地产生，并不会自行向 UTA 推送订单。
+  </div>
+
+  <!-- Execution Integration -->
+  <div class="layer" style="border-color: #f85149;">
+    <div class="layer-title">交易触发与条件执行接入 — CCXT Account Path</div>
+    <div class="layer-subtitle">account-manager.ts:119-147 → UnifiedTradingAccount.ts:174-181/461-481 → operation-dispatcher.place-order.ts:417-463 → CcxtTradingEngineAdapter.ts:950-1098</div>
+    <div class="sequence">
+      <strong>实际执行时序</strong>
+      <code>tool / web request → UTA stage → commit → push → guard pipeline / CCXT dispatcher → preparePlaceOrder [gate + integration enabled] → runtime-service → runtime-evaluator → execution decision → broker</code>
+    </div>
+    <div class="side-grid">
+      <div class="side-card">
+        <h3>UTA / Bridge 注入</h3>
+        <ul class="items">
+          <li><strong>Stage</strong> — stagePlaceOrder() / stageClosePosition() / stageModifyOrder()</li>
+          <li><strong>Commit</strong> — commit(message) → 8字符 hash</li>
+          <li><strong>Push</strong> — 先读取 release gate 状态，再执行 staged operations</li>
+          <li><strong>Reject</strong> — reject(reason) → 撤销暂存</li>
+          <li><strong>CCXT Account</strong> — AccountManager 注入 <code>ccxtExecutionBridge.wrapExecuteOperation</code></li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h3>Strategy Preflight (条件调用)</h3>
+        <ul class="items">
+          <li><strong>reduceOnly</strong> — 仅在 adapter strategy preflight 内直接放行；更早的 UTA.push release gate 仍可能阻断</li>
+          <li><strong>Release Gate</strong> — 读取 8 道验证结果状态；阻断时拒绝 place order</li>
+          <li><strong>Runtime Integration</strong> — <code>runtimeIntegrationEnabled</code> 默认 false；未开启时拒绝新下单路径</li>
+          <li><strong>Enabled Path</strong> — 生成上方 snapshot 与 executionPreview，决定阻断或调整有效数量</li>
+          <li><strong>Approved</strong> — 由 dispatcher 继续交给 broker 执行</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- New: Four Connecting Components -->
+  <div class="layer" style="border-color: #d2a8ff;">
+    <div class="layer-title">连接件当前实现状态 — 2026-06-02 源码复核</div>
+    <div class="layer-subtitle">这些模块开始补跨调用/跨资产/跨路径缝合处，但不是全部完成态</div>
+    <div class="side-grid">
+      <div class="side-card">
+        <h3>① 持久化 IC 状态 <span class="tag">partial</span></h3>
+        <ul class="items">
+          <li><code>runtime-service.ts</code> 已有 lazy load + debounced atomic save</li>
+          <li>运行时写入 <code>ic_monitor_snapshot.by_key.json</code>，key 为 source|exchange|symbol|interval</li>
+          <li><code>ic_monitor_snapshot.latest.json</code> 仍由 <code>publish_ic_monitor_snapshot.ts</code> 生成</li>
+          <li><span class="tag-warn">缺口</span> runtime-service 当前不生成 aggregate latest，因此 <code>status:ic-monitor</code> 不会自动读取新 by-key 状态</li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h3>② Governance-Aware UTA Guard <span class="tag">partial</span></h3>
+        <ul class="items">
+          <li><code>Operation</code> 新增 <code>governance</code> 元数据字段</li>
+          <li><code>GovernanceActionStatusGuard</code> 从 <code>operation.governance.actionStatus</code> 读取状态</li>
+          <li><code>no-trade/exit/reduce</code> → 阻止新开仓</li>
+          <li><code>closePosition</code> / 风险降低订单 → 永远允许</li>
+          <li><span class="tag-warn">边界</span> 只有在 guard 被配置且 staged operation 携带 governance metadata 时生效</li>
+          <li><span class="tag-warn">缺口</span> <code>src/tool/trading.ts</code> 的 placeOrder schema 当前未暴露 governance 输入</li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h3>③ Portfolio Risk Overlay <span class="tag-warn">wired but defective</span></h3>
+        <ul class="items">
+          <li>纯函数 <code>applyPortfolioRiskOverlay()</code></li>
+          <li>按 broker 持仓 + pending ops 设计为计算组合级 cap</li>
+          <li>在 <code>runtime-service.ts</code> 层调用（不污染 factor evaluator）</li>
+          <li>配置 <code>strategy.positionSizing.portfolioRiskOverlay</code></li>
+          <li><span class="tag-warn">缺口</span> runtime hook 目前有 <code>'positions' in input</code> 条件，公开输入类型不含 positions，实际大概率不会进入</li>
+          <li><span class="tag-warn">缺口</span> <code>maxNetExposurePctOfEquity</code> 配置存在，但 overlay 函数当前只实现 single-asset 与 gross cap</li>
+          <li><span class="tag-warn">缺口</span> pending ops 由 <code>getPendingOrderIds()</code> 映射为 notional=0，不能真实计入组合敞口</li>
+          <li><span class="tag-warn">缺口</span> overlay 修改 recommendedPct，但当前没有同步刷新 recommendedNotionalUsd</li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h3>④ Paper→Runtime Config Proposal <span class="tag">proposal-only</span></h3>
+        <ul class="items">
+          <li><code>ConfigProposal</code> 类型 + <code>FACTOR_SIGNAL_TO_CONFIG</code> 映射表</li>
+          <li>当前仅实现 IC 衰减且 IC Sharpe 为负 → 建议降权</li>
+          <li><code>applyConfigProposal()</code> 为 v1 stub</li>
+          <li>第二版再加 <code>read → clone → apply → parse → write</code> 闭环</li>
+          <li><span class="tag-warn">边界</span> 不读取真实 paper ledger；调用方需传入 factorMetrics</li>
+          <li><span class="tag-warn">缺口</span> 映射表包含 carry/liquidation-after/orderbook/stablecoin 等 key，但当前 strategy config schema 未全部包含这些路径</li>
+        </ul>
+      </div>
+    </div>
+    <div class="note">
+      <strong>结论：</strong>四个连接件不应画成全部完成。IC 持久化与 governance guard 是部分可用；
+      paper config feedback 是 proposal-only；portfolio overlay 目前存在接线和计算缺口，不能视为有效组合风控。
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <!-- Adjacent Paths -->
+  <div class="layer" style="border-color: #8b949e;">
+    <div class="layer-title">独立边界 — Validation / Paper Lanes / Adjacent Modules</div>
+    <div class="layer-subtitle">这些路径影响证据或运行编排，但不是上方 runtime-evaluator 的强制内部步骤</div>
+    <div class="side-grid">
+      <div class="side-card">
+        <h3>Validation / Promotion Evidence</h3>
+        <ul class="items">
+          <li><strong>run_validation_pipeline.ts</strong> — 生成统计和跨资产一致性证据</li>
+          <li><strong>cross-asset-consistency</strong> — 属于验证证据链，不在单资产 snapshot 内</li>
+          <li><strong>release_gate</strong> — 计算 8 项检查；执行侧仅读取已发布状态</li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h3>Parallel Paper Lanes</h3>
+        <ul class="items">
+          <li><strong>run_paper_shadow_loop.ts</strong> — 独立调度多条纸交易脚本</li>
+          <li><strong>examples</strong> — cross-sectional / volume-breakout-v2 / low-vol / panic-index / funding-arb / pairs</li>
+          <li><strong>Promotion V2</strong> — 需要门控时会跳过未接入 v2 gate 的旧 lanes</li>
+        </ul>
+      </div>
+    </div>
+    <div class="note">
+      <strong>相邻但未接入此实时链：</strong>
+      <code>liquidation-cascade-orders</code> 存在但未发现非测试调用方；
+      <code>pairs-spread.ts</code> 存在，但 paper pairs 脚本调用 <code>pairs-trading.ts</code>；
+      本图不把这些模块画成实时下单必经步骤。
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

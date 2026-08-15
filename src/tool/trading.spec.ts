@@ -8,6 +8,15 @@ import { UnifiedTradingAccount } from '../domain/trading/UnifiedTradingAccount.j
 import { createTradingTools } from './trading.js'
 import '../domain/trading/contract-ext.js'
 
+vi.mock('../runtime/release_gate_status.js', () => ({
+  loadReleaseGateStatus: vi.fn().mockResolvedValue({
+    version: 1, generatedAt: new Date().toISOString(),
+    allowPaperTrading: true, allowLiveTrading: true,
+    failedChecks: [], warningChecks: [],
+  }),
+  isReleaseGateStatusBlocking: vi.fn().mockReturnValue({ blocking: false }),
+}))
+
 function makeUta(broker: MockBroker): UnifiedTradingAccount {
   return new UnifiedTradingAccount(broker)
 }

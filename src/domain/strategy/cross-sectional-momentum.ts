@@ -39,6 +39,10 @@ export interface CrossSectionalConfig {
   mtfWeight?: number
   /** Funding rate factor weight [0,1] — 0=ignore, 1=full weight */
   fundingWeight?: number
+  /** Minimum 24h USD volume required to stay in the tradable universe */
+  minDailyVolumeUsd?: number
+  /** Maximum spread in basis points when spread data is available */
+  maxSpreadBps?: number
 }
 
 export interface CrossSectionalAsset {
@@ -48,6 +52,10 @@ export interface CrossSectionalAsset {
   returns: Record<string, number>
   realizedVolPct: number
   avgVolume24h: number
+  /** Optional 24h USD volume. Falls back to currentPrice * avgVolume24h when omitted. */
+  dailyVolumeUsd?: number
+  /** Optional spread in basis points. When present, over-threshold assets are filtered out. */
+  spreadBps?: number
   /** Current funding rate in percent per 8h (e.g. 0.01 = 0.01%). Optional. */
   fundingRatePct?: number
 }
@@ -77,6 +85,8 @@ const DEFAULT_CONFIG: Required<CrossSectionalConfig> = {
   requireVolumeConfirmation: true,
   mtfWeight: 0.35, // 35% weight to secondary timeframe
   fundingWeight: 0.25, // 25% weight to funding rate factor
+  minDailyVolumeUsd: 10_000_000,
+  maxSpreadBps: 20,
 }
 
 export function evaluateCrossSectionalMomentum(
@@ -98,9 +108,19 @@ export function evaluateCrossSectionalMomentum(
   // Filter: liquidity + vol ceiling
   const eligible = assets.filter(a => {
     const hasReturn = typeof a.returns[primaryKey] === 'number' && Number.isFinite(a.returns[primaryKey])
-    const liquid = a.avgVolume24h > 0
+    const explicitDailyVolumeUsd =
+      typeof a.dailyVolumeUsd === 'number' && Number.isFinite(a.dailyVolumeUsd)
+        ? a.dailyVolumeUsd
+        : null
+    const liquid =
+      a.avgVolume24h > 0 &&
+      (explicitDailyVolumeUsd == null || explicitDailyVolumeUsd >= cfg.minDailyVolumeUsd)
     const volOk = a.realizedVolPct < 100 * cfg.maxVolPercentile
-    return hasReturn && liquid && volOk
+    const spreadOk =
+      typeof a.spreadBps !== 'number' || !Number.isFinite(a.spreadBps)
+        ? true
+        : a.spreadBps <= cfg.maxSpreadBps
+    return hasReturn && liquid && volOk && spreadOk
   })
 
   if (eligible.length < cfg.minUniverseSize) {
@@ -171,7 +191,7 @@ export function evaluateCrossSectionalMomentum(
     if (rank === undefined) {
       return { symbol: a.symbol, rank: 0, momentumScore: 0, riskAdjustedScore: 0,
         signal: 0, positionFraction: 0, confidence: 0,
-        reason: 'Filtered out (vol/liq)' }
+        reason: 'Filtered out (vol/liq/spread)' }
     }
 
     let signal = 0

@@ -110,6 +110,7 @@ function sanitizeDeep(value: unknown, key?: string, parentKey?: string, forceMas
     return value.map((item) => sanitizeDeep(item, undefined, key, forceMask))
   }
   if (!value || typeof value !== 'object') {
+    if (key?.toLowerCase().endsWith('env')) return value
     if (
       typeof value === 'string'
       && (forceMask || (key && SENSITIVE_KEY_RE.test(key)) || (parentKey && SENSITIVE_KEY_RE.test(parentKey)))

@@ -213,4 +213,36 @@ describe('release_gate_status', () => {
     ])
     expect(persisted.sourceReportPath).toBe('/tmp/validation_runs.json')
   })
+
+  it('accepts research-only persisted verdicts without authorizing paper or live trading', () => {
+    const status = normalizeReleaseGateStatus({
+      version: 1,
+      generatedAt: '2026-05-11T12:00:00.000Z',
+      allowPaperTrading: false,
+      allowLiveTrading: false,
+      allowTinyCapLiveTrading: false,
+      failedChecks: ['paper_gate', 'live_gate'],
+      warningChecks: [],
+      result: 'RESEARCH_ONLY',
+      reasonCodes: ['research_only_blocked'],
+      checks: [
+        {
+          name: 'wfo',
+          status: 'pass',
+          summary: 'WFO passed, but execution gates remain blocked.',
+          metrics: {},
+        },
+      ],
+    })
+
+    expect(status.result).toBe('RESEARCH_ONLY')
+    expect(isReleaseGateStatusBlocking(status, 'paper')).toEqual({
+      blocking: true,
+      reason: 'paper_release_gate_failed:paper_gate,live_gate',
+    })
+    expect(isReleaseGateStatusBlocking(status, 'live')).toEqual({
+      blocking: true,
+      reason: 'live_release_gate_failed:paper_gate,live_gate',
+    })
+  })
 })

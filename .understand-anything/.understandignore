@@ -1,0 +1,51 @@
+# .understandignore — patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+# Lines below are suggestions — uncomment to activate.
+# Use ! prefix to force-include something excluded by defaults.
+#
+# Built-in defaults (always excluded unless negated):
+#   node_modules/, .git/, dist/, build/, obj/, *.lock, *.min.js, etc.
+#
+# --- From .gitignore (uncomment to exclude) ---
+
+# logs/
+# /data/*
+# state.json
+# .env
+# .env.*
+# .DS_Store
+# Thumbs.db
+# *.swp
+# *.swo
+# *.tsbuildinfo
+# .claude/
+# packages/ibkr/ref/source/JavaClient/
+# packages/ibkr/ref/source/cppclient/
+# packages/ibkr/ref/samples/Java/
+# packages/ibkr/ref/samples/Cpp/
+# packages/ibkr/ref/CMakeLists.txt
+# research/cache/
+# research/**/__pycache__/
+# scripts/**/__pycache__/
+# task_plan.md
+# findings.md
+# progress.md
+# STARTUP_PROMPT.md
+# _review/
+# docs/openalice_data_download_status.md
+# scripts/run_fast_binance_spot_klines_backfill.sh
+# data/media/
+# openalice.env
+# .openalice.env
+# data/runtime/secrets/
+
+# --- Detected directories (uncomment to exclude) ---
+
+# docs/
+# scripts/
+
+# --- Test file patterns (uncomment to exclude) ---
+
+# *.test.*
+# *.spec.*
+# *.snap

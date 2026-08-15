@@ -1,0 +1,48 @@
+{
+  "enabled": true,
+  "mode": "research_only",
+  "dataRoot": "data",
+  "warehouseRelativeRoot": "warehouse/okx",
+  "storage": {
+    "budgetGiB": 30,
+    "freeSpaceFloorGiB": 20,
+    "warningFreeSpaceGiB": 25,
+    "pauseHighFrequencyAtGiB": 28,
+    "resumeHighFrequencyBelowGiB": 26,
+    "pauseBroadCollectionFreeSpaceGiB": 15,
+    "emergencyStopFreeSpaceGiB": 10,
+    "hotHighFrequencyRetentionDays": 7
+  },
+  "universe": {
+    "fixedDeepInstruments": ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"],
+    "dynamicDepthCount": 10,
+    "topMinuteCandleCount": 50,
+    "maxDailyDepthChanges": 3,
+    "challengerImprovementPct": 10,
+    "maxSpreadBps": 50
+  },
+  "publicMarkets": {
+    "instruments": ["SPOT", "SWAP", "FUTURES", "OPTION"],
+    "tickers": ["SPOT", "SWAP", "FUTURES"],
+    "broadCandles": ["SPOT", "SWAP"]
+  },
+  "stream": {
+    "enabled": false,
+    "publicUrl": "wss://ws.okx.com:8443/ws/v5/public",
+    "businessUrl": "wss://ws.okx.com:8443/ws/v5/business",
+    "fullDepthEnabled": false,
+    "fullDepthMode": "disabled"
+  },
+  "archive": {
+    "enabled": true,
+    "enrollmentPath": "data/config/okx-archive-storage.json",
+    "expectedName": "shield",
+    "archiveRelativeRoot": "cryptoData/openalice-data/warehouse/okx",
+    "warnUsedPct": 85,
+    "pauseArchiveUsedPct": 92,
+    "automaticDeletion": false
+  },
+  "privateDataEnabled": false,
+  "marginDataEnabled": false,
+  "optionChainEnabled": false
+}

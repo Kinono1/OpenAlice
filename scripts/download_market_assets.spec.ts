@@ -15,6 +15,10 @@ describe('download market asset scripts', () => {
 
     expect(args.dryRun).toBe(true)
     expect(plan.mode).toBe('dry_run')
+    expect(plan.exchange).toBe('okx')
+    expect(plan.timeframe).toBe('1h')
+    expect(plan.assets.every(asset => asset.okxInstId.endsWith('-SWAP'))).toBe(true)
+    expect(JSON.stringify(plan)).not.toContain('binance')
     expect(plan.assets.length).toBeGreaterThan(0)
   })
 
@@ -34,10 +38,12 @@ describe('download market asset scripts', () => {
     expect(plan).toMatchObject({
       mode: 'dry_run',
       outDir: '/tmp/assets',
-      exchange: 'binance_futures',
+      exchange: 'okx',
       timeframe: '1h',
-      limit: 1000,
+      maxCandles: 7000,
     })
     expect(plan.symbols).toContain('SOL/USDT:USDT')
+    expect(plan.instrumentIds).toContain('SOL-USDT-SWAP')
+    expect(JSON.stringify(plan)).not.toContain('binance')
   })
 })

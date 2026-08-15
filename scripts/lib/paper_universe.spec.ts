@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPaperUniverseAsset,
+  defaultMarketDataUniverseAssets,
+  defaultMarketDataUniverseSymbols,
   defaultPaperUniverseAssets,
+  defaultSecondLevelMarketDataUniverseAssets,
+  defaultSecondLevelMarketDataUniverseSymbols,
   defaultSecondLevelUniverseAssets,
   defaultSecondLevelUniverseSymbols,
   defaultPaperUniverseSymbols,
@@ -67,4 +71,59 @@ describe('paper_universe', () => {
       file: 'BTC_USDT_USDT_1s.csv',
     })
   })
+
+  it('defaults cron market data collection to a liquid main-coin subset', () => {
+    expect(defaultMarketDataUniverseSymbols()).toEqual([
+      'BTC-USDT',
+      'ETH-USDT',
+      'SOL-USDT',
+      'BNB-USDT',
+      'XRP-USDT',
+    ])
+    expect(defaultMarketDataUniverseAssets('5m').map(asset => asset.file)).toEqual([
+      'BTC_USDT_USDT_5m.csv',
+      'ETH_USDT_USDT_5m.csv',
+      'SOL_USDT_USDT_5m.csv',
+      'BNB_USDT_USDT_5m.csv',
+      'XRP_USDT_USDT_5m.csv',
+    ])
+    expect(defaultSecondLevelMarketDataUniverseSymbols()).toEqual([
+      'BTC-USDT',
+      'ETH-USDT',
+      'SOL-USDT',
+    ])
+    expect(defaultSecondLevelMarketDataUniverseAssets()[0].file).toBe('BTC_USDT_USDT_1s.csv')
+  })
+
+  it('allows explicit runtime market data universe overrides without changing research defaults', () => {
+    const originalBases = process.env.OPENALICE_MARKET_DATA_BASES
+    const originalSecondLevelBases = process.env.OPENALICE_MARKET_DATA_1S_BASES
+    try {
+      process.env.OPENALICE_MARKET_DATA_BASES = 'btc-usdt, ethusdt SOL-USDT-SWAP'
+      process.env.OPENALICE_MARKET_DATA_1S_BASES = 'eth, btc'
+
+      expect(defaultMarketDataUniverseSymbols()).toEqual([
+        'BTC-USDT',
+        'ETH-USDT',
+        'SOL-USDT',
+      ])
+      expect(defaultSecondLevelMarketDataUniverseSymbols()).toEqual([
+        'ETH-USDT',
+        'BTC-USDT',
+      ])
+      expect(defaultPaperUniverseSymbols()).toContain('WIF-USDT')
+      expect(defaultSecondLevelUniverseSymbols()).toContain('LTC-USDT')
+    } finally {
+      restoreEnv('OPENALICE_MARKET_DATA_BASES', originalBases)
+      restoreEnv('OPENALICE_MARKET_DATA_1S_BASES', originalSecondLevelBases)
+    }
+  })
 })
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key]
+    return
+  }
+  process.env[key] = value
+}

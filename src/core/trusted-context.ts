@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto'
 
 /** Runtime + compile-time brand to prevent forgery */
 const TRUSTED_BRAND: unique symbol = Symbol('TRUSTED_BRAND')
-export { TRUSTED_BRAND }
+// NOT exported — keeping the symbol module-private prevents tool-layer code
+// from crafting objects that satisfy TrustedRequestContext at the type level.
 
 export interface TrustedRequestContext {
   readonly [TRUSTED_BRAND]: true
@@ -34,9 +35,12 @@ export interface OperationMeta {
 const als = new AsyncLocalStorage<TrustedRequestContext>()
 const contextStore = new Map<string, TrustedRequestContext>()
 
+/** Cleanup interval handle — allows disposal to prevent zombie timers under hot-reload. */
+let _cleanupTimer: ReturnType<typeof setInterval> | null = null
+
 // Periodic TTL cleanup for leaked contexts (those not removed via removeContext)
 const CONTEXT_TTL_MS = 30 * 60 * 1000 // 30 minutes
-setInterval(() => {
+_cleanupTimer = setInterval(() => {
   const now = Date.now()
   const staleKeys: string[] = []
   contextStore.forEach((ctx, id) => {
@@ -51,6 +55,18 @@ setInterval(() => {
     console.warn(`[trusted-context] TTL cleanup removed ${staleKeys.length} stale contexts (remaining: ${contextStore.size})`)
   }
 }, 5 * 60 * 1000) // Every 5 minutes
+
+/**
+ * Dispose the module — clears the cleanup timer and all stored contexts.
+ * Call during graceful shutdown to prevent zombie timers.
+ */
+export function dispose(): void {
+  if (_cleanupTimer) {
+    clearInterval(_cleanupTimer)
+    _cleanupTimer = null
+  }
+  contextStore.clear()
+}
 
 // ==================== Creation (connector/engine layer only) ====================
 

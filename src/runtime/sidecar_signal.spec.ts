@@ -13,6 +13,12 @@ import {
   buildPortfolioTargetFromSidecarSignal,
   runSidecarSignalPaperIntake,
   validateNormalizedSidecarSignal,
+  validateSidecarEnvelope,
+  computeCurrentSlotId,
+  cryptoDlSidecarEnvelopeV1Schema,
+  cryptoDlSignalV1Schema,
+  signalHealthV1Schema,
+  executionTopOfBookEvidenceV1Schema,
 } from "./sidecar_signal.js";
 import {
   PROMOTION_V2_SCHEMA_VERSION,
@@ -21,6 +27,7 @@ import {
   type PromotionReadinessV2,
   type SchemaMeta,
 } from "./promotion_v2.js";
+import { pctToBps, floatToBps, awayFromZeroRounding } from "../domain/trading/risk.js";
 
 class MockEngine implements ICryptoTradingEngine {
   constructor(
@@ -338,3 +345,224 @@ function createPromotionReadiness(): PromotionReadinessV2 {
     now: new Date(generatedAt),
   });
 }
+
+// ── V5 plan tests ─────────────────────────────────────────────────
+
+describe("v5 plan - envelope-level validation", () => {
+  it("rejects bare array (returns valid=false from validateSidecarEnvelope)", () => {
+    const result = validateSidecarEnvelope([{ symbol: "XRP/USDT", position_pct: 0.1 }])
+    expect(result.valid).toBe(false)
+  })
+
+  it("rejects expired TTL", () => {
+    const old = new Date(Date.now() - 86400000).toISOString() // 1 day ago
+    const envelope = {
+      schema_version: 1,
+      slot_id: computeCurrentSlotId(new Date()),
+      run_id: "test",
+      generated_at: old,
+      ttl_ms: 100, // 100ms — well past 1 day
+      signals: [],
+      producer: "test",
+    }
+    const result = validateSidecarEnvelope(envelope)
+    expect(result.valid).toBe(false)
+    expect(result.reason?.toLowerCase()).toContain("ttl")
+  })
+
+  it("rejects old slot_id", () => {
+    const now = new Date()
+    const envelope = {
+      schema_version: 1,
+      slot_id: "slot-20200101-00",
+      run_id: "old",
+      generated_at: now.toISOString(),
+      ttl_ms: 3600000,
+      signals: [{
+        source: "cryptotrade" as const,
+        strategy_id: "crypto_dl",
+        symbol: "XRP/USDT",
+        as_of: now.toISOString(),
+        target_position_bps: 200,
+        confidence_bps: 8000,
+        model_id: "v1",
+        thesis: "test",
+        label_horizon_bars: 1,
+        bar_interval_ms: 3600000,
+        target_start_delay_bars: 1,
+        target_start_at: now.toISOString(),
+        target_end_at: new Date(now.getTime() + 86400000).toISOString(),
+      }],
+      producer: "test",
+    }
+    const result = validateSidecarEnvelope(envelope)
+    expect(result.valid).toBe(false)
+    expect(result.reason?.toLowerCase()).toContain("slot")
+  })
+
+  it("accepts valid envelope", () => {
+    const now = new Date()
+    const envelope = {
+      schema_version: 1,
+      slot_id: computeCurrentSlotId(now),
+      run_id: "test",
+      generated_at: now.toISOString(),
+      ttl_ms: 3600000,
+      signals: [{
+        source: "cryptotrade" as const,
+        strategy_id: "crypto_dl",
+        symbol: "XRP/USDT",
+        as_of: now.toISOString(),
+        target_position_bps: 200,
+        confidence_bps: 8000,
+        model_id: "v1",
+        thesis: "test signal",
+        label_horizon_bars: 6,
+        bar_interval_ms: 3600000,
+        target_start_delay_bars: 1,
+        target_start_at: now.toISOString(),
+        target_end_at: new Date(now.getTime() + 86400000).toISOString(),
+      }],
+      producer: "test",
+    }
+    const result = validateSidecarEnvelope(envelope)
+    expect(result.valid).toBe(true)
+  })
+})
+
+describe("v5 plan - signal schema validation", () => {
+  it("rejects missing source", () => {
+    const bad = {
+      strategy_id: "crypto_dl",
+      symbol: "XRP/USDT",
+      as_of: new Date().toISOString(),
+      target_position_bps: 200,
+      confidence_bps: 8000,
+      model_id: "v1",
+      thesis: "test",
+      label_horizon_bars: 6,
+      bar_interval_ms: 3600000,
+      target_start_delay_bars: 1,
+      target_start_at: new Date().toISOString(),
+      target_end_at: new Date(Date.now() + 86400000).toISOString(),
+    }
+    expect(() => cryptoDlSignalV1Schema.parse(bad)).toThrow()
+  })
+
+  it("rejects missing target_position_bps", () => {
+    const bad = {
+      source: "cryptotrade" as const,
+      strategy_id: "crypto_dl",
+      symbol: "XRP/USDT",
+      as_of: new Date().toISOString(),
+      confidence_bps: 8000,
+      model_id: "v1",
+      thesis: "test",
+      label_horizon_bars: 6,
+      bar_interval_ms: 3600000,
+      target_start_delay_bars: 1,
+      target_start_at: new Date().toISOString(),
+      target_end_at: new Date(Date.now() + 86400000).toISOString(),
+    }
+    expect(() => cryptoDlSignalV1Schema.parse(bad)).toThrow()
+  })
+
+  it("rejects missing horizon metadata", () => {
+    const bad = {
+      source: "cryptotrade" as const,
+      strategy_id: "crypto_dl",
+      symbol: "XRP/USDT",
+      as_of: new Date().toISOString(),
+      target_position_bps: 200,
+      confidence_bps: 8000,
+      model_id: "v1",
+      thesis: "test",
+      target_start_delay_bars: 1,
+      target_start_at: new Date().toISOString(),
+      target_end_at: new Date(Date.now() + 86400000).toISOString(),
+    }
+    expect(() => cryptoDlSignalV1Schema.parse(bad)).toThrow()
+  })
+
+  it("rejects wrong source value", () => {
+    const bad = {
+      source: "tradingagents",
+      strategy_id: "crypto_dl",
+      symbol: "XRP/USDT",
+      as_of: new Date().toISOString(),
+      target_position_bps: 200,
+      confidence_bps: 8000,
+      model_id: "v1",
+      thesis: "test",
+      label_horizon_bars: 6,
+      bar_interval_ms: 3600000,
+      target_start_delay_bars: 1,
+      target_start_at: new Date().toISOString(),
+      target_end_at: new Date(Date.now() + 86400000).toISOString(),
+    }
+    expect(() => cryptoDlSignalV1Schema.parse(bad)).toThrow()
+  })
+})
+
+describe("v5 plan - sidecar status schema", () => {
+  it("accepts ready: false as valid status", async () => {
+    const { cryptoDlSidecarStatusV1Schema } = await import("./sidecar_signal.js")
+    const status = {
+      status: "running",
+      slot_id: "slot-20260511-00",
+      run_id: "test-run",
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      ready: false,
+      signals_count: 0,
+    }
+    const parsed = cryptoDlSidecarStatusV1Schema.parse(status)
+    expect(parsed.ready).toBe(false)
+  })
+})
+
+describe("v5 plan - computeCurrentSlotId", () => {
+  it("returns expected format", () => {
+    const slot = computeCurrentSlotId(new Date("2026-05-11T10:30:00Z"))
+    expect(slot).toMatch(/^slot-\d{8}-0[48]$/)
+  })
+
+  it("returns correct slot for hour 0-3", () => {
+    const slot = computeCurrentSlotId(new Date("2026-05-11T01:30:00Z"))
+    expect(slot).toBe("slot-20260511-00")
+  })
+
+  it("returns correct slot for hour 4-7", () => {
+    const slot = computeCurrentSlotId(new Date("2026-05-11T05:30:00Z"))
+    expect(slot).toBe("slot-20260511-04")
+  })
+
+  it("returns correct slot for hour 8-11", () => {
+    const slot = computeCurrentSlotId(new Date("2026-05-11T10:30:00Z"))
+    expect(slot).toBe("slot-20260511-08")
+  })
+
+  it("returns correct slot for hour 20-23", () => {
+    const slot = computeCurrentSlotId(new Date("2026-05-11T22:30:00Z"))
+    expect(slot).toBe("slot-20260511-20")
+  })
+})
+
+describe("v5 plan - integer precision boundaries", () => {
+  it("pctToBps converts correctly", () => {
+    expect(pctToBps(50)).toBe(5000)
+    expect(pctToBps(100)).toBe(10000)
+    expect(pctToBps(0.02)).toBe(2) // 0.02% = 2 bps
+  })
+
+  it("floatToBps converts correctly", () => {
+    expect(floatToBps(0.5)).toBe(5000)   // 0.50 = 50% = 5000 bps
+    expect(floatToBps(1.0)).toBe(10000)  // 1.0 = 100% = 10000 bps
+    expect(floatToBps(0.02)).toBe(200)   // 0.02 = 2% = 200 bps
+  })
+
+  it("awayFromZeroRounding works", () => {
+    expect(awayFromZeroRounding(9999.999999)).toBe(10000)
+    expect(awayFromZeroRounding(10000.000001)).toBe(10000)
+  })
+})

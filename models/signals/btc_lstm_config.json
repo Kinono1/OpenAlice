@@ -1,0 +1,7 @@
+{
+  "seq_len": 32,
+  "horizon": 24,
+  "hidden": 32,
+  "num_features": 13,
+  "accuracy": 0.5167785234899329
+}

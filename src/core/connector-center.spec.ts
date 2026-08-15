@@ -98,7 +98,23 @@ describe('ConnectorCenter', () => {
         const result = await cc.notify('hello')
 
         expect(result.delivered).toBe(false)
+        expect(result.reason).toBe('no_push_connector')
         expect(result.channel).toBeUndefined()
+      })
+
+      it('falls back from an unavailable preferred connector to another push connector', async () => {
+        cc.register(makeConnector({
+          channel: 'web',
+          send: async () => ({ delivered: false, reason: 'connector_not_ready' }),
+        }))
+        cc.register(makeConnector({
+          channel: 'telegram',
+          send: async () => ({ delivered: true }),
+        }))
+
+        const result = await cc.notify('hello')
+
+        expect(result).toMatchObject({ delivered: true, reason: 'delivered', channel: 'telegram' })
       })
 
       it('should pass media in payload', async () => {

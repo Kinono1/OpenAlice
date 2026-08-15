@@ -1,0 +1,10 @@
+This verdict.json is STALE (generated 2026-05-04, 10+ days old).
+
+The verdict references a release_gate_status.json that is 63 days old,
+exceeding the 24-hour freshness threshold.
+
+To regenerate:
+1. Run the full validation pipeline: npm run research:strategy:validate
+2. Or manually update release_gate_status.json: npm run promotion:v2:publish
+
+Current system status is in data/runtime/release_gate_status.json (4 days old).

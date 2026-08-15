@@ -151,6 +151,38 @@ describe('buildStrategyExecutionDecision', () => {
     expect(decision.blockReason).toContain('no-trade')
   })
 
+  it('blocks new opens when event risk caps governance to reduce', () => {
+    const decision = buildStrategyExecutionDecision({
+      snapshot: makeSnapshot({
+        governance: {
+          ...makeSnapshot().governance,
+          actionStatus: 'reduce',
+          baseActionStatus: 'attack-lite',
+          cappedByEventWindow: true,
+          context: {
+            eventWindowFrozen: true,
+            eventSeverity: 'high',
+          },
+        },
+        freeze: {
+          active: true,
+          marketScope: 'crypto',
+          activeWindows: [],
+          maxActionDuringFreeze: 'reduce',
+        },
+      }),
+      request: {
+        symbol: 'BTC/USDT:USDT',
+        side: 'buy',
+        type: 'market',
+        usd_size: 2500,
+      },
+      exposureClassification: 'open',
+    })
+    expect(decision.mode).toBe('blocked')
+    expect(decision.blockReason).toContain('reduce')
+  })
+
   it('keeps rejected meta-label decisions shadow-only by default', () => {
     const decision = buildStrategyExecutionDecision({
       snapshot: makeSnapshot({

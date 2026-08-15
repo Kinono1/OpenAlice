@@ -14,6 +14,7 @@ function asset(symbol: string, primaryReturn: number, fundingRatePct = 0): Cross
     },
     realizedVolPct: 25,
     avgVolume24h: 1_000_000,
+    dailyVolumeUsd: 100_000_000,
     fundingRatePct,
   }
 }
@@ -71,5 +72,33 @@ describe('evaluateCrossSectionalMomentum', () => {
 
     expect(ranks.every(rank => rank.signal === 0)).toBe(true)
     expect(ranks[0].reason).toContain('below threshold')
+  })
+
+  it('filters out assets with excessive spread or insufficient USD liquidity', () => {
+    const ranks = evaluateCrossSectionalMomentum([
+      { ...asset('A-USDT', -20), spreadBps: 25 },
+      { ...asset('B-USDT', -14), dailyVolumeUsd: 2_000_000 },
+      asset('C-USDT', -2),
+      asset('D-USDT', 3),
+      asset('E-USDT', 14),
+      asset('F-USDT', 21),
+    ], {
+      minUniverseSize: 4,
+      topN: 1,
+      bottomN: 1,
+      minSpreadPct: 5,
+      maxSpreadBps: 20,
+      minDailyVolumeUsd: 10_000_000,
+    })
+
+    expect(ranks.find(rank => rank.symbol === 'A-USDT')).toMatchObject({
+      signal: 0,
+      reason: 'Filtered out (vol/liq/spread)',
+    })
+    expect(ranks.find(rank => rank.symbol === 'B-USDT')).toMatchObject({
+      signal: 0,
+      reason: 'Filtered out (vol/liq/spread)',
+    })
+    expect(ranks.some(rank => Math.abs(rank.signal) === 1)).toBe(true)
   })
 })

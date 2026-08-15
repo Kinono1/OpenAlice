@@ -10,7 +10,11 @@ export interface AuthTokenState {
 }
 
 export function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
+  if (a.length !== b.length) {
+    // Constant-time self-comparison to prevent timing side-channel leak of length.
+    timingSafeEqual(Buffer.from(a), Buffer.from(a))
+    return false
+  }
   return timingSafeEqual(Buffer.from(a), Buffer.from(b))
 }
 

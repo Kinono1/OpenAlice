@@ -1,0 +1,29 @@
+{
+  "model_type": "LogisticRegression",
+  "features": [
+    "mean_ret",
+    "std_ret",
+    "skew_ret",
+    "min_ret",
+    "max_ret"
+  ],
+  "seq_len_days": 60,
+  "fwd_horizon_days": 21,
+  "trained_at": "2026-05-12T02:40:30.794073Z",
+  "n_training_samples": 33722,
+  "n_symbols_trained": 24,
+  "n_symbols_total": 24,
+  "training_accuracy": 0.5320265701915663,
+  "training_precision": 0.5346899754165528,
+  "training_recall": 0.46615467047687087,
+  "training_f1_score": 0.4980757609490792,
+  "brier_score": 0.24800664717170318,
+  "coefficients": {
+    "mean_ret": 1.356927797637002,
+    "std_ret": -6.810844980788791,
+    "skew_ret": -0.1348749348305179,
+    "min_ret": -1.3285279332293725,
+    "max_ret": 1.197733323595935
+  },
+  "intercept": 0.0020990571059490122
+}

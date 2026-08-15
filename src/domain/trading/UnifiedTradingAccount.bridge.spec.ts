@@ -4,6 +4,15 @@ import { Contract, Order, OrderState } from '@traderalice/ibkr'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { MockBroker } from './brokers/mock/index.js'
 
+vi.mock('../../runtime/release_gate_status.js', () => ({
+  loadReleaseGateStatus: vi.fn().mockResolvedValue({
+    version: 1, generatedAt: new Date().toISOString(),
+    allowPaperTrading: true, allowLiveTrading: true,
+    failedChecks: [], warningChecks: [],
+  }),
+  isReleaseGateStatusBlocking: vi.fn().mockReturnValue({ blocking: false }),
+}))
+
 describe('UnifiedTradingAccount — executeOperation hook', () => {
   it('uses buildExecuteOperation override for push execution', async () => {
     const broker = new MockBroker()

@@ -161,6 +161,11 @@ export interface CapitalScaleRule {
   maxLeverage?: number
   maxOrderUsd?: number
   maxPositionPctOfEquity?: number
+  maxSingleTradeLossUsd?: number
+  maxTotalExposurePctOfEquity?: number
+  maxSymbolExposurePctOfEquity?: number
+  maxNetDirectionalExposurePctOfEquity?: number
+  maxCorrelatedGroupExposurePctOfEquity?: number
   highVolatilityMaxLeverage?: number
 }
 
@@ -171,6 +176,12 @@ export interface RiskConfig {
   maxLeverage: number
   maxOrderUsd: number
   maxPositionPctOfEquity: number
+  maxSingleTradeLossUsd?: number
+  maxTotalExposurePctOfEquity?: number
+  maxSymbolExposurePctOfEquity?: number
+  maxNetDirectionalExposurePctOfEquity?: number
+  maxCorrelatedGroupExposurePctOfEquity?: number
+  correlatedExposureGroups?: Record<string, string[]>
   maxDailyLossUsd: number
   enforceRealizedPnlConfidence?: boolean
   minRealizedPnlConfidence?: number
@@ -196,6 +207,9 @@ export interface RiskCheckContext {
   cvarDailyLossPct?: number
   consecutiveLossDays?: number
   consecutiveLossPct?: number
+  riskIfFilledUsd?: number
+  entryPrice?: number
+  stopLossPrice?: number
   volatilityQuantile?: number
   capitalRampStage?: string
   positions?: CryptoPosition[]
@@ -252,8 +266,8 @@ export interface ExecutionTelemetry {
 
 export interface OperationOutcome {
   opIndex: number
-  ticketId: string
-  intentId: string
+  ticketId?: string
+  intentId?: string
   status: 'success' | 'failed' | 'skipped'
   result?: CryptoOrderResult
   error?: string

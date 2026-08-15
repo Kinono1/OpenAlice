@@ -4335,6 +4335,25 @@ function loadBestConfigTrialEntry(path: string): { entries: TrialLedgerEntry[]; 
   }
   const root = asRecord(parsed.value)
   const config = asRecord(root?.config)
+  if (
+    stringOrNull(root?.status) === 'no_passing_config' ||
+    root?.selectedConfig === false ||
+    root?.config === null
+  ) {
+    return {
+      entries: [],
+      diagnostic: {
+        source: 'best_config',
+        path,
+        status: 'loaded',
+        recordsIn: 1,
+        entriesEmitted: 0,
+        notes: [
+          `best config has no active survivor: ${stringOrNull(root?.noPassingConfigReason) ?? 'no_passing_config'}`,
+        ],
+      },
+    }
+  }
   if (!root || !config) {
     return {
       entries: [],

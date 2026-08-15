@@ -19,6 +19,8 @@ export interface SendPayload {
 export interface SendResult {
   /** Whether the message was actually sent (false for pull-based connectors). */
   delivered: boolean
+  reason?: 'no_push_connector' | 'connector_not_ready' | 'send_timeout' | 'remote_rejected' | 'delivered'
+  error?: string
 }
 
 // ==================== Connector Interface ====================
@@ -44,6 +46,8 @@ export interface Connector {
   readonly to: string
   /** What this connector can do. */
   readonly capabilities: ConnectorCapabilities
+  /** Runtime health for proactive delivery. */
+  readonly status?: 'ready' | 'degraded' | 'stopped'
   /** Send a structured payload through this connector. */
   send(payload: SendPayload): Promise<SendResult>
   /**

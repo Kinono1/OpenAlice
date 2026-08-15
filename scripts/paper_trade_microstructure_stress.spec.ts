@@ -48,7 +48,7 @@ describe('paper_trade_microstructure_stress', () => {
     clearPaperMarkMatchSnapshotCacheForTest()
   })
 
-  it('keeps 10x and 100x as second-level paper-trade profiles', () => {
+  it('keeps 10x as paper-trade and 100x as stress-only diagnostics', () => {
     expect(MICRO_PROFILES.map(profile => ({
       id: profile.id,
       mode: profile.mode,
@@ -67,7 +67,7 @@ describe('paper_trade_microstructure_stress', () => {
       },
       {
         id: 'liquidation_probe_100x',
-        mode: 'paper_trade',
+        mode: 'stress_only',
         cadence: 'second',
         timeframe: '1s',
         strategyLane: 'microstructure_stress',
@@ -352,6 +352,8 @@ describe('paper_trade_microstructure_stress', () => {
       fillAdjustedCostPct: null,
       costEvidenceSource: 'paper_cost_model_at_open',
       costEvidenceStatus: 'paper_model_not_exchange_reconciled',
+      predictedOpenEvidenceStatus: 'ok',
+      predictedOpenEvidenceReason: null,
       mfeBps: 40,
       maeBps: -10,
       timeToMfeSec: 15,
@@ -494,7 +496,7 @@ describe('paper_trade_microstructure_stress', () => {
       barTime: 1_800_000_000_000,
       return30sPct: Number.NaN,
       return60sPct: 0.1,
-      volumeRatio: 2.5,
+      volumeRatio: 3.5,
       liquidityUsd: 500_000,
       reason: 'invalid impulse bypass',
     }
@@ -572,7 +574,7 @@ describe('paper_trade_microstructure_stress', () => {
       barTime: Date.parse('2026-05-02T00:05:00.000Z'),
       return30sPct: 0.2,
       return60sPct: 0.1,
-      volumeRatio: 2.5,
+      volumeRatio: 3.5,
       liquidityUsd: 500_000,
       reason: 'strong impulse',
     }
@@ -638,7 +640,7 @@ describe('paper_trade_microstructure_stress', () => {
       flashContextStatus: 'ok',
       flashConfidenceLowAtOpen: 0.76,
       ruleScoreAtOpen: 0.8,
-      volumeRatioAtOpen: 2.5,
+      volumeRatioAtOpen: 3.5,
       return30sPctAtOpen: 0.2,
       return60sPctAtOpen: 0.1,
       microstructureConfidenceAtOpen: 0.8,

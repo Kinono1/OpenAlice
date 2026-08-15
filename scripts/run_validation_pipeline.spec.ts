@@ -160,9 +160,16 @@ function makePitAuditContract(input: {
 
 function runValidationPipeline(args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
+    const isolatedArgs = args.includes('--releaseGateStatusPath')
+      ? args
+      : [
+        ...args,
+        '--releaseGateStatusPath',
+        join(tmpdir(), `openalice-test-release-gate-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`),
+      ]
     const child = spawn(
       './node_modules/.bin/tsx',
-      ['scripts/run_validation_pipeline.ts', ...args],
+      ['scripts/run_validation_pipeline.ts', ...isolatedArgs],
       {
         cwd: resolve('.'),
         stdio: 'ignore',

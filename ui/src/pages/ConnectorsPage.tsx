@@ -110,19 +110,18 @@ export function ConnectorsPage() {
             {config.telegram.enabled && (
               <ConfigSection
                 title="Telegram"
-                description="Create a bot via @BotFather, paste the token below, and add your chat ID."
+                description="Create a bot via @BotFather, store its token in the restricted OpenAlice env file, and reference the environment variable here."
               >
-                <Field label="Bot Token">
+                <Field label="Bot Token Environment Variable">
                   <input
                     className={inputClass}
-                    type="password"
-                    value={config.telegram.botToken ?? ''}
+                    value={config.telegram.botTokenEnv}
                     onChange={(e) =>
                       updateConfig({
-                        telegram: { ...config.telegram, botToken: e.target.value || undefined },
+                        telegram: { ...config.telegram, botTokenEnv: e.target.value || 'TELEGRAM_BOT_TOKEN' },
                       })
                     }
-                    placeholder="123456:ABC-DEF..."
+                    placeholder="TELEGRAM_BOT_TOKEN"
                   />
                 </Field>
                 <Field label="Bot Username">

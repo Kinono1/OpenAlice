@@ -34,7 +34,7 @@ function scoreToBaseAction(
 ): ActionStatus {
   if (totalScore >= 85) return 'attack'
   if (totalScore >= 70) return 'attack-lite'
-  if (totalScore >= 55) return 'probe'
+  if (totalScore >= 65) return 'probe'
   if (totalScore >= 40) return preferReduceOnWeakSignal ? 'reduce' : 'hold'
   return 'no-trade'
 }
@@ -51,16 +51,19 @@ export function evaluateSignalGovernance(
 
   const maxActionDuringFreeze = context.maxActionDuringFreeze ?? 'reduce'
   const eventWindowFrozen = context.eventWindowFrozen === true
-  const actionStatus = eventWindowFrozen
-    ? clampActionToMaxRisk(baseActionStatus, maxActionDuringFreeze)
-    : baseActionStatus
+  const staleDataApplied = context.staleData === true
+  const actionStatus = staleDataApplied
+    ? 'no-trade'
+    : eventWindowFrozen
+      ? clampActionToMaxRisk(baseActionStatus, maxActionDuringFreeze)
+      : baseActionStatus
 
   return {
     breakdown,
     baseActionStatus,
     actionStatus,
-    cappedByEventWindow: eventWindowFrozen && actionStatus !== baseActionStatus,
-    staleDataApplied: context.staleData === true,
+    cappedByEventWindow: !staleDataApplied && eventWindowFrozen && actionStatus !== baseActionStatus,
+    staleDataApplied,
     context: {
       eventWindowFrozen,
       eventSeverity: context.eventSeverity ?? 'none',

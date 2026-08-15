@@ -31,6 +31,7 @@ import {
   type QuarantineRecord,
   type RouteBudget,
   type RouteCostBudget,
+  type RouteName,
   type RuntimePathAudit,
   type SchemaMeta,
   type UniverseAttribution,
@@ -71,6 +72,7 @@ export interface PublishPromotionV2CliArgs {
   paperEvidencePointerPath: string
   paperEvidenceLedgerPath: string
   p1EvidenceIndexPath: string
+  strategyLanePolicyPath: string
 }
 
 export interface PromotionV2BundleBuildInput {
@@ -94,6 +96,7 @@ export interface PromotionV2BundleBuildInput {
   paperEvidenceReportRaw?: string | null
   paperEvidenceReport?: PaperEvidenceReport | null
   p1Evidence?: P1TradingEvidenceSnapshot | null
+  strategyLanePolicy?: StrategyLanePolicySnapshot | null
 }
 
 export interface PromotionV2BundleBuildResult {
@@ -126,6 +129,8 @@ export function parsePublishPromotionV2Args(argv: string[]): PublishPromotionV2C
       join(DEFAULT_PAPER_EVIDENCE_ROOT, 'evidence_ledger.jsonl'),
     p1EvidenceIndexPath: raw.get('p1EvidenceIndexPath') ??
       'data/runtime/p1_trading_evidence/p1_trading_evidence.index.latest.json',
+    strategyLanePolicyPath: raw.get('strategyLanePolicyPath') ??
+      'data/runtime/strategy_lane_policy.latest.json',
   }
 }
 
@@ -166,6 +171,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       ? paperEvidenceReportFromJson(JSON.parse(paperEvidenceReportRaw) as unknown)
       : null,
     p1Evidence: await readP1TradingEvidenceSnapshot(args.p1EvidenceIndexPath),
+    strategyLanePolicy: buildStrategyLanePolicySnapshot(await readJsonIfExists(args.strategyLanePolicyPath)),
   })
 
   await mkdir(args.runtimeDir, { recursive: true })
@@ -218,7 +224,7 @@ export function buildPromotionV2RuntimeArtifactsFromInputs(
   const supportingEvidenceIds = evidence.map((item) => item.id)
   const feeSnapshot = selectFeeSnapshot(input.existingFeeSnapshot, generatedAt, expiresAt, input.now)
   const routeCostBudget = buildRouteCostBudget(generatedAt, feeSnapshot, readNumber(paperDecision?.estimatedRoundTripCostPct))
-  const selectedRoute = 'taker_taker' as const
+  const selectedRoute = selectPromotionRoute(input.releaseGateStatus, routeCostBudget)
   const monetizationMetrics = buildMonetizationMetrics(paperDecision, oldReadiness, routeCostBudget.routes[selectedRoute])
   const capitalGate = evaluateCapitalGate({
     accountEquityUsd: readNumber(asRecord(paperDecision?.accountSnapshot)?.equity) ?? DEFAULT_ACCOUNT_EQUITY_USD,
@@ -274,6 +280,7 @@ export function buildPromotionV2RuntimeArtifactsFromInputs(
     paperEvidenceReport,
     paperDecisionRaw: input.paperDecisionRaw,
     p1Evidence: input.p1Evidence ?? null,
+    strategyLanePolicy: input.strategyLanePolicy ?? null,
     now: input.now,
   })
   const executionQuality = buildExecutionQualityArtifact(paperDecision, oldReadiness, generatedAt)
@@ -617,6 +624,33 @@ function buildRouteCostBudget(
   }
 }
 
+function selectPromotionRoute(
+  releaseGateStatus: PersistedReleaseGateStatus | null,
+  routeCostBudget: RouteCostBudget,
+): RouteName {
+  const releaseRoute = readReleaseGateEconomicsRoute(releaseGateStatus)
+  if (releaseRoute && routeCostBudget.routes[releaseRoute]) {
+    return releaseRoute
+  }
+  return 'taker_taker'
+}
+
+function readReleaseGateEconomicsRoute(
+  releaseGateStatus: PersistedReleaseGateStatus | null,
+): RouteName | null {
+  const checks = Array.isArray(releaseGateStatus?.checks) ? releaseGateStatus.checks : []
+  const economics = checks.find(check => check.name === 'economics')
+  const selectedRoute = readString(economics?.metrics.selectedRoute)
+  return isRouteName(selectedRoute) ? selectedRoute : null
+}
+
+function isRouteName(value: string | null): value is RouteName {
+  return value === 'passive_passive' ||
+    value === 'passive_taker' ||
+    value === 'taker_taker' ||
+    value === 'twap'
+}
+
 function buildMonetizationMetrics(
   paperDecision: Record<string, unknown> | null,
   oldReadiness: Record<string, unknown> | null,
@@ -886,6 +920,7 @@ function buildPaperGate(input: {
   paperEvidenceReport?: PaperEvidenceReport | null
   paperDecisionRaw: string | null
   p1Evidence?: P1TradingEvidenceSnapshot | null
+  strategyLanePolicy?: StrategyLanePolicySnapshot | null
   now: Date
 }): GateResult {
   const hardBlocks = readStringArray(input.oldReadiness?.reasons)
@@ -923,10 +958,13 @@ function buildPaperGate(input: {
     paperDecisionRaw: input.paperDecisionRaw,
   }))
   hardBlocks.push(...p1TradingEvidenceHardBlocks(input.p1Evidence ?? null))
+  hardBlocks.push(...strategyLanePolicyHardBlocks(input.strategyLanePolicy ?? null))
+  const strategyLanePolicyAdvisories = strategyLanePolicyAdvisoryWarnings(input.strategyLanePolicy ?? null)
 
   return makeGateResult({
     gateName: 'paper',
     hardBlocks,
+    advisoryWarnings: strategyLanePolicyAdvisories,
     requiredArtifacts: [
       'paper_decision.latest.json',
       'runtime/paper/latest_pointer.json',
@@ -934,6 +972,7 @@ function buildPaperGate(input: {
       'runtime/paper/evidence_ledger.jsonl',
       'execution_quality.latest.json',
       'runtime_path_audit.latest.json',
+      'strategy_lane_policy.latest.json',
     ],
     metricSnapshot: {
       status: readString(input.paperDecision?.status) ?? 'unknown',
@@ -980,9 +1019,70 @@ function buildPaperGate(input: {
       p1TrialLedgerFdrGateStatus: input.p1Evidence?.trialLedgerFdrGateStatus ?? 'missing',
       p1TrialLedgerFdrStatus: input.p1Evidence?.trialLedgerFdrStatus ?? 'missing',
       p1TrialLedgerReadinessBlockers: input.p1Evidence?.trialLedgerReadinessBlockers?.slice(0, 20) ?? [],
+      strategyLanePolicyStatus: input.strategyLanePolicy ? 'loaded' : 'missing',
+      strategyLanePolicyDiagnosticOnly: input.strategyLanePolicy?.diagnosticOnly ?? false,
+      strategyLanePolicyPolicyMutationAllowed: input.strategyLanePolicy?.policyMutationAllowed ?? false,
+      strategyLanePolicyPaperExecutionAllowed: input.strategyLanePolicy?.paperExecutionAllowed ?? false,
+      strategyLanePolicyLiveExecutionAllowed: input.strategyLanePolicy?.liveExecutionAllowed ?? false,
+      strategyLanePolicyLanesReviewed: input.strategyLanePolicy?.lanesReviewed ?? 0,
+      strategyLanePolicyBlockNewOrders: input.strategyLanePolicy?.blockNewOrders ?? 0,
+      strategyLanePolicyShadowOnly: input.strategyLanePolicy?.shadowOnly ?? 0,
+      strategyLanePolicyProbation: input.strategyLanePolicy?.probation ?? 0,
+      strategyLanePolicyWorstLane: input.strategyLanePolicy?.worstLane ?? 'missing',
+      strategyLanePolicyBestPositiveLowSampleLane: input.strategyLanePolicy?.bestPositiveLowSampleLane ?? 'missing',
+      strategyLanePolicyTopBlockedLanes: input.strategyLanePolicy?.blockedLanes.slice(0, 5).join(',') ?? '',
+      strategyLanePolicyShadowLanes: input.strategyLanePolicy?.shadowLanes.slice(0, 5).join(',') ?? '',
+      strategyLanePolicyProbationLanes: input.strategyLanePolicy?.probationLanes.slice(0, 5).join(',') ?? '',
     },
     expiresAt: input.expiresAt,
   })
+}
+
+export interface StrategyLanePolicySnapshot {
+  diagnosticOnly: boolean
+  policyMutationAllowed: boolean
+  paperExecutionAllowed: boolean
+  liveExecutionAllowed: boolean
+  lanesReviewed: number
+  blockNewOrders: number
+  shadowOnly: number
+  probation: number
+  worstLane: string | null
+  bestPositiveLowSampleLane: string | null
+  globalBlockers: string[]
+  blockedLanes: string[]
+  shadowLanes: string[]
+  probationLanes: string[]
+}
+
+export function buildStrategyLanePolicySnapshot(input: unknown): StrategyLanePolicySnapshot | null {
+  const root = asRecord(input)
+  if (!root) return null
+  const summary = asRecord(root.summary)
+  const lanes = Array.isArray(root.lanes) ? root.lanes.filter(isRecord) : []
+  const laneNamesByAction = (action: string): string[] => lanes
+    .filter(lane => readString(lane.action) === action)
+    .map(lane => readString(lane.lane))
+    .filter((lane): lane is string => Boolean(lane))
+  const blockedLanes = laneNamesByAction('block_new_orders')
+  const shadowLanes = laneNamesByAction('shadow_only')
+  const probationLanes = laneNamesByAction('probation')
+  return {
+    diagnosticOnly: readBoolean(root.diagnosticOnly) === true,
+    policyMutationAllowed: readBoolean(root.policyMutationAllowed) === true,
+    paperExecutionAllowed: readBoolean(root.paperExecutionAllowed) === true,
+    liveExecutionAllowed: readBoolean(root.liveExecutionAllowed) === true,
+    lanesReviewed: readNumber(summary?.lanesReviewed) ?? lanes.length,
+    blockNewOrders: readNumber(summary?.blockNewOrders) ?? blockedLanes.length,
+    shadowOnly: readNumber(summary?.shadowOnly) ?? shadowLanes.length,
+    probation: readNumber(summary?.probation) ?? probationLanes.length,
+    worstLane: readString(summary?.worstLane) ?? null,
+    bestPositiveLowSampleLane: readString(summary?.bestPositiveLowSampleLane) ?? null,
+    globalBlockers: readStringArray(root.globalBlockers),
+    blockedLanes,
+    shadowLanes,
+    probationLanes,
+  }
 }
 
 export interface P1TradingEvidenceSnapshot {
@@ -1210,6 +1310,26 @@ function p1TradingEvidenceHardBlocks(p1: P1TradingEvidenceSnapshot | null): stri
       : `p1_stoploss_risk_policy_blocked:${p1.stoplossRiskPolicyStatus}`)
   }
   return hardBlocks
+}
+
+function strategyLanePolicyHardBlocks(policy: StrategyLanePolicySnapshot | null): string[] {
+  if (!policy) return ['strategy_lane_policy_missing']
+  const hardBlocks: string[] = []
+  if (policy.diagnosticOnly !== true) hardBlocks.push('strategy_lane_policy_not_diagnostic_only')
+  if (policy.policyMutationAllowed !== false) hardBlocks.push('strategy_lane_policy_allows_policy_mutation')
+  if (policy.paperExecutionAllowed !== false) hardBlocks.push('strategy_lane_policy_allows_paper_execution')
+  if (policy.liveExecutionAllowed !== false) hardBlocks.push('strategy_lane_policy_allows_live_execution')
+  hardBlocks.push(...policy.globalBlockers.map(reason => `strategy_lane_global_blocker:${reason}`))
+  hardBlocks.push(...policy.blockedLanes.map(lane => `strategy_lane_block:${lane}`))
+  return hardBlocks
+}
+
+function strategyLanePolicyAdvisoryWarnings(policy: StrategyLanePolicySnapshot | null): string[] {
+  if (!policy) return []
+  return [
+    ...policy.shadowLanes.map(lane => `strategy_lane_shadow_only:${lane}`),
+    ...policy.probationLanes.map(lane => `strategy_lane_probation:${lane}`),
+  ]
 }
 
 function readStopLossDiagnosticsOk(mfe: Record<string, unknown>): number {

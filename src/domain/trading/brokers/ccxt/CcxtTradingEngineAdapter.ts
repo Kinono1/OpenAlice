@@ -972,7 +972,7 @@ export async function createCcxtExecutionBridge(input: {
         await loadReleaseGateStatus(),
         'paper',
       )
-      if (config.mode === 'paper_only' && releaseGateBlocking.blocking) {
+      if (releaseGateBlocking.blocking) {
         const reason = releaseGateBlocking.reason ?? 'paper_release_gate_failed'
         return {
           approved: false,

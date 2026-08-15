@@ -1,10 +1,11 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
 // Engine removed — AgentCenter is the top-level AI entry point
-import { loadConfig, readAccountsConfig } from './core/config.js'
+import { loadConfig, readAccountsConfig, resolveTelegramBotToken } from './core/config.js'
 import type { Plugin, EngineContext, ReconnectResult } from './core/types.js'
 import { McpPlugin } from './server/mcp.js'
 import { TelegramPlugin } from './connectors/telegram/index.js'
+import { resolveTelegramPollingEnabled } from './connectors/telegram/types.js'
 import { WebPlugin } from './connectors/web/index.js'
 import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './tool/thinking.js'
@@ -35,10 +36,12 @@ import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.j
 import { AgentSdkProvider } from './ai-providers/agent-sdk/agent-sdk-provider.js'
 import { createEventLog } from './core/event-log.js'
 import { createToolCallLog } from './core/tool-call-log.js'
+import { dispose as disposeTrustedContext } from './core/trusted-context.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
 import { NewsCollectorStore, NewsCollector } from './domain/news/index.js'
 import { createNewsArchiveTools } from './tool/news.js'
+import { OkxStreamSupervisor } from './domain/market-data/okx-stream-supervisor.js'
 
 // ==================== Persistence paths ====================
 
@@ -229,6 +232,15 @@ async function main() {
   cronListener.start()
   console.log('cron: engine + listener started')
 
+  // ==================== Optional OKX Public Stream ====================
+
+  const okxStreamSupervisor = new OkxStreamSupervisor()
+  try {
+    await okxStreamSupervisor.start()
+  } catch (error) {
+    console.warn(`okx-stream: degraded startup: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   // ==================== Snapshot Scheduler ====================
 
   const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, eventLog, config: config.snapshot })
@@ -291,10 +303,11 @@ async function main() {
     }))
   }
 
-  if (config.connectors.telegram.enabled && config.connectors.telegram.botToken) {
+  if (config.connectors.telegram.enabled) {
     optionalPlugins.set('telegram', new TelegramPlugin({
-      token: config.connectors.telegram.botToken,
+      token: resolveTelegramBotToken(config.connectors.telegram),
       allowedChatIds: config.connectors.telegram.chatIds,
+      pollingEnabled: resolveTelegramPollingEnabled(process.env.OPENALICE_TELEGRAM_POLLING_ENABLED),
     }))
   }
 
@@ -330,7 +343,7 @@ async function main() {
       }
 
       // --- Telegram ---
-      const telegramWanted = fresh.connectors.telegram.enabled && !!fresh.connectors.telegram.botToken
+      const telegramWanted = fresh.connectors.telegram.enabled
       const telegramRunning = optionalPlugins.has('telegram')
       if (telegramRunning && !telegramWanted) {
         await optionalPlugins.get('telegram')!.stop()
@@ -338,8 +351,9 @@ async function main() {
         changes.push('telegram stopped')
       } else if (!telegramRunning && telegramWanted) {
         const p = new TelegramPlugin({
-          token: fresh.connectors.telegram.botToken!,
+          token: resolveTelegramBotToken(fresh.connectors.telegram),
           allowedChatIds: fresh.connectors.telegram.chatIds,
+          pollingEnabled: resolveTelegramPollingEnabled(process.env.OPENALICE_TELEGRAM_POLLING_ENABLED),
         })
         await p.start(ctx)
         optionalPlugins.set('telegram', p)
@@ -393,8 +407,17 @@ async function main() {
   }
 
   for (const plugin of [...corePlugins, ...optionalPlugins.values()]) {
-    await plugin.start(ctx)
-    console.log(`plugin started: ${plugin.name}`)
+    try {
+      await plugin.start(ctx)
+      console.log(`plugin started: ${plugin.name}`)
+    } catch (err) {
+      if (plugin.name === 'telegram') {
+        console.warn(`plugin degraded: telegram: ${err instanceof Error ? err.message : err}`)
+        connectorCenter.setChannelStatus('telegram', 'degraded', err instanceof Error ? err.message : String(err))
+        continue
+      }
+      throw err
+    }
   }
 
   console.log('engine: started')
@@ -402,20 +425,25 @@ async function main() {
   // ==================== Shutdown ====================
 
   let stopped = false
+  let shuttingDown = false
   const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
     stopped = true
     newsCollector?.stop()
     snapshotScheduler.stop()
     heartbeat.stop()
     cronListener.stop()
     cronEngine.stop()
+    await okxStreamSupervisor.stop()
     for (const plugin of [...corePlugins, ...optionalPlugins.values()]) {
-      await plugin.stop()
+      try { await plugin.stop() } catch (err) { console.error(`plugin stop failed: ${plugin.name}:`, err) }
     }
     await newsStore.close()
     await toolCallLog.close()
     await eventLog.close()
     await accountManager.closeAll()
+    disposeTrustedContext()
     process.exit(0)
   }
   process.on('SIGINT', shutdown)

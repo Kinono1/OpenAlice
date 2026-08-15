@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { buildEvidenceManifest } from '../src/runtime/evidence_manifest.js'
 import {
   buildRuntimeManifestCoverageReport,
+  DEFAULT_REQUIRED_RUNTIME_ARTIFACTS,
   parseRuntimeManifestCoverageArgs,
   runRuntimeManifestCoverageAudit,
   type RequiredRuntimeArtifact,
@@ -33,6 +34,31 @@ describe('audit_runtime_manifest_coverage', () => {
       outputPath: null,
       json: true,
     })
+  })
+
+  it('includes new status artifacts in the default manifest coverage contract', () => {
+    expect(DEFAULT_REQUIRED_RUNTIME_ARTIFACTS).toEqual(expect.arrayContaining([
+      {
+        key: 'strategyLanePolicy',
+        relativePath: 'strategy_lane_policy.latest.json',
+        required: true,
+      },
+      {
+        key: 'liveDataFreshness',
+        relativePath: 'live_data_freshness.latest.json',
+        required: true,
+      },
+      {
+        key: 'dataWarehouseCatalog',
+        relativePath: 'openalice_data_catalog.latest.json',
+        required: true,
+      },
+      {
+        key: 'assetMetadataRegistry',
+        relativePath: 'openalice_asset_metadata_registry.latest.json',
+        required: true,
+      },
+    ]))
   })
 
   it('blocks missing manifests and hash mismatches without granting promotion', async () => {

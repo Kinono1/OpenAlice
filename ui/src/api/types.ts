@@ -94,7 +94,7 @@ export interface ConnectorsConfig {
   mcpAsk: { enabled: boolean; port?: number }
   telegram: {
     enabled: boolean
-    botToken?: string
+    botTokenEnv: string
     botUsername?: string
     chatIds: number[]
   }

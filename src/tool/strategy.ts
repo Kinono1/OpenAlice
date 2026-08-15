@@ -19,7 +19,7 @@ import { summarizeReviewRecords } from '../domain/strategy/review/index.js'
 import { validateExecutionTicket } from '../domain/strategy/ticket-lifecycle/index.js'
 import { evaluateRuntimeStrategySnapshotFromSources } from '../domain/strategy/runtime-service.js'
 import type { AccountManager } from '../domain/trading/account-manager.js'
-import type { CryptoClientLike } from '../domain/market-data/client/types'
+import type { CryptoClientLike } from '../domain/market-data/client/types.js'
 
 export function createStrategyTools(
   accountManager?: AccountManager,

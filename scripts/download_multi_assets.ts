@@ -1,16 +1,23 @@
 /**
- * Quick download of 1h klines for additional crypto assets.
+ * Quick OKX-only download of 1h klines for additional research assets.
  * Usage: npx tsx scripts/download_multi_assets.ts
  */
 
-import ccxt from 'ccxt'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { candlesToCSV, fetchExtendedCandles } from '../src/domain/market-data/live-fetcher.js'
 
-const SYMBOLS = ['SOL/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'AVAX/USDT:USDT']
+const ASSETS = [
+  { symbol: 'SOL/USDT:USDT', instId: 'SOL-USDT-SWAP', storageSymbol: 'SOL_USDT_USDT' },
+  { symbol: 'BNB/USDT:USDT', instId: 'BNB-USDT-SWAP', storageSymbol: 'BNB_USDT_USDT' },
+  { symbol: 'XRP/USDT:USDT', instId: 'XRP-USDT-SWAP', storageSymbol: 'XRP_USDT_USDT' },
+  { symbol: 'DOGE/USDT:USDT', instId: 'DOGE-USDT-SWAP', storageSymbol: 'DOGE_USDT_USDT' },
+  { symbol: 'ADA/USDT:USDT', instId: 'ADA-USDT-SWAP', storageSymbol: 'ADA_USDT_USDT' },
+  { symbol: 'AVAX/USDT:USDT', instId: 'AVAX-USDT-SWAP', storageSymbol: 'AVAX_USDT_USDT' },
+]
 const TIMEFRAME = '1h'
 const SINCE_MS = new Date('2025-07-01').getTime()
-const LIMIT = 1000
+const MAX_CANDLES = 7000
 
 interface DownloadMultiAssetsArgs {
   outDir: string
@@ -54,11 +61,12 @@ export function buildDownloadMultiAssetsPlan(args: DownloadMultiAssetsArgs) {
   return {
     mode: args.dryRun ? 'dry_run' : 'download',
     outDir: args.outDir,
-    exchange: 'binance_futures',
+    exchange: 'okx',
     timeframe: TIMEFRAME,
     sinceMs: SINCE_MS,
-    limit: LIMIT,
-    symbols: SYMBOLS,
+    maxCandles: MAX_CANDLES,
+    symbols: ASSETS.map(asset => asset.symbol),
+    instrumentIds: ASSETS.map(asset => asset.instId),
   }
 }
 
@@ -70,35 +78,15 @@ async function main() {
     return
   }
 
-  const exchange = new ccxt.binance({ enableRateLimit: true })
   await mkdir(outDir, { recursive: true })
 
-  for (const symbol of SYMBOLS) {
-    console.log(`Downloading ${symbol}...`)
-    const allCandles: any[] = []
-    let since = SINCE_MS
-
-    while (true) {
-      const candles = await exchange.fetchOHLCV(symbol, TIMEFRAME, since, LIMIT)
-      if (candles.length === 0) break
-      allCandles.push(...candles)
-      since = candles[candles.length - 1][0] + 1
-      if (candles.length < LIMIT) break
-    }
-
-    const csvLines = ['timestamp,datetime,open,high,low,close,volume,symbol,timeframe,exchange']
-    for (const c of allCandles) {
-      csvLines.push([
-        c[0],
-        new Date(c[0]).toISOString(),
-        c[1], c[2], c[3], c[4], c[5],
-        symbol, TIMEFRAME, 'binance_futures',
-      ].join(','))
-    }
-
-    const fileName = symbol.replace('/', '_').replace(':', '_') + '_1h.csv'
-    await writeFile(join(outDir, fileName), csvLines.join('\n'))
-    console.log(`  ${symbol}: ${allCandles.length} candles -> ${fileName}`)
+  for (const asset of ASSETS) {
+    console.log(`Downloading ${asset.instId} from OKX...`)
+    const candles = (await fetchExtendedCandles(asset.instId, '1H', MAX_CANDLES))
+      .filter(candle => candle.timestamp >= SINCE_MS)
+    const fileName = `${asset.storageSymbol}_1h.csv`
+    await writeFile(join(outDir, fileName), candlesToCSV(candles, asset.storageSymbol, 'okx'))
+    console.log(`  ${asset.instId}: ${candles.length} candles -> ${fileName}`)
   }
 
   console.log(`\nDone. Files saved to ${outDir}`)

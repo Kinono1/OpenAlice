@@ -10,6 +10,26 @@ import type Decimal from 'decimal.js'
 import type { Position, OpenOrder, TpSlParams } from '../brokers/types.js'
 import '../contract-ext.js'
 
+// ==================== Governance Metadata ====================
+
+/**
+ * Lightweight governance decision snapshot attached to an Operation.
+ * Carried through the Trading-as-Git lifecycle so guards can inspect it.
+ */
+export interface OperationGovernance {
+  /**
+   * Action status from the strategy governance layer.
+   * An operation with no governance data is treated as ungoverned (allow fallback).
+   */
+  actionStatus?: string
+  /** Decision strength tier (D1–D5), if available from the evaluation. */
+  decisionStrength?: string
+  /** Snapshot ID for traceability back to the strategy evaluation. */
+  snapshotId?: string
+  /** ISO 8601 timestamp of when governance was evaluated. */
+  evaluatedAt?: string
+}
+
 // ==================== Commit Hash ====================
 
 /** 8-character short SHA-256 hash. */
@@ -20,10 +40,10 @@ export type CommitHash = string
 export type OperationAction = Operation['action']
 
 export type Operation =
-  | { action: 'placeOrder'; contract: Contract; order: Order; tpsl?: TpSlParams; ticketId?: string }
-  | { action: 'modifyOrder'; orderId: string; changes: Partial<Order> }
-  | { action: 'closePosition'; contract: Contract; quantity?: Decimal; ticketId?: string }
-  | { action: 'cancelOrder'; orderId: string; orderCancel?: OrderCancel }
+  | { action: 'placeOrder'; contract: Contract; order: Order; tpsl?: TpSlParams; ticketId?: string; governance?: OperationGovernance }
+  | { action: 'modifyOrder'; orderId: string; changes: Partial<Order>; governance?: OperationGovernance }
+  | { action: 'closePosition'; contract: Contract; quantity?: Decimal; ticketId?: string; governance?: OperationGovernance }
+  | { action: 'cancelOrder'; orderId: string; orderCancel?: OrderCancel; governance?: OperationGovernance }
   | { action: 'syncOrders' }
 
 // ==================== Operation Result ====================

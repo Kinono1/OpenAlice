@@ -29,6 +29,10 @@ import {
   type PromotionReadinessV2,
   type SchemaMeta,
 } from "./promotion_v2.js";
+import {
+  signManualOverridePayload,
+  type ManualOverride,
+} from "./manual_override.js";
 
 describe("live_gate_manager", () => {
   it("beforePlaceOrder blocks new opens when manual override pauses them", async () => {
@@ -660,6 +664,56 @@ interface HarnessOptions {
   availableSymbols?: string[];
 }
 
+/** Test secret for HMAC signing of manual override fixtures. */
+const TEST_OVERRIDE_SECRET = "test-override-secret-for-spec-32bytes!";
+
+/** Pre-set the env so loadManualOverride can find the secret in tests. */
+process.env.ALICE_MANUAL_OVERRIDE_SECRET = TEST_OVERRIDE_SECRET;
+
+/**
+ * High-risk fields that require approvedBy when set.
+ * Kept in sync with HIGH_RISK_FIELDS in manual_override.ts.
+ */
+const HIGH_RISK_FIELDS = new Set([
+  "forceCapitalRampStage",
+  "forceVolatilityQuantile",
+  "forceDailyLossPct",
+  "forceCvarDailyLossPct",
+  "forceConsecutiveLossDays",
+  "forceConsecutiveLossPct",
+  "ignoreReleaseGate",
+  "ignoreRegimeShift",
+]);
+
+/**
+ * Wrap loose ManualOverride fields into a valid signed override payload.
+ * - Uses wall-clock time so the override is always valid when tests run.
+ * - Auto-injects approvedBy when high-risk fields are present.
+ */
+function signTestOverride(
+  override: Partial<ManualOverride & { approvedBy?: string[] }>,
+): Record<string, unknown> {
+  const now = new Date();
+  const hasHighRisk = Object.keys(override).some((k) => HIGH_RISK_FIELDS.has(k));
+
+  const signed: Record<string, unknown> = {
+    reason: "test-fixture",
+    issuedBy: "vitest-harness",
+    issuedAt: new Date(now.getTime() - 60_000).toISOString(), // 1 min ago
+    expiresAt: new Date(now.getTime() + 1800_000).toISOString(), // +30 min
+    signature: "",
+    ...override,
+  };
+  if (hasHighRisk && !signed.approvedBy) {
+    signed.approvedBy = ["alice", "bob"];
+  }
+  signed.signature = signManualOverridePayload(
+    TEST_OVERRIDE_SECRET,
+    signed as any,
+  );
+  return signed;
+}
+
 async function createHarness(opts?: HarnessOptions) {
   const tempDir = await mkdtemp(join(tmpdir(), "live-gate-manager-"));
   const manualOverridePath = join(tempDir, "manual_override.json");
@@ -667,9 +721,10 @@ async function createHarness(opts?: HarnessOptions) {
   const promotionReadinessV2Path = join(tempDir, "strategy_promotion.latest.json");
 
   if (opts?.manualOverride) {
+    const signedOverride = signTestOverride(opts.manualOverride);
     await writeFile(
       manualOverridePath,
-      `${JSON.stringify(opts.manualOverride, null, 2)}\n`,
+      `${JSON.stringify(signedOverride, null, 2)}\n`,
       "utf-8"
     );
   }
