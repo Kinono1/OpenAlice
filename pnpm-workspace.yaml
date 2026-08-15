@@ -1,3 +1,7 @@
 packages:
   - packages/*
   - ui
+
+overrides:
+  '@alpacahq/alpaca-trade-api>axios': ^0.30.3
+  '@alpacahq/alpaca-trade-api>eslint': '-'

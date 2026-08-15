@@ -7,6 +7,10 @@ import type {
   ExecutionAuthorityProvider,
 } from './execution-permit.js'
 import type { ExecutionReceiptV1 } from './operation-dispatcher.execution-gate.js'
+import type {
+  AuthorizedBrokerWriter,
+  BrokerWriteRoute,
+} from './broker-write-router.js'
 
 export type OperationAction =
   | 'placeOrder'
@@ -30,6 +34,7 @@ export interface CryptoPlaceOrderRequest {
   size?: number
   usd_size?: number
   price?: number
+  timeInForce?: 'GTC' | 'IOC' | 'FOK'
   leverage?: number
   reduceOnly?: boolean
   idempotencyKey?: string
@@ -273,7 +278,7 @@ export interface OperationOutcome {
   opIndex: number
   ticketId?: string
   intentId?: string
-  status: 'success' | 'failed' | 'skipped'
+  status: 'success' | 'failed' | 'skipped' | 'unknown'
   result?: CryptoOrderResult
   error?: string
 }
@@ -281,7 +286,7 @@ export interface OperationOutcome {
 export interface PushResult {
   commitId: string
   operations: OperationOutcome[]
-  summary: { succeeded: number; failed: number; skipped: number }
+  summary: { succeeded: number; failed: number; skipped: number; unknown: number }
 }
 
 export interface CryptoOperationDispatcher {
@@ -338,6 +343,10 @@ export interface CryptoOperationDispatcherOptions {
   maxExecutionMarketDataAgeMs?: number
   executionReceiptSink?: (receipt: ExecutionReceiptV1) => Promise<void>
   allowTestExecutionPermitBypass?: boolean
+  /** Resolved once during dispatcher startup; native remains the compatibility default. */
+  brokerWriteRoute?: BrokerWriteRoute
+  /** Required when brokerWriteRoute is sidecar; never used as a native fallback. */
+  authorizedBrokerWriter?: AuthorizedBrokerWriter
 }
 
 export interface CommitOperation {
@@ -372,4 +381,6 @@ export interface CommitExecutorDeps {
   maxExecutionMarketDataAgeMs?: number
   executionReceiptSink?: (receipt: ExecutionReceiptV1) => Promise<void>
   allowTestExecutionPermitBypass?: boolean
+  brokerWriteRoute?: BrokerWriteRoute
+  authorizedBrokerWriter?: AuthorizedBrokerWriter
 }

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "openalice_nautilus_dependency_lock.v1",
+  "resolvedAt": "2026-08-15T02:01:16.000+08:00",
+  "resolver": {
+    "name": "pip",
+    "version": "25.1",
+    "reportSha256": "6fa2b0970cd741a04a290544ad68dfc7cb2c5c44046b33d3706d6679429d9fd7",
+    "reportRetained": false
+  },
+  "target": {
+    "implementation": "CPython",
+    "python": "3.13.5",
+    "pythonTag": "cp313",
+    "os": "macOS 26",
+    "machine": "arm64"
+  },
+  "inputPins": [
+    "nautilus_trader==1.231.0",
+    "grpcio==1.82.1",
+    "grpcio-tools==1.82.1",
+    "protobuf==7.35.1",
+    "cryptography==49.0.0"
+  ],
+  "lockFile": "requirements-macos-arm64-cp313.lock",
+  "lockFileSha256": "061d253e9463f54df4a2cb7ec3322c7262db8cc02c1221152382f3c0bb275514",
+  "packageCount": 23,
+  "wheelOnly": true,
+  "hashesRequired": true,
+  "transitiveResolutionLocked": true,
+  "downloadSetVerified": true,
+  "releaseAttestationVerified": true,
+  "verificationReceipt": "dependency_verification.v1.json",
+  "isolatedInstallVerified": true,
+  "installState": "not_installed",
+  "runtimeImportVerified": true,
+  "paperOnly": true,
+  "liveTradingAllowed": false,
+  "liveExecutionArmed": false
+}

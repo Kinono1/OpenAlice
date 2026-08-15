@@ -262,6 +262,59 @@ describe('readAccountsConfig', () => {
     expect(accounts[0].type).toBe('alpaca')
   })
 
+  it('preserves enabled and cryptoExecution at the top level when migrating a legacy account', async () => {
+    fileReturns([{
+      id: 'legacy-ccxt',
+      label: 'Legacy CCXT',
+      type: 'ccxt',
+      enabled: false,
+      cryptoExecution: {
+        mode: 'live_guarded',
+        requireDecisionTicket: true,
+      },
+      exchange: 'bybit',
+      apiKey: 'key1',
+      apiSecret: 'sec1',
+    }])
+
+    const [account] = await readAccountsConfig()
+
+    expect(account.enabled).toBe(false)
+    expect(account.cryptoExecution).toMatchObject({
+      mode: 'live_guarded',
+      requireDecisionTicket: true,
+    })
+    expect(account.brokerConfig).toMatchObject({
+      exchange: 'bybit',
+      apiKey: 'key1',
+      apiSecret: 'sec1',
+    })
+    expect(account.brokerConfig).not.toHaveProperty('enabled')
+    expect(account.brokerConfig).not.toHaveProperty('cryptoExecution')
+  })
+
+  it('still rejects invalid top-level fields in a legacy account', async () => {
+    fileReturns([{
+      id: 'legacy-invalid',
+      type: 'ccxt',
+      enabled: 'false',
+      exchange: 'bybit',
+    }])
+
+    await expect(readAccountsConfig()).rejects.toThrow()
+  })
+
+  it('still rejects invalid cryptoExecution in a legacy account', async () => {
+    fileReturns([{
+      id: 'legacy-invalid-execution',
+      type: 'ccxt',
+      cryptoExecution: { mode: 'invalid-mode' },
+      exchange: 'bybit',
+    }])
+
+    await expect(readAccountsConfig()).rejects.toThrow()
+  })
+
   it('does not seed a shared accounts file for canary role', async () => {
     process.env.OPENALICE_RUNTIME_ROLE = 'canary'
     const enoent = new Error('ENOENT') as NodeJS.ErrnoException

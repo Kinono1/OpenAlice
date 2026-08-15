@@ -3,7 +3,15 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { assertWithinDowntime, remainingDowntimeMilliseconds } from './research_cutover.js'
+import {
+  assertCutoverReleaseClosure,
+  assertWithinDowntime,
+  PAPER_LOCAL_TWO_IDENTITY_DEPLOYMENT_BLOCKER,
+  paperLocalTwoIdentityDeploymentBlockers,
+  remainingDowntimeMilliseconds,
+  validatePaperLocalLaunchInputs,
+} from './research_cutover.js'
+import { D1_RELEASE_REQUIRED_ARTIFACT_PATHS } from '../src/runtime/release_manifest.js'
 
 const remediationRoot = resolve('.')
 const releaseRoot = join(remediationRoot, 'runtime/releases')
@@ -103,5 +111,118 @@ describe('research_cutover downtime budget', () => {
     expect(() => remainingDowntimeMilliseconds(Date.now() - 2_000, 1)).toThrow(
       'research_cutover_downtime_budget_exceeded',
     )
+  })
+})
+
+describe('research_cutover PAPER_LOCAL pinned launch inputs', () => {
+  it('fails closed when any V2 shell runtime pin is missing or malformed', () => {
+    expect(validatePaperLocalLaunchInputs({})).toEqual([
+      'paper_local_node_missing_or_not_absolute',
+      'paper_local_node_sha256_missing_or_invalid',
+      'paper_local_mjs_sha256_missing_or_invalid',
+      'paper_local_python_missing_or_not_absolute',
+      'paper_local_publisher_uid_missing_or_invalid',
+    ])
+    expect(validatePaperLocalLaunchInputs({
+      paperLocalNode: 'node',
+      paperLocalNodeSha256: 'A'.repeat(64),
+      paperLocalMjsSha256: 'B'.repeat(64),
+      paperLocalPython: 'python3',
+      paperLocalPublisherUid: '-1',
+    })).toEqual([
+      'paper_local_node_missing_or_not_absolute',
+      'paper_local_node_sha256_missing_or_invalid',
+      'paper_local_mjs_sha256_missing_or_invalid',
+      'paper_local_python_missing_or_not_absolute',
+      'paper_local_publisher_uid_missing_or_invalid',
+    ])
+  })
+
+  it('accepts only fully explicit, pinned V2 shell runtime inputs', () => {
+    expect(validatePaperLocalLaunchInputs({
+      paperLocalNode: '/opt/openalice/node',
+      paperLocalNodeSha256: 'a'.repeat(64),
+      paperLocalMjsSha256: 'b'.repeat(64),
+      paperLocalPython: '/opt/openalice/venv/bin/python3.13',
+      paperLocalPublisherUid: '502',
+    })).toEqual([])
+  })
+})
+
+describe('research_cutover manifest closure', () => {
+  const d1ArtifactHashes = () => Object.fromEntries(
+    D1_RELEASE_REQUIRED_ARTIFACT_PATHS.map((path) => [path, 'a'.repeat(64)]),
+  )
+
+  it('does not apply V1 default or node_modules requirements to a legal V2 D1 allowlist', () => {
+    expect(() => assertCutoverReleaseClosure({
+      schemaVersion: 'release_manifest.v2',
+      artifactHashes: d1ArtifactHashes(),
+    })).not.toThrow()
+  })
+
+  it('keeps the V2 exact allowlist: missing required artifacts and additions are blocked', () => {
+    const missing = d1ArtifactHashes()
+    delete missing['sidecars/nautilus_paper/supervisor.py']
+    expect(() => assertCutoverReleaseClosure({
+      schemaVersion: 'release_manifest.v2',
+      artifactHashes: missing,
+    })).toThrow('execution_sidecar_release_artifact_missing:sidecars/nautilus_paper/supervisor.py')
+
+    expect(() => assertCutoverReleaseClosure({
+      schemaVersion: 'release_manifest.v2',
+      artifactHashes: {
+        ...d1ArtifactHashes(),
+        'default/config.json': 'b'.repeat(64),
+      },
+    })).toThrow('d1_release_forbidden_artifact:default/config.json:general_default_bundle')
+  })
+
+  it('retains the V1 app-deploy closure requirements', () => {
+    expect(() => assertCutoverReleaseClosure({
+      schemaVersion: 'release_manifest.v1',
+      artifactHashes: {
+        'dist/main.js': 'a'.repeat(64),
+        'scripts/runner.ts': 'a'.repeat(64),
+        'src/runtime.ts': 'a'.repeat(64),
+        'sidecars/runtime.py': 'a'.repeat(64),
+        'ops/release.sh': 'a'.repeat(64),
+        'package.json': 'a'.repeat(64),
+        'pnpm-lock.yaml': 'a'.repeat(64),
+        'release-metadata/registry.json': 'a'.repeat(64),
+      },
+    })).toThrow('research_release_closure_missing:default/')
+  })
+})
+
+describe('research_cutover two-identity PAPER_LOCAL deployment boundary', () => {
+  it('blocks V2 one-shot cutover even when environment UID strings differ', () => {
+    const previousPublisher = process.env.OPENALICE_RELEASE_PUBLISHER_UID
+    const previousService = process.env.OPENALICE_SERVICE_UID
+    process.env.OPENALICE_RELEASE_PUBLISHER_UID = '502'
+    process.env.OPENALICE_SERVICE_UID = '501'
+    try {
+      expect(validatePaperLocalLaunchInputs({
+        paperLocalNode: '/opt/openalice/node',
+        paperLocalNodeSha256: 'a'.repeat(64),
+        paperLocalMjsSha256: 'b'.repeat(64),
+        paperLocalPython: '/opt/openalice/venv/bin/python3.13',
+        paperLocalPublisherUid: '502',
+      })).toEqual([])
+      expect(paperLocalTwoIdentityDeploymentBlockers({
+        schemaVersion: 'release_manifest.v2',
+      })).toEqual([PAPER_LOCAL_TWO_IDENTITY_DEPLOYMENT_BLOCKER])
+    } finally {
+      if (previousPublisher === undefined) delete process.env.OPENALICE_RELEASE_PUBLISHER_UID
+      else process.env.OPENALICE_RELEASE_PUBLISHER_UID = previousPublisher
+      if (previousService === undefined) delete process.env.OPENALICE_SERVICE_UID
+      else process.env.OPENALICE_SERVICE_UID = previousService
+    }
+  })
+
+  it('keeps V1 cutover executable under its existing identity model', () => {
+    expect(paperLocalTwoIdentityDeploymentBlockers({
+      schemaVersion: 'release_manifest.v1',
+    })).toEqual([])
   })
 })

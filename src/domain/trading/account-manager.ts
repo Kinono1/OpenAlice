@@ -8,8 +8,16 @@
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './brokers/types.js'
 import { CcxtBroker } from './brokers/ccxt/CcxtBroker.js'
-import type { CcxtExecutionRuntime } from './brokers/ccxt/CcxtTradingEngineAdapter.js'
-import { createCcxtExecutionBridge } from './brokers/ccxt/CcxtTradingEngineAdapter.js'
+import type {
+  CcxtBrokerWriteAssembly,
+  CcxtExecutionBridge,
+  CcxtExecutionRuntime,
+  CryptoExecutionConfig,
+} from './brokers/ccxt/CcxtTradingEngineAdapter.js'
+import {
+  createCcxtExecutionBridge,
+  resolveCryptoExecutionConfig,
+} from './brokers/ccxt/CcxtTradingEngineAdapter.js'
 import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
@@ -19,6 +27,10 @@ import type { EventLog } from '../../core/event-log.js'
 import type { ToolCenter } from '../../core/tool-center.js'
 import type { ReconnectResult } from '../../core/types.js'
 import type { CryptoClientLike } from '../market-data/client/types.js'
+import {
+  createEnvironmentExecutionAuthorityProvider,
+  type ExecutionAuthorityProvider,
+} from './execution-permit.js'
 import './contract-ext.js'
 
 // ==================== Account summary ====================
@@ -66,6 +78,52 @@ export interface SnapshotHooks {
   onPostReject?: (accountId: string) => void | Promise<void>
 }
 
+export type CcxtSidecarWriteComponents = Omit<
+  Extract<CcxtBrokerWriteAssembly, { route: 'sidecar' }>,
+  'route' | 'executionAuthorityProvider'
+>
+
+export interface CreateCcxtSidecarWriteComponentsInput {
+  accountId: string
+  broker: CcxtBroker
+  config: CryptoExecutionConfig
+  authorityProvider: ExecutionAuthorityProvider
+}
+
+export type CreateCcxtSidecarWriteComponents = (
+  input: CreateCcxtSidecarWriteComponentsInput,
+) => Promise<CcxtSidecarWriteComponents>
+
+export async function assembleCcxtSidecarBrokerWriteRoute(input: {
+  accountId: string
+  broker: CcxtBroker
+  config: CryptoExecutionConfig
+  createComponents?: CreateCcxtSidecarWriteComponents
+}): Promise<CcxtBrokerWriteAssembly | undefined> {
+  if (!input.config.enableCryptoDispatcher || !input.createComponents) return undefined
+  if (
+    input.config.mode !== 'paper_only'
+    || input.broker.meta.exchange !== 'okx'
+    || !input.broker.isPaperEnvironment()
+  ) {
+    throw new Error('SECURITY: execution sidecar MVP requires an OKX paper broker target')
+  }
+  const authorityProvider = createEnvironmentExecutionAuthorityProvider({
+    admissionDecisionPath: input.config.admissionDecisionPath,
+  })
+  const components = await input.createComponents({
+    accountId: input.accountId,
+    broker: input.broker,
+    config: input.config,
+    authorityProvider,
+  })
+  return {
+    ...components,
+    route: 'sidecar',
+    executionAuthorityProvider: authorityProvider,
+  }
+}
+
 export class AccountManager {
   private entries = new Map<string, UnifiedTradingAccount>()
   private reconnecting = new Set<string>()
@@ -73,15 +131,22 @@ export class AccountManager {
   private ccxtExecutionRuntime = new Map<string, CcxtExecutionRuntime>()
   private strategyConfig?: StrategyConfig
   private cryptoClient?: CryptoClientLike
+  private createCcxtSidecarWriteComponents?: CreateCcxtSidecarWriteComponents
 
   private eventLog?: EventLog
   private toolCenter?: ToolCenter
   private _snapshotHooks?: SnapshotHooks
 
-  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter; cryptoClient?: CryptoClientLike }) {
+  constructor(deps?: {
+    eventLog: EventLog
+    toolCenter: ToolCenter
+    cryptoClient?: CryptoClientLike
+    createCcxtSidecarWriteComponents?: CreateCcxtSidecarWriteComponents
+  }) {
     this.eventLog = deps?.eventLog
     this.toolCenter = deps?.toolCenter
     this.cryptoClient = deps?.cryptoClient
+    this.createCcxtSidecarWriteComponents = deps?.createCcxtSidecarWriteComponents
   }
 
   setSnapshotHooks(hooks: SnapshotHooks): void {
@@ -119,30 +184,58 @@ export class AccountManager {
   private async initAccountUnlocked(accCfg: AccountConfig): Promise<UnifiedTradingAccount> {
     const broker = createBroker(accCfg)
     const savedState = await loadGitState(accCfg.id)
-    const ccxtExecutionBridge = broker instanceof CcxtBroker
-      ? await createCcxtExecutionBridge({
+    let ccxtExecutionBridge: CcxtExecutionBridge | undefined
+    let brokerWriteAssembly: CcxtBrokerWriteAssembly | undefined
+    if (broker instanceof CcxtBroker) {
+      const cryptoExecution = resolveCryptoExecutionConfig(accCfg.cryptoExecution)
+      brokerWriteAssembly = await assembleCcxtSidecarBrokerWriteRoute({
+        accountId: accCfg.id,
+        broker,
+        config: cryptoExecution,
+        createComponents: this.createCcxtSidecarWriteComponents,
+      })
+      try {
+        ccxtExecutionBridge = await createCcxtExecutionBridge({
           accountId: accCfg.id,
           broker,
           accountManager: this,
           cryptoClient: this.cryptoClient,
           eventLog: this.eventLog,
-          cryptoExecution: accCfg.cryptoExecution,
+          cryptoExecution,
           strategyConfig: this.strategyConfig,
+          brokerWriteAssembly,
         })
-      : undefined
-    const uta = new UnifiedTradingAccount(broker, {
-      guards: accCfg.guards,
-      savedState,
-      onCommit: createGitPersister(accCfg.id),
-      onHealthChange: (accountId, health) => {
-        this.eventLog?.append('account.health', { accountId, ...health })
-      },
-      onPostPush: this._snapshotHooks?.onPostPush,
-      onPostReject: this._snapshotHooks?.onPostReject,
-      buildExecuteOperation: ccxtExecutionBridge?.wrapExecuteOperation,
-      onClose: ccxtExecutionBridge?.close,
-    })
-    this.add(uta)
+      } catch (error) {
+        if (brokerWriteAssembly?.route === 'sidecar') {
+          await brokerWriteAssembly.close?.()
+        }
+        throw error
+      }
+    }
+    let uta: UnifiedTradingAccount
+    try {
+      uta = new UnifiedTradingAccount(broker, {
+        guards: accCfg.guards,
+        savedState,
+        onCommit: createGitPersister(accCfg.id),
+        onHealthChange: (accountId, health) => {
+          this.eventLog?.append('account.health', { accountId, ...health })
+        },
+        onPostPush: this._snapshotHooks?.onPostPush,
+        onPostReject: this._snapshotHooks?.onPostReject,
+        buildExecuteOperation: ccxtExecutionBridge?.wrapExecuteOperation,
+        onClose: ccxtExecutionBridge?.close,
+      })
+    } catch (error) {
+      await ccxtExecutionBridge?.close()
+      throw error
+    }
+    try {
+      this.add(uta)
+    } catch (error) {
+      await uta.close().catch(() => undefined)
+      throw error
+    }
     if (ccxtExecutionBridge) {
       this.ccxtExecutionRuntime.set(accCfg.id, ccxtExecutionBridge.runtime())
     } else {
@@ -189,7 +282,7 @@ export class AccountManager {
       await this.removeAccount(accountId)
 
       const accCfg = freshAccounts.find((a) => a.id === accountId)
-      if (!accCfg) {
+      if (!accCfg || accCfg.enabled === false) {
         return { success: true, message: `Account "${accountId}" not found in config (removed or disabled)` }
       }
 

@@ -38,17 +38,32 @@ import {
   type BrokerWriteAuthorizationInput,
 } from './operation-dispatcher.execution-gate.js'
 import type { ExecutionPermitV1 } from './execution-permit.js'
+import { deriveOkxClientOrderId } from './execution-protocol.js'
+import type {
+  AuthorizedBrokerWriter,
+  BrokerWriteOutcome,
+  BrokerWriteRoute,
+} from './broker-write-router.js'
+import { constrainBrokerWriteOutcomeToRoute } from './broker-write-router.js'
 
 interface PlaceOrderExecutorDeps {
   engine: ICryptoTradingEngine
   options: CryptoOperationDispatcherOptions
   withPlaceOrderLock: <T>(task: () => Promise<T>) => Promise<T>
+  writer: AuthorizedBrokerWriter
+  brokerWriteRoute: BrokerWriteRoute
+  poisonPlaceOrderCircuit: () => void
+  placeOrderCircuitOpenError: string
 }
 
 interface PlaceOrderExecutionResult {
   outcome: OperationOutcome
   walletResult: unknown
 }
+
+const SIDECAR_BROKER_OUTCOME_PENDING = 'broker_outcome_pending'
+const SIDECAR_PRE_SUBMIT_REJECTED = 'execution_sidecar_pre_submit_rejected'
+const SIDECAR_SUBMISSION_UNKNOWN = 'execution_sidecar_submission_unknown'
 
 function warnOnAncillaryFailure(
   action: string,
@@ -66,6 +81,10 @@ export function createPlaceOrderExecutor({
   engine,
   options,
   withPlaceOrderLock,
+  writer,
+  brokerWriteRoute,
+  poisonPlaceOrderCircuit,
+  placeOrderCircuitOpenError,
 }: PlaceOrderExecutorDeps) {
   const operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
 
@@ -93,6 +112,7 @@ export function createPlaceOrderExecutor({
       size: op.params.size as number | undefined,
       usd_size: op.params.usd_size as number | undefined,
       price: op.params.price as number | undefined,
+      timeInForce: op.params.timeInForce as CryptoPlaceOrderRequest['timeInForce'],
       leverage: op.params.leverage as number | undefined,
       reduceOnly: op.params.reduceOnly as boolean | undefined,
     }
@@ -138,6 +158,37 @@ export function createPlaceOrderExecutor({
             intentId,
           })
         })
+    }
+
+    async function markUnresolvedAfterSidecarWrite(
+      input: {
+        key: string
+        error: string
+        symbol: string
+        ticketId: string
+        commandId?: string
+        permitV2Id?: string
+        clientOrderId?: string
+        acceptedSequence?: string
+      },
+      action: string,
+    ): Promise<boolean> {
+      if (!options.idempotencyStore) {
+        return true
+      }
+      try {
+        await options.idempotencyStore.markUnresolved(input)
+        return true
+      } catch (idempotencyError) {
+        poisonPlaceOrderCircuit()
+        warnOnAncillaryFailure(action, new Error('idempotency_persistence_failed'), {
+          intentId,
+          opIndex,
+          idempotencyKey: input.key,
+          placeOrderCircuit: 'opened',
+        })
+        return false
+      }
     }
 
     const fail = (error: string): PlaceOrderExecutionResult => ({
@@ -191,9 +242,13 @@ export function createPlaceOrderExecutor({
         leverage: currentRequest.leverage,
         contextId,
         exchangeId: options.exchangeId,
-        clientOrderId: cap?.supportsClientOrderId
-          ? (idempotencyKey ?? intentId)
-          : undefined,
+        idempotencyKey,
+        brokerWriteRoute,
+        clientOrderId: brokerWriteRoute === 'sidecar' && idempotencyKey
+          ? deriveOkxClientOrderId(idempotencyKey)
+          : cap?.supportsClientOrderId
+            ? (idempotencyKey ?? intentId)
+            : undefined,
         createdAt: Date.now(),
         strategy,
         signalTimestampMs,
@@ -641,10 +696,11 @@ export function createPlaceOrderExecutor({
           kind: 'executed'
           riskContext?: RiskCheckContext
           riskResult: RiskCheckResult
-          orderResult: CryptoOrderResult
+          brokerOutcome: BrokerWriteOutcome<CryptoOrderResult>
           riskCheckedAtMs: number
           brokerSubmittedAtMs: number
           permit: ExecutionPermitV1 | null
+          unresolvedPersisted?: boolean
         }
 
     let lockedExecution: LockedExecution
@@ -653,6 +709,8 @@ export function createPlaceOrderExecutor({
     let lastRiskDecision: ExecutionTelemetry['riskDecision'] = 'rejected'
     let lastRiskReason: string | null = null
     let lastPermit: ExecutionPermitV1 | null = null
+    let sidecarUnresolvedPersistenceHandled = false
+    let sidecarUnresolvedPersisted = true
     try {
       lockedExecution = await withPlaceOrderLock<LockedExecution>(
         async (): Promise<LockedExecution> => {
@@ -718,27 +776,76 @@ export function createPlaceOrderExecutor({
               reasonCodes: authorization.reasonCodes,
             }
           }
-          lastPermit = authorization.permit
+          lastPermit = authorization.context.kind === 'execution_permit_v1'
+            ? authorization.context.permit
+            : null
           const brokerSubmittedAtMs = Date.now()
           lastBrokerSubmittedAtMs = brokerSubmittedAtMs
-          const orderResult = await withTimeout(
-            `broker place order ${effectiveRequest.symbol}`,
-            operationTimeoutMs,
-            () => engine.placeOrder(effectiveRequest),
-          )
+          let brokerOutcome: BrokerWriteOutcome<CryptoOrderResult>
+          try {
+            brokerOutcome = constrainBrokerWriteOutcomeToRoute(
+              brokerWriteRoute,
+              await withTimeout(
+                `broker place order ${effectiveRequest.symbol}`,
+                operationTimeoutMs,
+                () => writer.placeOrder(effectiveRequest, authorization.context),
+              ),
+            )
+          } catch (brokerError) {
+            if (brokerWriteRoute === 'sidecar' && idempotencyKey && options.idempotencyStore) {
+              sidecarUnresolvedPersistenceHandled = true
+              sidecarUnresolvedPersisted = await markUnresolvedAfterSidecarWrite({
+                key: idempotencyKey,
+                error: SIDECAR_SUBMISSION_UNKNOWN,
+                symbol: effectiveRequest.symbol,
+                ticketId,
+              }, 'idempotencyStore.markUnresolved.submission_unknown')
+            }
+            throw brokerError
+          }
+          let unresolvedPersisted: boolean | undefined
+          if (
+            brokerWriteRoute === 'sidecar'
+            && brokerOutcome.kind !== 'broker_final'
+            && brokerOutcome.kind !== 'pre_submit_rejected'
+            && idempotencyKey
+            && options.idempotencyStore
+          ) {
+            const unresolvedError = brokerOutcome.kind === 'command_accepted'
+              ? SIDECAR_BROKER_OUTCOME_PENDING
+              : SIDECAR_SUBMISSION_UNKNOWN
+            sidecarUnresolvedPersistenceHandled = true
+            sidecarUnresolvedPersisted = await markUnresolvedAfterSidecarWrite({
+              key: idempotencyKey,
+              error: unresolvedError,
+              symbol: effectiveRequest.symbol,
+              ticketId,
+              commandId: brokerOutcome.commandId,
+              permitV2Id: brokerOutcome.permitV2Id,
+              clientOrderId: brokerOutcome.clientOrderId,
+              acceptedSequence: brokerOutcome.kind === 'command_accepted'
+                ? brokerOutcome.acceptedSequence
+                : undefined,
+            }, 'idempotencyStore.markUnresolved.broker_outcome')
+            unresolvedPersisted = sidecarUnresolvedPersisted
+          }
           return {
             kind: 'executed',
             riskContext,
             riskResult,
-            orderResult,
+            brokerOutcome,
             riskCheckedAtMs,
             brokerSubmittedAtMs,
-            permit: authorization.permit,
+            permit: lastPermit,
+            unresolvedPersisted,
           }
         },
       )
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
+      const rawError = err instanceof Error ? err.message : String(err)
+      const error = brokerWriteRoute === 'sidecar' && lastBrokerSubmittedAtMs !== undefined
+        ? SIDECAR_SUBMISSION_UNKNOWN
+        : rawError
       const executionTelemetry: ExecutionTelemetry | undefined = isOperationTimeoutError(err)
         ? {
             signalTimestampMs,
@@ -766,6 +873,8 @@ export function createPlaceOrderExecutor({
             symbol: req.symbol,
             error,
             executionTelemetry,
+            brokerWriteRoute,
+            brokerWriteOutcome: 'submission_unknown',
           })
           .catch(logErr => {
             warnOnAncillaryFailure('eventLog.append.execution.timeout', logErr, {
@@ -774,6 +883,55 @@ export function createPlaceOrderExecutor({
               intentId,
             })
           })
+      }
+      if (brokerWriteRoute === 'sidecar' && lastBrokerSubmittedAtMs !== undefined) {
+        const publicError = sidecarUnresolvedPersistenceHandled && !sidecarUnresolvedPersisted
+          ? placeOrderCircuitOpenError
+          : error
+        await recordIntentIfNeeded(effectiveRequest, strategySummary)
+        await options.intentLedger
+          ?.recordResult({
+            intentId,
+            status: 'unknown',
+            error: publicError,
+            completedAt: Date.now(),
+            strategy: strategySummary,
+            executionTelemetry,
+            brokerWriteRoute,
+            brokerWriteOutcome: 'submission_unknown',
+          })
+          .catch(intentError => warnOnAncillaryFailure(
+            'intentLedger.recordResult.submission_unknown',
+            intentError,
+            { intentId, opIndex },
+          ))
+        await options.eventLog
+          ?.append('execution.submission_unknown', {
+            commitId,
+            opIndex,
+            intentId,
+            symbol: req.symbol,
+            error: publicError,
+            brokerWriteRoute,
+            idempotencyKey,
+            executionTelemetry,
+          })
+          .catch(logError => warnOnAncillaryFailure(
+            'eventLog.append.execution.submission_unknown',
+            logError,
+            { commitId, opIndex, intentId },
+          ))
+        return {
+          outcome: { opIndex, ticketId, intentId, status: 'unknown', error: publicError },
+          walletResult: {
+            success: false,
+            error: publicError,
+            unknown: true,
+            brokerWriteOutcome: 'submission_unknown',
+            ...(executionTelemetry ? { executionTelemetry } : {}),
+            ...(strategySummary ? { strategy: strategySummary } : {}),
+          },
+        }
       }
       if (lastPermit) {
         await recordExecutionReceipt(
@@ -859,6 +1017,94 @@ export function createPlaceOrderExecutor({
       )
       return failWithStrategy(error, strategySummary)
     }
+    const brokerOutcome = lockedExecution.brokerOutcome
+    if (brokerOutcome.kind === 'pre_submit_rejected') {
+      const error = brokerWriteRoute === 'sidecar'
+        ? SIDECAR_PRE_SUBMIT_REJECTED
+        : brokerOutcome.error || 'broker write rejected before submission'
+      await finalizeIdempotency('failed', undefined, error)
+      await recordIntentFailureEnsuringIntent(
+        error,
+        strategySummary,
+        effectiveRequest,
+      )
+      await recordExecutionReceipt(
+        options,
+        buildPlaceOrderAuthorizationInput({
+          op,
+          request: effectiveRequest,
+          intentId,
+          ticketId,
+          idempotencyKey: idempotencyKey ?? '',
+          expectedPrice,
+          ticketValidated,
+          idempotencyReserved,
+          killSwitchPassed,
+          riskReductionProven,
+        }),
+        'rejected',
+        [error],
+        lockedExecution.permit,
+      )
+      return {
+        outcome: { opIndex, ticketId, intentId, status: 'failed', error },
+        walletResult: {
+          success: false,
+          error,
+          brokerWriteOutcome: 'pre_submit_rejected',
+          ...(strategySummary ? { strategy: strategySummary } : {}),
+        },
+      }
+    }
+    if (brokerOutcome.kind !== 'broker_final') {
+      const error = brokerOutcome.kind === 'command_accepted'
+        ? SIDECAR_BROKER_OUTCOME_PENDING
+        : SIDECAR_SUBMISSION_UNKNOWN
+      const unresolvedPersisted = lockedExecution.unresolvedPersisted ?? true
+      await options.intentLedger
+        ?.recordResult({
+          intentId,
+          status: 'unknown',
+          error,
+          completedAt: Date.now(),
+          strategy: strategySummary,
+          brokerWriteRoute,
+          brokerWriteOutcome: brokerOutcome.kind,
+          ...(brokerOutcome.commandId ? { commandId: brokerOutcome.commandId } : {}),
+          ...(brokerOutcome.permitV2Id ? { permitV2Id: brokerOutcome.permitV2Id } : {}),
+          ...(brokerOutcome.clientOrderId ? { clientOrderId: brokerOutcome.clientOrderId } : {}),
+          ...(brokerOutcome.kind === 'command_accepted' && brokerOutcome.acceptedSequence
+            ? { acceptedSequence: brokerOutcome.acceptedSequence }
+            : {}),
+        })
+        .catch(err => warnOnAncillaryFailure('intentLedger.recordResult.unknown', err, { intentId, opIndex }))
+      return {
+        outcome: {
+          opIndex,
+          ticketId,
+          intentId,
+          status: 'unknown',
+          error: unresolvedPersisted ? error : placeOrderCircuitOpenError,
+        },
+        walletResult: {
+          success: false,
+          error: unresolvedPersisted ? error : placeOrderCircuitOpenError,
+          pending: unresolvedPersisted && brokerOutcome.kind === 'command_accepted',
+          unknown: !unresolvedPersisted || brokerOutcome.kind === 'submission_unknown',
+          brokerWriteOutcome: unresolvedPersisted
+            ? brokerOutcome.kind
+            : 'submission_unknown',
+          ...(unresolvedPersisted && brokerOutcome.kind === 'command_accepted' && brokerOutcome.commandId
+            ? { commandId: brokerOutcome.commandId }
+            : {}),
+          ...(brokerOutcome.permitV2Id ? { permitV2Id: brokerOutcome.permitV2Id } : {}),
+          ...(brokerOutcome.clientOrderId ? { clientOrderId: brokerOutcome.clientOrderId } : {}),
+          ...(brokerOutcome.kind === 'command_accepted' && brokerOutcome.acceptedSequence
+            ? { acceptedSequence: brokerOutcome.acceptedSequence }
+            : {}),
+        },
+      }
+    }
     const executionTelemetry: ExecutionTelemetry = {
       signalTimestampMs,
       dispatcherStartedAtMs,
@@ -871,37 +1117,37 @@ export function createPlaceOrderExecutor({
           : null,
       signalToFirstFillMs:
         signalTimestampMs != null &&
-        typeof lockedExecution.orderResult.firstFillAtMs === 'number'
-          ? lockedExecution.orderResult.firstFillAtMs - signalTimestampMs
+        typeof brokerOutcome.result.firstFillAtMs === 'number'
+          ? brokerOutcome.result.firstFillAtMs - signalTimestampMs
           : null,
       signalToCompletedMs:
         signalTimestampMs != null &&
-        typeof lockedExecution.orderResult.completedAtMs === 'number'
-          ? lockedExecution.orderResult.completedAtMs - signalTimestampMs
+        typeof brokerOutcome.result.completedAtMs === 'number'
+          ? brokerOutcome.result.completedAtMs - signalTimestampMs
           : null,
       dispatchToFirstFillMs:
-        typeof lockedExecution.orderResult.firstFillAtMs === 'number'
-          ? lockedExecution.orderResult.firstFillAtMs -
+        typeof brokerOutcome.result.firstFillAtMs === 'number'
+          ? brokerOutcome.result.firstFillAtMs -
             lockedExecution.brokerSubmittedAtMs
           : null,
       dispatchToCompletedMs:
-        typeof lockedExecution.orderResult.completedAtMs === 'number'
-          ? lockedExecution.orderResult.completedAtMs -
+        typeof brokerOutcome.result.completedAtMs === 'number'
+          ? brokerOutcome.result.completedAtMs -
             lockedExecution.brokerSubmittedAtMs
           : null,
       partialFillRatio:
-        typeof lockedExecution.orderResult.filledSize === 'number' &&
-        typeof lockedExecution.orderResult.requestedSize === 'number' &&
-        lockedExecution.orderResult.requestedSize > 0
-          ? lockedExecution.orderResult.filledSize /
-            lockedExecution.orderResult.requestedSize
+        typeof brokerOutcome.result.filledSize === 'number' &&
+        typeof brokerOutcome.result.requestedSize === 'number' &&
+        brokerOutcome.result.requestedSize > 0
+          ? brokerOutcome.result.filledSize /
+            brokerOutcome.result.requestedSize
           : null,
       riskDecision: 'approved',
       riskReason: null,
       forcedRetryIdempotency: forceRetryIdempotency,
     }
     const orderResult = {
-      ...lockedExecution.orderResult,
+      ...brokerOutcome.result,
       strategy: strategySummary,
       executionTelemetry,
     }

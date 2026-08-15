@@ -7,6 +7,17 @@ import {
   productionRiskPreflightError,
 } from './production-risk-preflight.js'
 import type { ProductionRiskPreflightPolicyLike } from './production-risk-preflight.js'
+import type {
+  AuthorizedBrokerWriter,
+  BrokerWriteOutcome,
+  BrokerWriteRoute,
+} from './broker-write-router.js'
+import type { BrokerWriteAuthorizationContext } from './operation-dispatcher.execution-gate.js'
+
+export interface SimpleActionAuthorization {
+  writer: AuthorizedBrokerWriter
+  context: BrokerWriteAuthorizationContext
+}
 
 export async function resolveClosePositionOrder(
   engine: ICryptoTradingEngine,
@@ -61,6 +72,9 @@ export async function executeSimpleAction(
   timeoutMs?: number,
   options: {
     productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null
+    authorization?: SimpleActionAuthorization
+    brokerWriteRoute?: BrokerWriteRoute
+    onWriteStarted?: () => void
   } = {},
 ): Promise<SimpleActionResult> {
   switch (op.action) {
@@ -74,42 +88,54 @@ export async function executeSimpleAction(
     }
 
     case 'closePosition': {
+      const authorization = requireSimpleWriteAuthorization(options.authorization)
+      if ('error' in authorization) return { success: false, error: authorization.error }
       const resolved = await resolveClosePositionOrder(engine, op, timeoutMs)
       if ('error' in resolved) {
         return { success: false, error: resolved.error }
       }
 
-      const result = await withTimeout(
+      options.onWriteStarted?.()
+      const outcome = await withTimeout(
         `close position order ${resolved.request.symbol}`,
         timeoutMs,
-        () => engine.placeOrder(resolved.request),
+        () => authorization.writer.placeOrder(resolved.request, authorization.context),
       )
+      const result = unwrapBrokerWriteOutcome(outcome, options.brokerWriteRoute)
+      if (result.kind !== 'final') return result.value
+      const brokerResult = result.result
 
       return {
-        success: result.success,
-        error: result.error,
-        order: result.success
+        success: brokerResult.success,
+        error: brokerResult.error,
+        order: brokerResult.success
           ? {
-              id: result.orderId,
-              status: toWalletOrderStatus(result),
-              requestedSize: result.requestedSize,
-              remainingSize: result.remainingSize,
-              filledPrice: result.filledPrice,
-              filledQuantity: result.filledSize,
-              firstFillAtMs: result.firstFillAtMs,
-              completedAtMs: result.completedAtMs,
+              id: brokerResult.orderId,
+              status: toWalletOrderStatus(brokerResult),
+              requestedSize: brokerResult.requestedSize,
+              remainingSize: brokerResult.remainingSize,
+              filledPrice: brokerResult.filledPrice,
+              filledQuantity: brokerResult.filledSize,
+              firstFillAtMs: brokerResult.firstFillAtMs,
+              completedAtMs: brokerResult.completedAtMs,
             }
           : undefined,
       }
     }
 
     case 'cancelOrder': {
+      const authorization = requireSimpleWriteAuthorization(options.authorization)
+      if ('error' in authorization) return { success: false, error: authorization.error }
       const orderId = op.params.orderId as string
-      const success = await withTimeout(
+      options.onWriteStarted?.()
+      const outcome = await withTimeout(
         `cancel order ${orderId}`,
         timeoutMs,
-        () => engine.cancelOrder(orderId),
+        () => authorization.writer.cancelOrder(orderId, authorization.context),
       )
+      const result = unwrapBrokerWriteOutcome(outcome, options.brokerWriteRoute)
+      if (result.kind !== 'final') return result.value
+      const success = result.result
       return {
         success,
         error: success ? undefined : 'Failed to cancel order',
@@ -117,6 +143,8 @@ export async function executeSimpleAction(
     }
 
     case 'adjustLeverage': {
+      const authorization = requireSimpleWriteAuthorization(options.authorization)
+      if ('error' in authorization) return { success: false, error: authorization.error }
       const symbol = op.params.symbol as string
       const newLeverage = op.params.newLeverage as number
       const preflight = evaluateProductionRiskPreflight(
@@ -139,14 +167,75 @@ export async function executeSimpleAction(
           error: productionRiskPreflightError(preflight),
         }
       }
-      return await withTimeout(
+      options.onWriteStarted?.()
+      const outcome = await withTimeout(
         `adjust leverage ${symbol}`,
         timeoutMs,
-        () => engine.adjustLeverage(symbol, newLeverage),
+        () => authorization.writer.adjustLeverage(symbol, newLeverage, authorization.context),
       )
+      const result = unwrapBrokerWriteOutcome(outcome, options.brokerWriteRoute)
+      return result.kind === 'final' ? result.result : result.value
     }
 
     default:
       throw new Error(`Unknown operation action: ${op.action}`)
+  }
+}
+
+function requireSimpleWriteAuthorization(
+  value: SimpleActionAuthorization | undefined,
+): SimpleActionAuthorization | { error: string } {
+  return value?.writer && value.context
+    ? value
+    : { error: 'broker write authorization and writer required' }
+}
+
+function unwrapBrokerWriteOutcome<T>(
+  outcome: BrokerWriteOutcome<T>,
+  route: BrokerWriteRoute | undefined,
+): { kind: 'final'; result: T } | { kind: 'non_final'; value: SimpleActionResult } {
+  if (outcome.kind === 'broker_final') return { kind: 'final', result: outcome.result }
+  if (outcome.kind === 'pre_submit_rejected') {
+    return {
+      kind: 'non_final',
+      value: {
+        success: false,
+        error: route === 'sidecar'
+          ? 'execution_sidecar_pre_submit_rejected'
+          : outcome.error || 'broker write rejected before submission',
+        brokerWriteOutcome: 'pre_submit_rejected',
+      },
+    }
+  }
+  if (outcome.kind === 'command_accepted') {
+    return {
+      kind: 'non_final',
+      value: {
+        success: false,
+        error: route === 'sidecar'
+          ? 'broker_outcome_pending'
+          : outcome.message ?? 'broker command accepted; broker outcome pending',
+        brokerWriteOutcome: 'command_accepted',
+        pending: true,
+        commandId: outcome.commandId,
+        permitV2Id: outcome.permitV2Id,
+        acceptedSequence: outcome.acceptedSequence,
+        clientOrderId: outcome.clientOrderId,
+      },
+    }
+  }
+  return {
+    kind: 'non_final',
+    value: {
+      success: false,
+      error: route === 'sidecar'
+        ? 'execution_sidecar_submission_unknown'
+        : outcome.error || 'broker submission outcome unknown',
+      brokerWriteOutcome: 'submission_unknown',
+      unknown: true,
+      commandId: outcome.commandId,
+      permitV2Id: outcome.permitV2Id,
+      clientOrderId: outcome.clientOrderId,
+    },
   }
 }

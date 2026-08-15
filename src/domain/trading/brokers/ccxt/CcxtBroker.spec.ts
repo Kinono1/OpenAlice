@@ -258,7 +258,7 @@ describe('CcxtBroker — direct write guard', () => {
     process.env.NODE_ENV = previousNodeEnv
   })
 
-  it('blocks direct non-test placeOrder before exchange submission', async () => {
+  it('blocks direct non-test placeOrder even if NODE_ENV is mutated after construction', async () => {
     process.env.NODE_ENV = 'production'
     const acc = makeAccount()
     setInitialized(acc, {
@@ -272,6 +272,7 @@ describe('CcxtBroker — direct write guard', () => {
     order.action = 'BUY'
     order.orderType = 'MKT'
     order.totalQuantity = new Decimal('0.01')
+    process.env.NODE_ENV = 'test'
 
     const result = await acc.placeOrder(contract, order)
 
@@ -280,16 +281,13 @@ describe('CcxtBroker — direct write guard', () => {
     expect((acc as any).exchange.createOrder).not.toHaveBeenCalled()
   })
 
-  it('allows controlled bridge-scoped writes in non-test runtime', async () => {
+  it('does not expose a scope-mint escape hatch in non-test runtime', async () => {
     process.env.NODE_ENV = 'production'
     const acc = makeAccount()
     setInitialized(acc, {
       'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
     })
-    ;(acc as any).exchange.createOrder = vi.fn().mockResolvedValue({
-      id: 'scoped-1',
-      status: 'open',
-    })
+    ;(acc as any).exchange.createOrder = vi.fn()
 
     const contract = new Contract()
     contract.localSymbol = 'BTC/USDT:USDT'
@@ -297,13 +295,12 @@ describe('CcxtBroker — direct write guard', () => {
     order.action = 'BUY'
     order.orderType = 'MKT'
     order.totalQuantity = new Decimal('0.01')
-    const scope = acc.createControlledWriteScope('test_bridge')
-
-    const result = await acc.withControlledWriteScope(scope, () => acc.placeOrder(contract, order))
-
-    expect(result.success).toBe(true)
-    expect(result.orderId).toBe('scoped-1')
-    expect((acc as any).exchange.createOrder).toHaveBeenCalledOnce()
+    expect((acc as unknown as Record<string, unknown>).createControlledWriteScope).toBeUndefined()
+    expect((acc as unknown as Record<string, unknown>).withControlledWriteScope).toBeUndefined()
+    const result = await acc.placeOrder(contract, order)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('ccxt broker direct write is forbidden')
+    expect((acc as any).exchange.createOrder).not.toHaveBeenCalled()
   })
 })
 

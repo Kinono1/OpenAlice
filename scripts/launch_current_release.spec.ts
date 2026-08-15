@@ -21,6 +21,7 @@ describe('stable current release launcher', () => {
     const closureFiles: Record<string, string> = {
       'scripts/runner.sh': '#!/bin/sh\n',
       'src/runtime.ts': 'export {}\n',
+      'sidecars/nautilus_paper/runtime.py': 'def main(): pass\n',
       'ops/pipeline.json': '{}\n',
       'default/config.json': '{}\n',
       'node_modules/.bin/tsx': '#!/bin/sh\nexec node\n',
@@ -145,6 +146,24 @@ describe('stable current release launcher', () => {
     })).rejects.toMatchObject({
       stderr: expect.stringContaining('release_artifact_symlink_forbidden:scripts/escape.js'),
     })
+
+    await rm(join(releasePath, 'scripts/escape.js'))
+    await rm(join(releasePath, 'sidecars'), { recursive: true })
+    delete artifactHashes['sidecars/nautilus_paper/runtime.py']
+    const { schemaVersion: _schemaVersion, manifestHash: _manifestHash, ...core } = manifest
+    const missingSidecarsManifest = buildReleaseManifest({
+      ...core,
+      artifactHashes,
+    })
+    await writeFile(
+      join(releasePath, 'release_manifest.v1.json'),
+      `${JSON.stringify(missingSidecarsManifest, null, 2)}\n`,
+    )
+    await expect(execFileAsync(process.execPath, [launcher, '--verify-only'], {
+      env: { ...process.env, OPENALICE_RELEASE_DIR: root },
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining('release_executable_closure_missing:sidecars/'),
+    })
   })
 
   it('fails closed when current content no longer matches the manifest', async () => {
@@ -198,6 +217,7 @@ describe('stable current release launcher', () => {
     await mkdir(join(releasePath, 'dist'), { recursive: true })
     await mkdir(join(releasePath, 'scripts'), { recursive: true })
     await mkdir(join(releasePath, 'src'), { recursive: true })
+    await mkdir(join(releasePath, 'sidecars', 'nautilus_paper'), { recursive: true })
     await mkdir(join(releasePath, 'ops', 'release'), { recursive: true })
     await mkdir(join(releasePath, 'default'), { recursive: true })
     await mkdir(join(releasePath, 'node_modules', '.bin'), { recursive: true })
@@ -222,6 +242,7 @@ describe('stable current release launcher', () => {
     const closureFiles: Record<string, string> = {
       'dist/main.js': 'console.log("research-release")\n',
       'src/runtime.ts': 'export {}\n',
+      'sidecars/nautilus_paper/runtime.py': 'def main(): pass\n',
       'default/config.json': '{}\n',
       'node_modules/.bin/tsx': '#!/bin/sh\nexec node\n',
       'package.json': '{"name":"openalice-research-launch-test"}\n',

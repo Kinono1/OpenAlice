@@ -69,6 +69,8 @@ import {
   READY_DENY_ONLY_PRODUCTION_RISK_POLICY,
 } from '../../production-risk-preflight.js'
 import type { CryptoPlaceOrderRequest } from '../../operation-dispatcher.types.js'
+import type { AuthorizedBrokerWriter } from '../../broker-write-router.js'
+import { TradeIdempotencyStore } from '../../idempotency-store.js'
 import type {
   ProductionRiskPreflightPolicyLike,
 } from '../../production-risk-preflight.js'
@@ -77,6 +79,7 @@ import {
   CcxtTradingEngineAdapter,
   createCcxtExecutionBridge,
   createCcxtSlippageProtectionTracker,
+  mapGitOperationToCrypto,
 } from './CcxtTradingEngineAdapter.js'
 
 const READY_PRODUCTION_RISK_POLICY: ProductionRiskPreflightPolicyLike = {
@@ -170,7 +173,7 @@ describe('CcxtTradingEngineAdapter', () => {
     )
   })
 
-  it('uses controlled broker write scope for adapter placeOrder outside test runtime', async () => {
+  it('cannot mint a broker write scope for adapter placeOrder outside test runtime', async () => {
     const previousNodeEnv = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'
     const broker = new CcxtBroker({
@@ -192,11 +195,75 @@ describe('CcxtTradingEngineAdapter', () => {
         size: 0.01,
       }))
 
-      expect(result.success).toBe(true)
-      expect((broker as any).exchange.createOrder).toHaveBeenCalledOnce()
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('ccxt broker direct write is forbidden')
+      expect((broker as any).exchange.createOrder).not.toHaveBeenCalled()
     } finally {
       process.env.NODE_ENV = previousNodeEnv
     }
+  })
+
+  it('fails closed outside tests when production did not assemble a sidecar writer', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const broker = new CcxtBroker({
+      exchange: 'bybit', apiKey: 'k', apiSecret: 's', sandbox: true,
+    })
+    try {
+      await expect(createCcxtExecutionBridge(withReadyProductionRiskPolicy({
+        accountId: 'production-sidecar-required',
+        broker,
+      }))).rejects.toThrow('production CCXT execution requires an explicit sidecar writer')
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv
+    }
+  })
+
+  it('fails closed when a production sidecar assembly does not share its authority provider', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const broker = new CcxtBroker({
+      exchange: 'bybit', apiKey: 'k', apiSecret: 's', sandbox: true,
+    })
+    ;(broker.meta as { exchange: string }).exchange = 'okx'
+    const writer: AuthorizedBrokerWriter = {
+      placeOrder: vi.fn(), cancelOrder: vi.fn(), adjustLeverage: vi.fn(),
+    }
+    try {
+      await expect(createCcxtExecutionBridge(withReadyProductionRiskPolicy({
+        accountId: 'production-authority-required',
+        broker,
+        brokerWriteAssembly: { route: 'sidecar', writer },
+      }))).rejects.toThrow('production execution sidecar requires a shared authority provider')
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv
+    }
+  })
+
+  it('maps only an explicit supported Git TIF into the sidecar request contract', () => {
+    const contract = new Contract()
+    contract.localSymbol = 'BTC/USDT'
+    contract.symbol = 'BTC/USDT'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'LMT'
+    order.totalQuantity = new Decimal('0.0005')
+    order.lmtPrice = 100_000
+    order.tif = 'GTC'
+    expect(mapGitOperationToCrypto({ action: 'placeOrder', contract, order }))
+      .toEqual(expect.objectContaining({
+        action: 'placeOrder',
+        params: expect.objectContaining({
+          symbol: 'BTC/USDT', side: 'buy', type: 'limit',
+          size: 0.0005, price: 100_000, timeInForce: 'GTC',
+        }),
+      }))
+
+    order.tif = 'DAY'
+    expect(mapGitOperationToCrypto({ action: 'placeOrder', contract, order }))
+      .toEqual(expect.objectContaining({
+        params: expect.objectContaining({ timeInForce: undefined }),
+      }))
   })
 
   it('hard-blocks 100x direct adapter orders before broker submission', async () => {
@@ -822,6 +889,84 @@ describe('CcxtTradingEngineAdapter', () => {
 
     await bridge.close()
     await rm(baseDir, { recursive: true, force: true })
+  })
+
+  it('keeps sidecar-accepted state unresolved across restart without native CCXT reconciliation', async () => {
+    const accountId = `okx-sidecar-reconcile-${Date.now()}`
+    const baseDir = resolve('data/trading', accountId)
+    await rm(baseDir, { recursive: true, force: true })
+    await mkdir(baseDir, { recursive: true })
+    const idempotencyKey = 'sidecar-restart-1'
+    const commandId = 'a'.repeat(64)
+    const permitV2Id = 'b'.repeat(64)
+    const clientOrderId = `OA${'C'.repeat(30)}`
+    const ledgerPath = resolve(baseDir, 'intent-ledger.jsonl')
+    await writeFile(ledgerPath, [
+      JSON.stringify({
+        type: 'intent',
+        data: {
+          intentId: 'sidecar-intent-1', ticketId: 'ticket-sidecar-1',
+          symbol: 'BTC/USDT', action: 'placeOrder', side: 'buy', type: 'limit',
+          idempotencyKey, brokerWriteRoute: 'sidecar', clientOrderId,
+          createdAt: Date.now() - 10_000,
+        },
+      }),
+      JSON.stringify({
+        type: 'result',
+        data: {
+          intentId: 'sidecar-intent-1', status: 'unknown',
+          error: 'broker_outcome_pending', completedAt: Date.now() - 9_000,
+          brokerWriteRoute: 'sidecar', brokerWriteOutcome: 'command_accepted',
+          commandId, permitV2Id, acceptedSequence: '7', clientOrderId,
+        },
+      }),
+    ].join('\n') + '\n', 'utf-8')
+    const idempotencyPath = resolve(baseDir, 'idempotency-store.json')
+    await writeFile(idempotencyPath, JSON.stringify({
+      records: {
+        [idempotencyKey]: {
+          key: idempotencyKey, status: 'in_progress',
+          createdAt: Date.now() - 10_000, updatedAt: Date.now() - 10_000,
+          expiresAt: Date.now() - 1,
+          symbol: 'BTC/USDT', ticketId: 'ticket-sidecar-1',
+        },
+      },
+    }, null, 2) + '\n', 'utf-8')
+
+    const broker = new CcxtBroker({
+      exchange: 'bybit', apiKey: 'k', apiSecret: 's', sandbox: true,
+    })
+    ;(broker.meta as { exchange: string }).exchange = 'okx'
+    const nativeFind = vi.fn().mockResolvedValue(null)
+    ;(broker as any).findOrderIdByClientOrderId = nativeFind
+    const writer: AuthorizedBrokerWriter = {
+      placeOrder: vi.fn(), cancelOrder: vi.fn(), adjustLeverage: vi.fn(),
+    }
+    const getCommand = vi.fn().mockResolvedValue({
+      found: true, commandId, disposition: 'accepted', acceptedSequence: '7', clientOrderId,
+    })
+    const closeSidecar = vi.fn()
+    const bridge = await createCcxtExecutionBridge(withReadyProductionRiskPolicy({
+      accountId,
+      broker,
+      brokerWriteAssembly: {
+        route: 'sidecar', writer, readModel: { getCommand }, close: closeSidecar,
+      },
+    }))
+    try {
+      expect(getCommand).toHaveBeenCalledWith(commandId)
+      expect(nativeFind).not.toHaveBeenCalled()
+      await expect(new TradeIdempotencyStore(idempotencyPath).get(idempotencyKey))
+        .resolves.toEqual(expect.objectContaining({
+          status: 'unresolved', commandId, permitV2Id,
+          acceptedSequence: '7', clientOrderId,
+        }))
+      expect(bridge.runtime().brokerWriteRoute).toBe('sidecar')
+    } finally {
+      await bridge.close()
+      expect(closeSidecar).toHaveBeenCalledOnce()
+      await rm(baseDir, { recursive: true, force: true })
+    }
   })
 
   it('blocks new opens when strategy sizing cannot produce a safe executable order', async () => {

@@ -15,10 +15,17 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { assertCanaryReady, type CanaryReadinessReceiptV1 } from '../src/runtime/canary_governance.js'
 import { activateResearchRelease, readReleasePointer, sha256File, verifyReleaseDirectory } from '../src/runtime/release_manager.js'
+import {
+  assertNoForbiddenD1ReleaseArtifactPaths,
+  D1_RELEASE_REQUIRED_ARTIFACT_PATHS,
+  type ReleaseManifest,
+} from '../src/runtime/release_manifest.js'
 import { sha256Canonical } from '../src/sidecar/contracts.js'
 
 const execFileAsync = promisify(execFile)
 const EMPTY_DIRTY_STATE_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+export const PAPER_LOCAL_TWO_IDENTITY_DEPLOYMENT_BLOCKER =
+  'paper_local_two_identity_deployment_required' as const
 
 interface Args {
   releaseRoot: string
@@ -31,6 +38,12 @@ interface Args {
   launchdLabel: string
   launchdPlist: string
   launchWrapper: string
+  paperLocalSupervisorConfig?: string
+  paperLocalNode?: string
+  paperLocalNodeSha256?: string
+  paperLocalMjsSha256?: string
+  paperLocalPython?: string
+  paperLocalPublisherUid?: string
   backupDir: string
   receiptDir: string
   maxDowntimeSeconds: number
@@ -119,9 +132,6 @@ async function main(): Promise<void> {
 async function runPreflight(args: Args): Promise<Record<string, unknown>> {
   const blockers: string[] = []
   const launchWrapper = resolve(args.launchWrapper)
-  if (basename(launchWrapper) !== 'launch_openalice_current.sh') {
-    blockers.push('launch_wrapper_must_be_stable_immutable_wrapper')
-  }
   if (isWithin(resolve(args.legacyRepoRoot), launchWrapper)) {
     blockers.push('launch_wrapper_must_not_be_created_inside_legacy_wip')
   }
@@ -131,13 +141,29 @@ async function runPreflight(args: Args): Promise<Record<string, unknown>> {
     if (manifest.dirtyStateHash !== EMPTY_DIRTY_STATE_HASH) blockers.push('release_dirty_state_not_empty')
     if (manifest.liveExecutionArmed !== false) blockers.push('live_execution_armed')
     if (manifest.admissionDecisionId !== null) blockers.push('admission_decision_id_must_be_null')
-    assertFullClosure(manifest.artifactHashes)
+    const expectedWrapper = manifest.schemaVersion === 'release_manifest.v2'
+      ? 'launch_nautilus_paper.sh'
+      : 'launch_openalice_current.sh'
+    if (basename(launchWrapper) !== expectedWrapper) {
+      blockers.push(`launch_wrapper_must_be_${expectedWrapper}`)
+    }
+    if (
+      manifest.schemaVersion === 'release_manifest.v2'
+      && (!args.paperLocalSupervisorConfig || !args.paperLocalSupervisorConfig.startsWith('/'))
+    ) {
+      blockers.push('paper_local_supervisor_config_missing_or_not_absolute')
+    }
+    if (manifest.schemaVersion === 'release_manifest.v2') {
+      blockers.push(...validatePaperLocalLaunchInputs(args))
+      blockers.push(...paperLocalTwoIdentityDeploymentBlockers(manifest))
+    }
+    assertCutoverReleaseClosure(manifest)
     // The first cutover may not have a stable wrapper yet; the installer
     // materializes it from this same release before launch.  If a wrapper is
     // already present, validate it during preflight; the post-materialization
     // verification below is mandatory for both first install and reuse.
     if (await pathExists(launchWrapper)) {
-      blockers.push(...await verifyStableLaunchWrapper(launchWrapper, manifest.artifactHashes))
+      blockers.push(...await verifyStableLaunchWrapper(launchWrapper, manifest))
     }
   } catch (error) {
     blockers.push(`release_invalid:${error instanceof Error ? error.message : String(error)}`)
@@ -214,16 +240,21 @@ async function runPreflight(args: Args): Promise<Record<string, unknown>> {
 
 async function verifyStableLaunchWrapper(
   launchWrapper: string,
-  artifactHashes: Record<string, string>,
+  manifest: Awaited<ReturnType<typeof verifyReleaseDirectory>>,
 ): Promise<string[]> {
-  const targets = [
-    { path: launchWrapper, artifact: 'ops/release/launch_current.sh', label: 'launch_wrapper' },
-    { path: join(dirname(launchWrapper), 'launch_current.mjs'), artifact: 'ops/release/launch_current.mjs', label: 'launch_module' },
-    { path: join(dirname(launchWrapper), 'openalice_env.sh'), artifact: 'scripts/openalice_env.sh', label: 'launch_env' },
-  ]
+  const targets = manifest.schemaVersion === 'release_manifest.v2'
+    ? [
+      { path: launchWrapper, artifact: 'ops/release/launch_nautilus_paper.sh', label: 'paper_local_launch_wrapper' },
+      { path: join(dirname(launchWrapper), 'launch_nautilus_paper.mjs'), artifact: 'ops/release/launch_nautilus_paper.mjs', label: 'paper_local_launch_module' },
+    ]
+    : [
+      { path: launchWrapper, artifact: 'ops/release/launch_current.sh', label: 'launch_wrapper' },
+      { path: join(dirname(launchWrapper), 'launch_current.mjs'), artifact: 'ops/release/launch_current.mjs', label: 'launch_module' },
+      { path: join(dirname(launchWrapper), 'openalice_env.sh'), artifact: 'scripts/openalice_env.sh', label: 'launch_env' },
+    ]
   const blockers: string[] = []
   for (const target of targets) {
-    const expectedHash = artifactHashes[target.artifact]
+    const expectedHash = manifest.artifactHashes[target.artifact]
     if (!expectedHash) {
       blockers.push(`${target.label}_hash_missing_from_release`)
       continue
@@ -284,11 +315,16 @@ async function verifyFrozenWip(
 }
 
 async function backupTargets(args: Args): Promise<BackupEntry[]> {
+  const wrapperSiblings = basename(args.launchWrapper) === 'launch_nautilus_paper.sh'
+    ? [join(dirname(resolve(args.launchWrapper)), 'launch_nautilus_paper.mjs')]
+    : [
+      join(dirname(resolve(args.launchWrapper)), 'launch_current.mjs'),
+      join(dirname(resolve(args.launchWrapper)), 'openalice_env.sh'),
+    ]
   const targets = [
     args.launchdPlist,
     args.launchWrapper,
-    join(dirname(resolve(args.launchWrapper)), 'launch_current.mjs'),
-    join(dirname(resolve(args.launchWrapper)), 'openalice_env.sh'),
+    ...wrapperSiblings,
     args.jobsPath,
   ]
   const entries: BackupEntry[] = []
@@ -338,6 +374,18 @@ async function installResearchLaunchd(args: Args, budget: CutoverBudget): Promis
     OPENALICE_LEGACY_WIP_ROOT: resolve(args.legacyRepoRoot),
     OPENALICE_RESEARCH_WEB_PORT: process.env.OPENALICE_RESEARCH_WEB_PORT ?? '3002',
     OPENALICE_RESEARCH_MCP_PORT: process.env.OPENALICE_RESEARCH_MCP_PORT ?? '3001',
+    ...(args.paperLocalSupervisorConfig
+      ? { OPENALICE_PAPER_LOCAL_SUPERVISOR_CONFIG: args.paperLocalSupervisorConfig }
+      : {}),
+    ...(args.paperLocalNode ? { OPENALICE_NODE: args.paperLocalNode } : {}),
+    ...(args.paperLocalNodeSha256 ? { OPENALICE_NODE_SHA256: args.paperLocalNodeSha256 } : {}),
+    ...(args.paperLocalMjsSha256
+      ? { OPENALICE_PAPER_LOCAL_MJS_SHA256: args.paperLocalMjsSha256 }
+      : {}),
+    ...(args.paperLocalPython ? { OPENALICE_NAUTILUS_PYTHON: args.paperLocalPython } : {}),
+    ...(args.paperLocalPublisherUid
+      ? { OPENALICE_RELEASE_PUBLISHER_UID: args.paperLocalPublisherUid }
+      : {}),
   }
   await runCutoverCommand(budget, './node_modules/.bin/tsx', [
     'scripts/install_openalice_launchd.ts',
@@ -352,7 +400,7 @@ async function installResearchLaunchd(args: Args, budget: CutoverBudget): Promis
     '--errorLogPath', join(resolve(args.legacyRepoRoot), 'logs/openalice_main.launchd.err.log'),
   ], { cwd: process.cwd(), env, maxBuffer: 4 * 1024 * 1024 })
   const manifest = await verifyReleaseDirectory(args.releaseRoot, args.releaseId)
-  const wrapperBlockers = await verifyStableLaunchWrapper(args.launchWrapper, manifest.artifactHashes)
+  const wrapperBlockers = await verifyStableLaunchWrapper(args.launchWrapper, manifest)
   if (wrapperBlockers.length > 0) {
     throw new Error(`research_launch_wrapper_invalid:${wrapperBlockers.join('|')}`)
   }
@@ -381,7 +429,7 @@ async function verifyResearchLaunchd(args: Args, budget: CutoverBudget): Promise
     throw new Error('research_launchd_working_directory_invalid')
   }
   const manifest = await verifyReleaseDirectory(args.releaseRoot, args.releaseId)
-  const wrapperBlockers = await verifyStableLaunchWrapper(args.launchWrapper, manifest.artifactHashes)
+  const wrapperBlockers = await verifyStableLaunchWrapper(args.launchWrapper, manifest)
   if (wrapperBlockers.length > 0) {
     throw new Error(`research_launch_wrapper_invalid:${wrapperBlockers.join('|')}`)
   }
@@ -563,6 +611,49 @@ export function remainingDowntimeMilliseconds(startedAt: number, maxSeconds: num
   return Math.max(1, Math.ceil(remaining))
 }
 
+/**
+ * V2's shell entrypoint has no PATH or interpreter fallback.  These values
+ * are non-secret but must be explicit, pinned launchd inputs.  Keep this
+ * independent of the host process so preflight cannot accidentally attest to
+ * whatever happens to be installed on the machine running the cutover tool.
+ */
+export function validatePaperLocalLaunchInputs(input: Pick<Args,
+  'paperLocalNode' | 'paperLocalNodeSha256' | 'paperLocalMjsSha256' | 'paperLocalPython' | 'paperLocalPublisherUid'
+>): string[] {
+  const blockers: string[] = []
+  if (!input.paperLocalNode?.startsWith('/')) {
+    blockers.push('paper_local_node_missing_or_not_absolute')
+  }
+  if (!/^[a-f0-9]{64}$/.test(input.paperLocalNodeSha256 ?? '')) {
+    blockers.push('paper_local_node_sha256_missing_or_invalid')
+  }
+  if (!/^[a-f0-9]{64}$/.test(input.paperLocalMjsSha256 ?? '')) {
+    blockers.push('paper_local_mjs_sha256_missing_or_invalid')
+  }
+  if (!input.paperLocalPython?.startsWith('/')) {
+    blockers.push('paper_local_python_missing_or_not_absolute')
+  }
+  if (!/^\d+$/.test(input.paperLocalPublisherUid ?? '')) {
+    blockers.push('paper_local_publisher_uid_missing_or_invalid')
+  }
+  return blockers
+}
+
+/**
+ * This one-shot cutover process mutates the release pointer, materializes the
+ * stable wrapper, and writes the GUI launchd job itself.  Environment UID
+ * strings cannot establish that a separate publisher identity performed the
+ * immutable deployment.  V2 therefore remains blocked until an external,
+ * two-identity deployment protocol is introduced and independently attested.
+ */
+export function paperLocalTwoIdentityDeploymentBlockers(
+  manifest: Pick<ReleaseManifest, 'schemaVersion'>,
+): readonly string[] {
+  return manifest.schemaVersion === 'release_manifest.v2'
+    ? [PAPER_LOCAL_TWO_IDENTITY_DEPLOYMENT_BLOCKER]
+    : []
+}
+
 async function sleepWithinDowntime(budget: CutoverBudget, requestedMilliseconds: number): Promise<void> {
   const delay = Math.min(requestedMilliseconds, remainingDowntimeMilliseconds(budget.startedAt, budget.maxDowntimeSeconds))
   await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, delay))
@@ -616,9 +707,26 @@ async function writeReceipt(args: Args, value: Record<string, unknown>): Promise
   return { ...receipt, receiptPath: path }
 }
 
-function assertFullClosure(hashes: Record<string, string>): void {
-  for (const prefix of ['dist/', 'scripts/', 'src/', 'ops/', 'default/', 'node_modules/.bin/tsx', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']) {
-    if (!Object.keys(hashes).some((path) => path === prefix || path.startsWith(prefix))) {
+/**
+ * `verifyReleaseDirectory` has already checked the materialized tree.  This
+ * second preflight assertion makes the cutover's own closure contract explicit
+ * without smuggling V1's app deploy image into a D1 PAPER_LOCAL release.
+ */
+export function assertCutoverReleaseClosure(
+  manifest: Pick<ReleaseManifest, 'schemaVersion' | 'artifactHashes'>,
+): void {
+  const paths = Object.keys(manifest.artifactHashes)
+  if (manifest.schemaVersion === 'release_manifest.v2') {
+    assertNoForbiddenD1ReleaseArtifactPaths(paths)
+    for (const requiredPath of D1_RELEASE_REQUIRED_ARTIFACT_PATHS) {
+      if (!paths.includes(requiredPath)) {
+        throw new Error(`execution_sidecar_release_artifact_missing:${requiredPath}`)
+      }
+    }
+    return
+  }
+  for (const prefix of ['dist/', 'scripts/', 'src/', 'sidecars/', 'ops/', 'default/', 'node_modules/.bin/tsx', 'package.json', 'pnpm-lock.yaml', 'release-metadata/']) {
+    if (!paths.some((path) => path === prefix || path.startsWith(prefix))) {
       throw new Error(`research_release_closure_missing:${prefix}`)
     }
   }
@@ -695,6 +803,12 @@ function parseArgs(argv: string[]): Args {
     launchdLabel: required('launchdLabel'),
     launchdPlist: required('launchdPlist'),
     launchWrapper: required('launchWrapper'),
+    paperLocalSupervisorConfig: values.get('paperLocalSupervisorConfig'),
+    paperLocalNode: values.get('paperLocalNode'),
+    paperLocalNodeSha256: values.get('paperLocalNodeSha256'),
+    paperLocalMjsSha256: values.get('paperLocalMjsSha256'),
+    paperLocalPython: values.get('paperLocalPython'),
+    paperLocalPublisherUid: values.get('paperLocalPublisherUid'),
     backupDir: required('backupDir'),
     receiptDir: required('receiptDir'),
     maxDowntimeSeconds: Number(values.get('maxDowntimeSeconds') ?? '300'),

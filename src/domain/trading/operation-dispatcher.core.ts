@@ -32,6 +32,44 @@ import {
   evaluateProductionRiskPreflight,
   productionRiskPreflightError,
 } from './production-risk-preflight.js'
+import {
+  resolveAuthorizedBrokerWriter,
+  type AuthorizedBrokerWriter,
+} from './broker-write-router.js'
+
+interface PlaceOrderGateState {
+  queue: Promise<void>
+  queuePoisoned: boolean
+  circuitOpen: boolean
+}
+
+const sidecarPlaceOrderGates = new WeakMap<AuthorizedBrokerWriter, PlaceOrderGateState>()
+const sidecarPlaceOrderGatesByAccount = new Map<string, PlaceOrderGateState>()
+
+function createPlaceOrderGateState(): PlaceOrderGateState {
+  return { queue: Promise.resolve(), queuePoisoned: false, circuitOpen: false }
+}
+
+function resolvePlaceOrderGateState(
+  route: 'native' | 'sidecar',
+  writer: AuthorizedBrokerWriter,
+  accountId: string | undefined,
+): PlaceOrderGateState {
+  if (route === 'native') return createPlaceOrderGateState()
+  const accountScope = accountId?.trim()
+  if (accountScope) {
+    const existing = sidecarPlaceOrderGatesByAccount.get(accountScope)
+    if (existing) return existing
+    const created = createPlaceOrderGateState()
+    sidecarPlaceOrderGatesByAccount.set(accountScope, created)
+    return created
+  }
+  const existing = sidecarPlaceOrderGates.get(writer)
+  if (existing) return existing
+  const created = createPlaceOrderGateState()
+  sidecarPlaceOrderGates.set(writer, created)
+  return created
+}
 
 export function createCryptoOperationDispatcher(
   engine: ICryptoTradingEngine,
@@ -39,29 +77,71 @@ export function createCryptoOperationDispatcher(
 ): CryptoOperationDispatcher {
   const options = normalizeDispatcherOptions(optionsOrRiskConfig)
   const operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
+  const brokerRoute = resolveAuthorizedBrokerWriter(engine, {
+    route: options.brokerWriteRoute,
+    writer: options.authorizedBrokerWriter,
+  })
   const placeOrderLockTimeoutMs = operationTimeoutMs + 10_000 // lock timeout > operation timeout
-  let placeOrderQueue: Promise<void> = Promise.resolve()
+  const placeOrderGate = resolvePlaceOrderGateState(
+    brokerRoute.route,
+    brokerRoute.writer,
+    options.accountId,
+  )
+  const placeOrderCircuitOpenError =
+    'SECURITY: sidecar place-order circuit open; restart required before submitting another order'
+
+  function poisonPlaceOrderCircuit(): void {
+    placeOrderGate.circuitOpen = true
+  }
 
   async function withPlaceOrderLock<T>(task: () => Promise<T>): Promise<T> {
-    const prev = placeOrderQueue
+    if (placeOrderGate.circuitOpen) {
+      throw new Error(placeOrderCircuitOpenError)
+    }
+    if (placeOrderGate.queuePoisoned) {
+      throw new Error('place-order lock queue poisoned — restart required before submitting another order')
+    }
+
+    const prev = placeOrderGate.queue
     let release!: () => void
-    let queueTimedOut = false
-    const queueTimeout = setTimeout(() => {
-      queueTimedOut = true
-      console.warn(`[crypto-dispatcher] place-order lock timed out after ${placeOrderLockTimeoutMs}ms — releasing`)
-      release()
-    }, placeOrderLockTimeoutMs)
-    placeOrderQueue = new Promise<void>(resolve => {
+    placeOrderGate.queue = new Promise<void>(resolve => {
       release = resolve
     })
 
+    let queueTimedOut = false
+    let resolveQueueTimeout!: () => void
+    const queueTimeout = setTimeout(() => {
+      queueTimedOut = true
+      placeOrderGate.queuePoisoned = true
+      console.warn(`[crypto-dispatcher] place-order lock timed out after ${placeOrderLockTimeoutMs}ms — queue poisoned`)
+      release()
+      resolveQueueTimeout()
+    }, placeOrderLockTimeoutMs)
+
     try {
-      await prev
+      await Promise.race([
+        prev,
+        new Promise<void>(resolve => {
+          resolveQueueTimeout = resolve
+        }),
+      ])
     } finally {
       clearTimeout(queueTimeout)
     }
-    // If release already fired via timeout, the queue was reset — we can't proceed
-    if (queueTimedOut) throw new Error('place-order lock queue timeout — previous operation did not complete')
+
+    if (queueTimedOut) {
+      release()
+      throw new Error('place-order lock queue timeout — queue poisoned; restart required before submitting another order')
+    }
+    if (placeOrderGate.queuePoisoned) {
+      release()
+      throw new Error('place-order lock queue poisoned — restart required before submitting another order')
+    }
+    if (placeOrderGate.circuitOpen) {
+      release()
+      throw new Error(placeOrderCircuitOpenError)
+    }
+
     try {
       const result = await task()
       return result
@@ -74,6 +154,10 @@ export function createCryptoOperationDispatcher(
     engine,
     options,
     withPlaceOrderLock,
+    writer: brokerRoute.writer,
+    brokerWriteRoute: brokerRoute.route,
+    poisonPlaceOrderCircuit,
+    placeOrderCircuitOpenError,
   })
 
   async function toExecutableOrderOperation(
@@ -103,11 +187,24 @@ export function createCryptoOperationDispatcher(
       })
     }
     if (options.allowTestExecutionPermitBypass && process.env.NODE_ENV === 'test') {
+      const authorization = await authorizeBrokerWrite(engine, options, {
+        intentId: randomUUID(),
+        action: op.action === 'cancelOrder' ? 'cancel' : 'adjust_leverage',
+        riskReducing: false,
+        symbol: typeof op.params.symbol === 'string' ? op.params.symbol : 'test-bypass',
+        ticketId: 'test-bypass',
+        idempotencyKey: `test-bypass:${randomUUID()}`,
+        completedChecks: [],
+      })
+      if (!authorization.allowed) {
+        return { success: false, error: `execution-permit: ${authorization.reasonCodes.join(',')}` }
+      }
       return executeSimpleAction(engine, op, operationTimeoutMs, {
         productionRiskPreflightPolicy: options.productionRiskPreflightPolicy,
+        authorization: { writer: brokerRoute.writer, context: authorization.context },
+        brokerWriteRoute: brokerRoute.route,
       })
     }
-
     const context = await resolveSimpleAuthorizationContext(engine, op)
     if ('error' in context) return { success: false, error: context.error }
     const intentId = randomUUID()
@@ -222,12 +319,64 @@ export function createCryptoOperationDispatcher(
     }
 
     let result: SimpleActionResult
+    let sidecarWriteStarted = false
     try {
       result = await executeSimpleAction(engine, op, operationTimeoutMs, {
         productionRiskPreflightPolicy: options.productionRiskPreflightPolicy,
+        authorization: {
+          writer: brokerRoute.writer,
+          context: authorization.context,
+        },
+        brokerWriteRoute: brokerRoute.route,
+        onWriteStarted: () => {
+          sidecarWriteStarted = brokerRoute.route === 'sidecar'
+        },
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const rawMessage = error instanceof Error ? error.message : String(error)
+      const message = sidecarWriteStarted
+        ? 'execution_sidecar_submission_unknown'
+        : rawMessage
+      if (sidecarWriteStarted) {
+        let unresolvedPersisted = true
+        try {
+          await options.idempotencyStore.markUnresolved({
+            key: idempotencyKey,
+            error: message,
+            symbol: context.symbol,
+            ticketId,
+          })
+        } catch {
+          unresolvedPersisted = false
+          poisonPlaceOrderCircuit()
+          console.warn('[operation-dispatcher] Failed to persist unresolved idempotency', {
+            action: op.action,
+            intentId,
+            idempotencyKey,
+            placeOrderCircuit: 'opened',
+          })
+        }
+        const publicMessage = unresolvedPersisted ? message : placeOrderCircuitOpenError
+        await options.eventLog
+          ?.append('execution.submission_unknown', {
+            action: op.action,
+            intentId,
+            ticketId,
+            idempotencyKey,
+            symbol: context.symbol,
+            error: publicMessage,
+            brokerWriteRoute: brokerRoute.route,
+          })
+          .catch(logError => {
+            console.warn('[operation-dispatcher] Event log append failed:', logError)
+          })
+        return {
+          success: false,
+          error: publicMessage,
+          brokerWriteOutcome: 'submission_unknown',
+          unknown: true,
+        }
+      }
       await options.idempotencyStore.finalize({
         key: idempotencyKey,
         status: 'failed',
@@ -238,9 +387,47 @@ export function createCryptoOperationDispatcher(
         authorizationInput,
         'broker_failed',
         [message],
-        authorization.permit,
+        authorization.context.kind === 'execution_permit_v1'
+          ? authorization.context.permit
+          : null,
       )
       throw error
+    }
+    if (
+      result.brokerWriteOutcome === 'command_accepted'
+      || result.brokerWriteOutcome === 'submission_unknown'
+    ) {
+      let unresolvedPersisted = true
+      try {
+        await options.idempotencyStore.markUnresolved({
+          key: idempotencyKey,
+          error: result.error ?? 'sidecar broker outcome unresolved',
+          symbol: context.symbol,
+          ticketId,
+          commandId: asOptionalString(result.commandId),
+          permitV2Id: asOptionalString(result.permitV2Id),
+          clientOrderId: asOptionalString(result.clientOrderId),
+          acceptedSequence: asOptionalString(result.acceptedSequence),
+        })
+      } catch {
+        unresolvedPersisted = false
+        poisonPlaceOrderCircuit()
+        console.warn('[operation-dispatcher] Failed to persist unresolved idempotency', {
+          action: op.action,
+          intentId,
+          idempotencyKey,
+          placeOrderCircuit: 'opened',
+        })
+      }
+      if (!unresolvedPersisted) {
+        return {
+          success: false,
+          error: placeOrderCircuitOpenError,
+          brokerWriteOutcome: 'submission_unknown',
+          unknown: true,
+        }
+      }
+      return result
     }
     await options.idempotencyStore.finalize({
       key: idempotencyKey,
@@ -250,9 +437,15 @@ export function createCryptoOperationDispatcher(
     await recordExecutionReceipt(
       options,
       authorizationInput,
-      result.success ? 'broker_succeeded' : 'broker_failed',
+      result.success
+        ? 'broker_succeeded'
+        : result.brokerWriteOutcome === 'pre_submit_rejected'
+          ? 'rejected'
+          : 'broker_failed',
       result.success ? [] : [result.error ?? 'simple_action_failed'],
-      authorization.permit,
+      authorization.context.kind === 'execution_permit_v1'
+        ? authorization.context.permit
+        : null,
     )
     return result
   }
@@ -326,7 +519,7 @@ export function createCryptoOperationDispatcher(
 
           const { outcome } = await executePlaceOrder(executableOp, i, commitId)
           results.push(outcome)
-          if (outcome.status === 'failed') {
+          if (outcome.status === 'failed' || outcome.status === 'unknown') {
             stopped = true
           }
         } catch (err) {
@@ -363,7 +556,17 @@ export function createCryptoOperationDispatcher(
 
       try {
         const simpleResult = await executeAuthorizedSimpleAction(op)
-        if (simpleResult && !simpleResult.success) {
+        if (simpleResult.brokerWriteOutcome === 'command_accepted'
+          || simpleResult.brokerWriteOutcome === 'submission_unknown') {
+          results.push({
+            opIndex: i,
+            ticketId: (op.params.ticketId as string) ?? '',
+            intentId: '',
+            status: 'unknown',
+            error: simpleResult.error,
+          })
+          stopped = true
+        } else if (simpleResult && !simpleResult.success) {
           const error = simpleResult.error ?? 'operation failed'
           results.push({
             opIndex: i,
@@ -398,6 +601,7 @@ export function createCryptoOperationDispatcher(
       succeeded: results.filter(r => r.status === 'success').length,
       failed: results.filter(r => r.status === 'failed').length,
       skipped: results.filter(r => r.status === 'skipped').length,
+      unknown: results.filter(r => r.status === 'unknown').length,
     }
 
     await options.eventLog
@@ -418,6 +622,10 @@ export function createCryptoOperationDispatcher(
   dispatcher.dispatch = dispatch
   dispatcher.push = push
   return dispatcher
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
 }
 
 async function resolveSimpleAuthorizationContext(
@@ -503,6 +711,8 @@ export async function executeCommit(
     maxExecutionMarketDataAgeMs: deps.maxExecutionMarketDataAgeMs,
     executionReceiptSink: deps.executionReceiptSink,
     allowTestExecutionPermitBypass: deps.allowTestExecutionPermitBypass,
+    brokerWriteRoute: deps.brokerWriteRoute,
+    authorizedBrokerWriter: deps.authorizedBrokerWriter,
   }
 
   const dispatcher = createCryptoOperationDispatcher(deps.engine, options)

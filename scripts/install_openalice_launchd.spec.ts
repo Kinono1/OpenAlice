@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { buildLaunchdConfig, materializeStableLaunchWrapper, parseArgs, renderLaunchdPlist } from './install_openalice_launchd.ts'
+import { spawn } from 'node:child_process'
+import {
+  buildLaunchdConfig,
+  materializeStableLaunchWrapper,
+  parseArgs,
+  prepareLaunchdInstallationPlan,
+  renderLaunchdPlist,
+} from './install_openalice_launchd.ts'
 
 describe('install_openalice_launchd', () => {
   const originalEnv = { ...process.env }
@@ -54,6 +61,58 @@ describe('install_openalice_launchd', () => {
     expect(plist).toContain('<true/>')
     expect(plist).toContain('<key>StandardOutPath</key>')
     expect(plist).toContain('<string>/repo/OpenAlice/logs/openalice_main.launchd.log</string>')
+  })
+
+  it('uses the system POSIX shell only for a V2 PAPER_LOCAL plist', () => {
+    const legacy = renderLaunchdPlist(buildLaunchdConfig({
+      label: 'ai.openalice.legacy',
+      scriptPath: '/repo/runtime/bin/launch_openalice_current.sh',
+      logPath: '/tmp/legacy.log',
+      errorLogPath: '/tmp/legacy.err.log',
+      launcherKind: 'legacy',
+    }))
+    const paperLocal = renderLaunchdPlist(buildLaunchdConfig({
+      label: 'ai.openalice.paper-local',
+      scriptPath: '/repo/runtime/bin/launch_nautilus_paper.sh',
+      logPath: '/tmp/paper.log',
+      errorLogPath: '/tmp/paper.err.log',
+      launcherKind: 'paper_local',
+    }))
+
+    expect(legacy).toContain('<string>/opt/homebrew/bin/bash</string>')
+    expect(paperLocal).toContain('<string>/bin/sh</string>')
+    expect(paperLocal).not.toContain('<string>/opt/homebrew/bin/bash</string>')
+  })
+
+  it('requires an explicit matching kind for the PAPER_LOCAL wrapper', () => {
+    const input = {
+      label: 'ai.openalice.paper-local',
+      scriptPath: '/repo/runtime/bin/launch_nautilus_paper.sh',
+      logPath: '/tmp/paper.log',
+      errorLogPath: '/tmp/paper.err.log',
+    }
+
+    expect(() => buildLaunchdConfig(input)).toThrow('paper_local_launcher_kind_required')
+    expect(() => buildLaunchdConfig({ ...input, launcherKind: 'legacy' })).toThrow(
+      'paper_local_launcher_kind_required',
+    )
+    expect(() => renderLaunchdPlist({
+      ...input,
+      workingDirectory: '/repo/runtime',
+      pathEnv: '/usr/bin:/bin',
+      homeEnv: '/Users/kino',
+      launcherKind: 'legacy',
+    })).toThrow('paper_local_launcher_kind_required')
+  })
+
+  it('rejects PAPER_LOCAL kind for a non-PAPER_LOCAL wrapper', () => {
+    expect(() => buildLaunchdConfig({
+      label: 'ai.openalice.legacy',
+      scriptPath: '/repo/runtime/bin/launch_openalice_current.sh',
+      logPath: '/tmp/legacy.log',
+      errorLogPath: '/tmp/legacy.err.log',
+      launcherKind: 'paper_local',
+    })).toThrow('paper_local_stable_wrapper_required')
   })
 
   it('does not persist plaintext API keys in the launchd plist', () => {
@@ -168,6 +227,51 @@ describe('install_openalice_launchd', () => {
     expect(plist).not.toContain('TELEGRAM_BOT_TOKEN=')
   })
 
+  it('persists only explicit non-secret PAPER_LOCAL runtime pins for the V2 wrapper', () => {
+    process.env.PATH = '/malicious/bin:/usr/bin'
+    process.env.HOME = '/Users/service-with-secrets'
+    process.env.NODE_EXTRA_CA_CERTS = '/private/provider-ca.pem'
+    process.env.OPENALICE_LLM_BASE_URL = 'https://credential-bearing-provider.invalid'
+    process.env.OPENALICE_ENV_FILE = '/private/openalice.env'
+    process.env.OPENALICE_RUNTIME_ROLE = 'research'
+    process.env.OPENALICE_DATA_DIR = '/private/research-data'
+    process.env.OPENALICE_RELEASE_DIR = '/repo/runtime/releases'
+    process.env.OPENALICE_NODE = '/opt/openalice/node'
+    process.env.OPENALICE_NODE_SHA256 = 'a'.repeat(64)
+    process.env.OPENALICE_PAPER_LOCAL_MJS_SHA256 = 'b'.repeat(64)
+    process.env.OPENALICE_NAUTILUS_PYTHON = '/opt/openalice/venv/bin/python'
+    process.env.OPENALICE_RELEASE_PUBLISHER_UID = '502'
+    process.env.OPENALICE_PAPER_LOCAL_SUPERVISOR_CONFIG = '/private/openalice/supervisor.json'
+
+    const plist = renderLaunchdPlist(buildLaunchdConfig({
+      label: 'ai.openalice.paper-local',
+      scriptPath: '/repo/runtime/bin/launch_nautilus_paper.sh',
+      logPath: '/tmp/openalice.log',
+      errorLogPath: '/tmp/openalice.err.log',
+      launcherKind: 'paper_local',
+    }))
+
+    for (const [key, value] of [
+      ['OPENALICE_NODE', '/opt/openalice/node'],
+      ['OPENALICE_NODE_SHA256', 'a'.repeat(64)],
+      ['OPENALICE_PAPER_LOCAL_MJS_SHA256', 'b'.repeat(64)],
+      ['OPENALICE_NAUTILUS_PYTHON', '/opt/openalice/venv/bin/python'],
+      ['OPENALICE_RELEASE_PUBLISHER_UID', '502'],
+      ['OPENALICE_PAPER_LOCAL_SUPERVISOR_CONFIG', '/private/openalice/supervisor.json'],
+      ['OPENALICE_RELEASE_DIR', '/repo/runtime/releases'],
+    ]) {
+      expect(plist).toContain(`<key>${key}</key>`)
+      expect(plist).toContain(`<string>${value}</string>`)
+    }
+    expect(plist).toContain('<key>PATH</key>\n    <string>/usr/bin:/bin</string>')
+    expect(plist).toContain('<key>HOME</key>\n    <string>/var/empty</string>')
+    for (const forbidden of [
+      'NODE_EXTRA_CA_CERTS', 'OPENALICE_LLM_BASE_URL', 'OPENALICE_ENV_FILE',
+      'OPENALICE_RUNTIME_ROLE', 'OPENALICE_DATA_DIR', 'credential-bearing-provider',
+      '/private/openalice.env', '/private/research-data', '/malicious/bin',
+    ]) expect(plist).not.toContain(forbidden)
+  })
+
   it('parses an explicit working directory for a research release', () => {
     const args = parseArgs([
       '--scriptPath',
@@ -200,9 +304,124 @@ describe('install_openalice_launchd', () => {
     await writeFile(`${source}/ops/release/launch_current.sh`, 'release-wrapper\n')
     await writeFile(`${source}/ops/release/launch_current.mjs`, 'release-launcher\n')
     await writeFile(`${source}/scripts/openalice_env.sh`, 'release-env\n')
+    await writeFile(`${source}/release_manifest.v1.json`, JSON.stringify({
+      schemaVersion: 'release_manifest.v1',
+    }))
     await materializeStableLaunchWrapper(target, source)
     expect(await readFile(target, 'utf8')).toBe('release-wrapper\n')
     expect(await readFile(`${root}/bin/launch_current.mjs`, 'utf8')).toBe('release-launcher\n')
     expect(await readFile(`${root}/bin/openalice_env.sh`, 'utf8')).toBe('release-env\n')
   })
+
+  it('rejects direct V2 materialization before creating a wrapper pair', async () => {
+    const root = await mkdtemp('/tmp/openalice-launchd-paper-local-')
+    const source = `${root}/release`
+    const target = `${root}/bin/launch_nautilus_paper.sh`
+    await mkdir(`${source}/ops/release`, { recursive: true })
+    await writeFile(`${source}/ops/release/launch_nautilus_paper.sh`, 'paper-wrapper\n')
+    await writeFile(`${source}/ops/release/launch_nautilus_paper.mjs`, 'paper-launcher\n')
+    await writeFile(`${source}/release_manifest.v2.json`, JSON.stringify({
+      schemaVersion: 'release_manifest.v2',
+    }))
+
+    await expect(materializeStableLaunchWrapper(
+      target,
+      source,
+    )).rejects.toThrow('paper_local_two_identity_deployment_required')
+    await expect(readFile(target, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(`${root}/bin/launch_nautilus_paper.mjs`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(`${root}/bin`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    await expect(materializeStableLaunchWrapper(
+      `${root}/other/launch_openalice_current.sh`,
+      source,
+    )).rejects.toThrow('paper_local_two_identity_deployment_required')
+    await expect(readFile(`${root}/other`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('limits generic V2 installation to a no-side-effect plan preview', async () => {
+    const root = await mkdtemp('/tmp/openalice-launchd-v2-plan-')
+    const source = `${root}/release`
+    const scriptPath = `${root}/bin/launch_nautilus_paper.sh`
+    const plistPath = `${root}/plist/ai.openalice.paper-local.plist`
+    await mkdir(source, { recursive: true })
+    await writeFile(`${source}/release_manifest.v2.json`, JSON.stringify({
+      schemaVersion: 'release_manifest.v2',
+    }))
+
+    const plan = await prepareLaunchdInstallationPlan({
+      label: 'ai.openalice.paper-local',
+      plistPath,
+      scriptPath,
+      workingDirectory: source,
+      sourceReleasePath: source,
+      logPath: `${root}/logs/main.log`,
+      errorLogPath: `${root}/logs/main.err.log`,
+      launch: true,
+      dryRun: false,
+    })
+
+    expect(plan).toMatchObject({ status: 'plan_only', sourceKind: 'paper_local' })
+    expect(plan.plist).toContain('<string>/bin/sh</string>')
+    await expect(readFile(scriptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(plistPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects the real non-dry-run V2 CLI before any write or launchctl action', async () => {
+    const root = await mkdtemp('/tmp/openalice-launchd-v2-cli-block-')
+    const source = `${root}/release`
+    const scriptPath = `${root}/bin/launch_nautilus_paper.sh`
+    const plistPath = `${root}/plist/ai.openalice.paper-local.plist`
+    const logPath = `${root}/logs/main.log`
+    const errorLogPath = `${root}/logs/main.err.log`
+    await mkdir(source, { recursive: true })
+    await writeFile(`${source}/release_manifest.v2.json`, JSON.stringify({
+      schemaVersion: 'release_manifest.v2',
+    }))
+
+    const result = await runInstallerCli([
+      '--dryRun', 'false',
+      '--launch', 'true',
+      '--label', 'ai.openalice.paper-local',
+      '--scriptPath', scriptPath,
+      '--workingDirectory', source,
+      '--sourceReleasePath', source,
+      '--plistPath', plistPath,
+      '--logPath', logPath,
+      '--errorLogPath', errorLogPath,
+    ])
+
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toContain('paper_local_two_identity_deployment_required')
+    for (const path of [
+      scriptPath,
+      plistPath,
+      logPath,
+      errorLogPath,
+      `${root}/research-current`,
+      `${root}/current`,
+    ]) {
+      await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    }
+  })
 })
+
+function runInstallerCli(args: string[]): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('./node_modules/.bin/tsx', [
+      'scripts/install_openalice_launchd.ts',
+      ...args,
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    const stderr: Buffer[] = []
+    child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)))
+    child.on('error', reject)
+    child.on('close', (code) => resolvePromise({
+      code,
+      stderr: Buffer.concat(stderr).toString('utf8'),
+    }))
+  })
+}

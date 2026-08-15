@@ -1,0 +1,94 @@
+{
+  "schemaVersion": "openalice_nautilus_dependency_verification.v1",
+  "verifiedAt": "2026-08-14T18:10:18.000Z",
+  "target": {
+    "implementation": "CPython",
+    "python": "3.13.5",
+    "pythonTag": "cp313",
+    "os": "macOS 26",
+    "machine": "arm64"
+  },
+  "resolution": {
+    "lockFile": "requirements-macos-arm64-cp313.lock",
+    "lockFileSha256": "061d253e9463f54df4a2cb7ec3322c7262db8cc02c1221152382f3c0bb275514",
+    "resolverReportSha256": "6fa2b0970cd741a04a290544ad68dfc7cb2c5c44046b33d3706d6679429d9fd7",
+    "packageCount": 23,
+    "versionsAndHashesMatchResolverReport": true,
+    "allSelectedDistributionsAreWheels": true
+  },
+  "downloadSet": {
+    "verified": true,
+    "verificationMethod": "pip download --require-hashes --only-binary=:all: --no-deps",
+    "packageCount": 23,
+    "manifestFile": "wheelhouse-macos-arm64-cp313.sha256",
+    "manifestSha256": "8138a6daccbf010ea97b2af14455198a5ae835bd104e997fb019f267f8d46a01",
+    "artifactBytesCommitted": false
+  },
+  "nautilusRelease": {
+    "version": "1.231.0",
+    "artifact": {
+      "filename": "nautilus_trader-1.231.0-cp313-cp313-macosx_26_0_arm64.whl",
+      "sha256": "b9312bd17cb068bd9407cf360103f7b23c09aaf6118a6321da3def2fe8edaa3d",
+      "sizeBytes": 156106129
+    },
+    "githubRelease": {
+      "repository": "nautechsystems/nautilus_trader",
+      "tag": "v1.231.0",
+      "publishedAt": "2026-08-02T18:53:49.000Z",
+      "distManifestSha256": "f1dfe7a16d6558a0fc414f54aba4dd1bf489a11e43859444bd4b6f058df4fc7f",
+      "assetDigestMatched": true
+    },
+    "pypiTrustedPublisher": {
+      "verified": true,
+      "tool": "pypi-attestations",
+      "toolVersion": "0.0.30",
+      "predicateType": "https://docs.pypi.org/attestations/publish/v1",
+      "publisherKind": "GitHub",
+      "publisherRepository": "nautechsystems/nautilus_trader",
+      "publisherWorkflow": "build.yml",
+      "publisherEnvironment": "release",
+      "subjectDigestMatched": true
+    },
+    "slsaProvenance": {
+      "verified": true,
+      "tool": "gh attestation verify",
+      "toolVersion": "2.86.0",
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "bundleSha256": "a0d97c0d917954450cd41796bae6e9c90d022c08227dc18430e576f43cada031",
+      "certificateIdentity": "https://github.com/nautechsystems/nautilus_trader/.github/workflows/build.yml@refs/heads/master",
+      "certificateIssuer": "https://token.actions.githubusercontent.com",
+      "sourceRef": "refs/heads/master",
+      "sourceCommit": "27a8e54e7ac3c57d6cbf8891f0283dfbaee97317",
+      "runnerEnvironment": "github-hosted",
+      "rekorVerifiedTimestamp": "2026-08-02T18:46:38.000Z",
+      "subjectDigestMatched": true
+    }
+  },
+  "isolatedInstall": {
+    "verified": true,
+    "method": "pip install --no-index --find-links <verified-wheelhouse> --require-hashes --only-binary=:all:",
+    "pipCheck": "PASS",
+    "environmentClass": "ephemeral_test_venv",
+    "environmentCommitted": false
+  },
+  "runtimeImports": {
+    "verified": true,
+    "python": "3.13.5",
+    "machine": "arm64",
+    "nautilusTrader": "1.231.0",
+    "grpcio": "1.82.1",
+    "protobuf": "7.35.1",
+    "cryptography": "49.0.0",
+    "tradingNode": "PASS",
+    "okxConfig": "PASS",
+    "okxFactories": "PASS",
+    "priceQuantityRoundTrip": "PASS"
+  },
+  "installState": "not_installed",
+  "runtimeImportVerified": true,
+  "sidecarStarted": false,
+  "brokerConnected": false,
+  "paperOnly": true,
+  "liveTradingAllowed": false,
+  "liveExecutionArmed": false
+}

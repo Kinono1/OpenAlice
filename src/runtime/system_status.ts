@@ -20,7 +20,7 @@ import {
   type AdmissionDecisionV1,
 } from './admission.js'
 import { readReleasePointer, verifyReleaseDirectory } from './release_manager.js'
-import type { ReleaseManifestV1 } from './release_manifest.js'
+import type { ReleaseManifest } from './release_manifest.js'
 import type { RuntimePaths } from './runtime-paths.js'
 
 const SHA256_RE = /^[a-f0-9]{64}$/
@@ -91,7 +91,7 @@ export interface LoadSystemStatusOptions {
 interface ReleaseSnapshot {
   currentCommit: string | null
   previousCommit: string | null
-  manifest: ReleaseManifestV1 | null
+  manifest: ReleaseManifest | null
   manifestValid: boolean
 }
 

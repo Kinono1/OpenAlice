@@ -604,7 +604,15 @@ export async function loadConfig(): Promise<Config> {
 // ==================== Account Config Loader ====================
 
 /** Common fields that live at the top level, not inside brokerConfig. */
-const BASE_FIELDS = new Set(['id', 'label', 'type', 'guards', 'brokerConfig'])
+const BASE_FIELDS = new Set([
+  'id',
+  'label',
+  'type',
+  'enabled',
+  'guards',
+  'brokerConfig',
+  'cryptoExecution',
+])
 
 /**
  * Migrate flat account config (legacy) to nested brokerConfig format.

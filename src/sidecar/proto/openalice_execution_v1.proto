@@ -1,0 +1,275 @@
+syntax = "proto3";
+
+package openalice.execution.v1;
+
+// Contract only. This definition starts no server, broker, or venue connection.
+service OpenAliceExecutionService {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc GetCommand(GetCommandRequest) returns (GetCommandResponse);
+  rpc GetOfflineExecutionReceipt(GetOfflineExecutionReceiptRequest)
+      returns (GetOfflineExecutionReceiptResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc ReplayEvents(ReplayEventsRequest) returns (ReplayEventsResponse);
+  rpc StreamEvents(StreamEventsRequest) returns (stream ExecutionEvent);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+enum PaperMode {
+  PAPER_MODE_UNSPECIFIED = 0;
+  PAPER_MODE_LOCAL = 1;
+  PAPER_MODE_EXCHANGE = 2;
+}
+
+enum Venue {
+  VENUE_UNSPECIFIED = 0;
+  VENUE_OKX = 1;
+}
+
+enum CommandKind {
+  COMMAND_KIND_UNSPECIFIED = 0;
+  COMMAND_KIND_SUBMIT = 1;
+  COMMAND_KIND_CANCEL = 2;
+  COMMAND_KIND_REPLACE = 3;
+  COMMAND_KIND_RECONCILE = 4;
+  COMMAND_KIND_SUSPEND = 5;
+}
+
+enum OrderSide {
+  ORDER_SIDE_UNSPECIFIED = 0;
+  ORDER_SIDE_BUY = 1;
+  ORDER_SIDE_SELL = 2;
+}
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_MARKET = 1;
+  ORDER_TYPE_LIMIT = 2;
+}
+
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  TIME_IN_FORCE_GTC = 1;
+  TIME_IN_FORCE_IOC = 2;
+  TIME_IN_FORCE_FOK = 3;
+}
+
+enum ExecutionEventKind {
+  EXECUTION_EVENT_KIND_UNSPECIFIED = 0;
+  EXECUTION_EVENT_KIND_ACKNOWLEDGED = 1;
+  EXECUTION_EVENT_KIND_SUBMITTED = 2;
+  EXECUTION_EVENT_KIND_PARTIALLY_FILLED = 3;
+  EXECUTION_EVENT_KIND_FILLED = 4;
+  EXECUTION_EVENT_KIND_CANCELED = 5;
+  EXECUTION_EVENT_KIND_REJECTED = 6;
+  EXECUTION_EVENT_KIND_EXPIRED = 7;
+  EXECUTION_EVENT_KIND_SUBMISSION_UNKNOWN = 8;
+  EXECUTION_EVENT_KIND_RECONCILED = 9;
+  EXECUTION_EVENT_KIND_DRIFT = 10;
+  EXECUTION_EVENT_KIND_SUSPENDED = 11;
+}
+
+enum ExecuteDisposition {
+  EXECUTE_DISPOSITION_UNSPECIFIED = 0;
+  EXECUTE_DISPOSITION_ACCEPTED = 1;
+  EXECUTE_DISPOSITION_DUPLICATE = 2;
+  EXECUTE_DISPOSITION_REJECTED = 3;
+  EXECUTE_DISPOSITION_SUSPENDED = 4;
+  EXECUTE_DISPOSITION_UNAVAILABLE = 5;
+}
+
+enum ServiceStatus {
+  SERVICE_STATUS_UNSPECIFIED = 0;
+  SERVICE_STATUS_STARTING = 1;
+  SERVICE_STATUS_READY = 2;
+  SERVICE_STATUS_SUSPENDED = 3;
+  SERVICE_STATUS_READ_ONLY = 4;
+  SERVICE_STATUS_UNAVAILABLE = 5;
+}
+
+message HandshakeRequest {
+  string protocol_version = 1;
+  string client_id = 2;
+}
+
+message HandshakeResponse {
+  string protocol_version = 1;
+  string service_id = 2;
+  PaperMode mode = 3;
+  string run_id = 4;
+  string environment_proof_hash = 5;
+  string schema_hash = 6;
+  uint64 writer_epoch = 7;
+}
+
+message ExecuteRequest {
+  ExecutionCommand command = 1;
+  // Exact canonical JSON for ExecutionPermitV2. The receiver parses it strictly,
+  // reconstructs its signing payload, and preserves these bytes for audit.
+  bytes permit_json_utf8 = 2;
+}
+
+message ExecuteResponse {
+  string command_id = 1;
+  ExecuteDisposition disposition = 2;
+  string reason = 3;
+  uint64 accepted_sequence = 4;
+}
+
+message GetCommandRequest { string command_id = 1; }
+
+message GetCommandResponse {
+  bool found = 1;
+  ExecutionCommand command = 2;
+  bytes permit_json_utf8 = 3;
+  ExecuteDisposition disposition = 4;
+  uint64 accepted_sequence = 5;
+}
+
+message GetOfflineExecutionReceiptRequest { string receipt_id = 1; }
+
+message GetOfflineExecutionReceiptResponse {
+  bool found = 1;
+  OfflineExecutionReceipt receipt = 2;
+  bytes canonical_receipt_json_utf8 = 3;
+  bytes canonical_request_json_utf8 = 4;
+  bytes canonical_response_json_utf8 = 5;
+  ExecutionEvent lifecycle_event = 6;
+}
+
+// Simulator-only evidence. Structural receipt validity never implies broker
+// finalization eligibility; consumers must enforce the pinned offline policy.
+message OfflineExecutionReceipt {
+  string schema_version = 1;
+  string scope = 2;
+  string command_id = 3;
+  string payload_hash = 4;
+  string permit_v2_id = 5;
+  string permit_key_id = 6;
+  uint64 accepted_sequence = 7;
+  uint64 lifecycle_sequence = 8;
+  ExecutionEventKind lifecycle_kind = 9;
+  string idempotency_key = 10;
+  string account_id = 11;
+  string canonical_symbol = 12;
+  Venue venue = 13;
+  string venue_instrument_id = 14;
+  PaperMode mode = 15;
+  string client_order_id = 16;
+  OrderSide side = 17;
+  OrderType order_type = 18;
+  TimeInForce time_in_force = 19;
+  bool reduce_only = 20;
+  string quantity = 21;
+  string price = 22;
+  string max_notional_usd = 23;
+  string adapter_id = 24;
+  string adapter_build_hash = 25;
+  string adapter_config_hash = 26;
+  string adapter_run_id = 27;
+  uint64 adapter_epoch = 28;
+  string adapter_key_id = 29;
+  string attempt_id = 30;
+  uint64 attempt_number = 31;
+  string source_namespace_id = 32;
+  uint64 source_sequence = 33;
+  uint64 transition_number = 34;
+  string simulated_order_id = 35;
+  string request_hash = 36;
+  string response_hash = 37;
+  string permit_issued_at = 38;
+  string permit_expires_at = 39;
+  string dispatch_armed_at = 40;
+  string adapter_observed_at = 41;
+  string simulator_occurred_at = 42;
+  string previous_receipt_id = 43;
+  string filled_quantity = 44;
+  string average_price = 45;
+  string reason = 46;
+  string receipt_id = 47;
+  string signature = 48;
+}
+
+message ExecutionCommand {
+  string schema_version = 1;
+  string command_id = 2;
+  string payload_hash = 3;
+  ExecutionCommandPayload payload = 4;
+  // Exact stableStringify(payload) UTF-8 bytes. Receivers must prove that these
+  // bytes hash to command_id/payload_hash and exactly match the typed projection.
+  bytes canonical_payload_json_utf8 = 5;
+}
+
+message ExecutionCommandPayload {
+  string schema_version = 1;
+  CommandKind kind = 2;
+  string account_id = 3;
+  string canonical_symbol = 4;
+  Venue venue = 5;
+  string venue_instrument_id = 6;
+  string idempotency_key = 7;
+  PaperMode mode = 8;
+  string client_order_id = 9;
+  string target_client_order_id = 10;
+  string replacement_client_order_id = 11;
+  OrderSide side = 12;
+  OrderType order_type = 13;
+  // Decimal quantities, prices, and notional limits are canonical strings.
+  string quantity = 14;
+  string price = 15;
+  TimeInForce time_in_force = 16;
+  bool reduce_only = 17;
+  string max_notional_usd = 18;
+  uint64 after_sequence = 19;
+  string reason = 20;
+}
+
+message GetSnapshotRequest {
+  string account_id = 1;
+  string canonical_symbol = 2;
+}
+
+message GetSnapshotResponse {
+  bool found = 1;
+  uint64 as_of_sequence = 2;
+  bytes snapshot_json_utf8 = 3;
+}
+
+message ReplayEventsRequest {
+  uint64 after_sequence = 1;
+  uint32 limit = 2;
+}
+
+message ReplayEventsResponse { repeated ExecutionEvent events = 1; }
+message StreamEventsRequest { uint64 after_sequence = 1; }
+
+message ExecutionEvent {
+  string schema_version = 1;
+  string event_id = 2;
+  string command_id = 3;
+  uint64 sequence = 4;
+  string occurred_at = 5;
+  ExecutionEventKind kind = 6;
+  string client_order_id = 7;
+  string venue_order_id = 8;
+  string filled_quantity = 9;
+  string average_price = 10;
+  string reason = 11;
+  // Empty for V1 admission/legacy observations. Required together for V2.
+  string evidence_schema_version = 12;
+  string evidence_receipt_id = 13;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  ServiceStatus status = 1;
+  PaperMode mode = 2;
+  string run_id = 3;
+  uint64 writer_epoch = 4;
+  uint64 latest_sequence = 5;
+  string circuit_reason = 6;
+  string environment_proof_hash = 7;
+  string schema_hash = 8;
+  string detail = 9;
+}

@@ -6,7 +6,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildCredentialRotationReceipt, PRIMARY_CREDENTIAL_ROTATION_NAMES } from './credential_rotation.js'
 import { buildReleaseManifest } from './release_manifest.js'
@@ -21,6 +21,7 @@ import {
 import {
   activateRelease,
   readReleasePointer,
+  REQUIRED_EXECUTION_SIDECAR_RELEASE_FILES,
   sha256File,
   writeImmutableReleaseManifest,
 } from './release_manager.js'
@@ -271,13 +272,37 @@ async function createRelease(root: string, commit: string) {
   const path = join(root, commit)
   await mkdir(join(path, 'dist'), { recursive: true })
   await writeFile(join(path, 'dist/main.js'), `console.log(${JSON.stringify(commit)})\n`)
+  const closureFiles: Record<string, string> = {
+    'scripts/runner.sh': '#!/bin/sh\n',
+    'src/runtime.ts': 'export {}\n',
+    'sidecars/nautilus_paper/README.md': 'durable-only sidecar fixture\n',
+    'ops/pipeline.json': '{}\n',
+    'default/config.json': '{}\n',
+    'node_modules/.bin/tsx': '#!/bin/sh\nexec node\n',
+    'package.json': '{"name":"openalice-test"}\n',
+    'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
+    'release-metadata/pipeline_registry.v1.json': '{}\n',
+  }
+  for (const requiredPath of REQUIRED_EXECUTION_SIDECAR_RELEASE_FILES) {
+    closureFiles[requiredPath] = `fixture:${requiredPath}\n`
+  }
+  for (const [relativePath, content] of Object.entries(closureFiles)) {
+    await mkdir(dirname(join(path, relativePath)), { recursive: true })
+    await writeFile(join(path, relativePath), content)
+  }
+  const artifactHashes: Record<string, string> = {
+    'dist/main.js': await sha256File(join(path, 'dist/main.js')),
+  }
+  for (const relativePath of Object.keys(closureFiles)) {
+    artifactHashes[relativePath] = await sha256File(join(path, relativePath))
+  }
   const manifest = buildReleaseManifest({
     releaseId: commit,
     sourceCommit: commit,
     dirtyStateHash: DIRTY_HASH,
     builtAt: '2026-08-01T12:00:00.000Z',
     runtimeEntry: 'dist/main.js',
-    artifactHashes: { 'dist/main.js': await sha256File(join(path, 'dist/main.js')) },
+    artifactHashes,
     pipelineRegistryHash: '3'.repeat(64),
     dependencyLockHash: '4'.repeat(64),
     strategyConfigHash: '5'.repeat(64),

@@ -18,11 +18,21 @@ import { execFile } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { validateAdmissionDecision } from '../src/runtime/admission.js'
-import { buildReleaseManifest } from '../src/runtime/release_manifest.js'
 import {
+  D1_RELEASE_BUNDLE_METADATA_PATH,
+  D1_RELEASE_CHECK_IDS,
+  SIDECAR_ENVIRONMENT_RECEIPT_PATH,
+  SIDECAR_RUNTIME_CONTRACT_PATH,
+  d1ForbiddenReleasePath,
+  buildReleaseManifestV2,
+} from '../src/runtime/release_manifest.js'
+import {
+  EXECUTION_SIDECAR_RUNTIME_COPY_FILES,
+  REQUIRED_EXECUTION_SIDECAR_RELEASE_FILES_V2,
   activateRelease,
   activateResearchRelease,
-  loadValidationReceiptBinding,
+  assertSidecarRuntimeContractReceiptBinding,
+  loadD1ReleaseGateBundle,
   readReleasePointer,
   rollbackRelease,
   rollbackResearchRelease,
@@ -55,6 +65,8 @@ export interface LocalReleaseCliArgs {
   dependencyLockPath: string
   strategyConfigPath: string
   runtimeEntry: string
+  sidecarEnvironmentReceiptPath?: string
+  d1BundlePath?: string
   legacyWipRoot?: string
   freezeReceiptPath?: string
   skipBuild: boolean
@@ -100,7 +112,13 @@ export function parseArgs(argv: string[]): LocalReleaseCliArgs {
     strategyConfigPath: resolve(
       get('strategyConfigPath') ?? 'ops/release/strategy_release_config.v1.json',
     ),
-    runtimeEntry: get('runtimeEntry') ?? 'dist/main.js',
+    runtimeEntry: get('runtimeEntry') ?? 'ops/release/launch_nautilus_paper.sh',
+    sidecarEnvironmentReceiptPath: get('sidecarEnvironmentReceiptPath')
+      ? resolve(get('sidecarEnvironmentReceiptPath')!)
+      : undefined,
+    d1BundlePath: get('d1Bundle')
+      ? resolve(get('d1Bundle')!)
+      : undefined,
     legacyWipRoot: get('legacyWipRoot')
       ? resolve(get('legacyWipRoot')!)
       : process.env.OPENALICE_LEGACY_WIP_ROOT
@@ -199,39 +217,58 @@ export async function buildLocalRelease(
   if (dirtyBytes.length > 0) throw new Error('engineering_release_requires_clean_source')
   const dirtyStateHash = createHash('sha256').update(dirtyBytes).digest('hex')
 
-  if (!args.skipBuild) {
-    await execFileAsync('pnpm', ['build'], { cwd: repoRoot })
+  // D1 contains no compiled Node application.  Building/deploying the general
+  // application here would reintroduce its broker-capable dist closure.  The
+  // retained `--skipBuild` argument is a no-op for this V2-only builder.
+  if (args.runtimeEntry !== 'ops/release/launch_nautilus_paper.sh') {
+    throw new Error('d1_runtime_entry_mismatch')
   }
-  const runtimeEntryPath = resolve(repoRoot, args.runtimeEntry)
-  assertWithin(repoRoot, runtimeEntryPath)
-  await lstat(runtimeEntryPath)
-  const runtimeEntryRelative = relative(repoRoot, runtimeEntryPath)
-  const runtimeArtifactRoot = runtimeEntryRelative.split(/[\\/]/)[0]
-  if (!runtimeArtifactRoot) throw new Error('runtime_entry_root_missing')
 
-  const builtAt = new Date()
-  const receiptPaths = args.receiptPaths.length > 0
-    ? args.receiptPaths
-    : await discoverReceiptPaths(resolve(repoRoot, 'runtime/control-plane/receipts'))
-  const validationReceipts = await Promise.all(receiptPaths.map((path) => (
-    loadValidationReceiptBinding({
-      path,
-      sourceCommit,
-      dirtyStateHash,
-      now: builtAt,
-    })
-  )))
+  const receiptValidationAt = new Date()
+  if (!args.d1BundlePath) {
+    throw new Error('d1_release_bundle_path_required')
+  }
+  if (args.receiptPaths.length > 0 || args.sidecarEnvironmentReceiptPath) {
+    throw new Error('d1_release_requires_atomic_bundle_only')
+  }
+  const d1Bundle = await loadD1ReleaseGateBundle({
+    bundleDir: args.d1BundlePath,
+    sourceCommit,
+    dirtyStateHash,
+    now: receiptValidationAt,
+  })
+  const sidecarEnvironment = d1Bundle.environment
+  await assertSidecarRuntimeContractReceiptBinding(
+    join(repoRoot, SIDECAR_RUNTIME_CONTRACT_PATH),
+    sidecarEnvironment.receipt,
+  )
+  const validationReceipts = [...d1Bundle.validationReceipts]
   if (validationReceipts.length === 0) {
     throw new Error('engineering_release_receipts_missing')
   }
   const checkIds = new Set(validationReceipts.map((receipt) => receipt.checkId))
-  for (const checkId of args.requiredChecks) {
+  if (checkIds.size !== validationReceipts.length) {
+    throw new Error('duplicate_release_receipt_check_id')
+  }
+  for (const checkId of D1_RELEASE_CHECK_IDS) {
     if (!checkIds.has(checkId)) throw new Error(`required_release_receipt_missing:${checkId}`)
+  }
+  if (checkIds.size !== D1_RELEASE_CHECK_IDS.length) {
+    throw new Error('unexpected_release_receipt_check_id')
+  }
+  if (
+    args.requiredChecks.length > 0
+    && !hasExactD1CheckIds(args.requiredChecks)
+  ) {
+    throw new Error('required_checks_must_equal_d1_gate')
   }
 
   const admissionDecisionId = await loadSafeAdmissionDecisionId(
     args.admissionDecisionPath,
   )
+  if (admissionDecisionId !== null) {
+    throw new Error('d1_release_admission_decision_must_be_null')
+  }
   const tempRelease = resolve(
     args.releaseRoot,
     `.${sourceCommit}.${randomUUID()}.tmp`,
@@ -239,42 +276,60 @@ export async function buildLocalRelease(
   const finalRelease = resolve(args.releaseRoot, sourceCommit)
   await mkdir(args.releaseRoot, { recursive: true })
   try {
-    await execFileAsync(
-      'pnpm',
-      ['--filter', 'open-alice', 'deploy', '--prod', '--legacy', tempRelease],
-      { cwd: repoRoot },
-    )
-    await prepareStableTsxLauncher(tempRelease)
-    await copyReleaseTree(
-      resolve(repoRoot, runtimeArtifactRoot),
-      resolve(tempRelease, runtimeArtifactRoot),
-    )
-    // The launcher executes scripts and resolves evidence/runtime contracts
-    // from the immutable release.  Copy and hash the complete executable
-    // closure instead of relying on the deploy bundle's dist-only payload.
-    for (const entry of ['scripts', 'src', 'ops', 'default']) {
-      await copyReleaseTree(resolve(repoRoot, entry), resolve(tempRelease, entry))
+    // Do not seed D1 from `pnpm deploy`: that package image contains the
+    // general Node application and can carry dist/main.js, broker clients, or
+    // test helpers.  Materialize only the explicit PAPER_LOCAL source closure.
+    for (const relativePath of REQUIRED_EXECUTION_SIDECAR_RELEASE_FILES_V2) {
+      if (relativePath.startsWith('sidecars/nautilus_paper/')) continue
+      const sourceRelativePath = relativePath === 'dist/proto/openalice_execution_v1.proto'
+        ? 'src/sidecar/proto/openalice_execution_v1.proto'
+        : relativePath
+      await copyReleaseTree(
+        resolve(repoRoot, sourceRelativePath),
+        resolve(tempRelease, relativePath),
+      )
     }
+    await copyExecutionSidecarRuntimeTree(repoRoot, tempRelease)
     await copyFile(resolve(repoRoot, 'package.json'), join(tempRelease, 'package.json'))
     await copyFile(resolve(repoRoot, 'pnpm-lock.yaml'), join(tempRelease, 'pnpm-lock.yaml'))
     await mkdir(join(tempRelease, 'release-metadata'), { recursive: true })
     await copyFile(args.pipelineRegistryPath, join(tempRelease, 'release-metadata/pipeline_registry.v1.json'))
     await copyFile(args.dependencyLockPath, join(tempRelease, 'release-metadata/pnpm-lock.yaml'))
     await copyFile(args.strategyConfigPath, join(tempRelease, 'release-metadata/strategy_release_config.v1.json'))
+    await copyHashBoundD1Evidence(
+      d1Bundle.environmentReceiptPath,
+      join(tempRelease, SIDECAR_ENVIRONMENT_RECEIPT_PATH),
+      sidecarEnvironment.receiptHash,
+      'environment',
+    )
+    await copyHashBoundD1Evidence(
+      d1Bundle.bundlePath,
+      join(tempRelease, D1_RELEASE_BUNDLE_METADATA_PATH),
+      d1Bundle.bundleHash,
+      'bundle',
+    )
+    const releaseValidationReceipts = []
+    for (const receipt of validationReceipts) {
+      const receiptPath = `release-metadata/validation-receipts/${receipt.checkId}.validation_receipt.v1.json`
+      await copyHashBoundD1Evidence(
+        receipt.path,
+        join(tempRelease, receiptPath),
+        receipt.receiptHash,
+        receipt.checkId,
+      )
+      releaseValidationReceipts.push({ ...receipt, path: receiptPath })
+    }
 
+    await assertNoForbiddenD1ReleaseTree(tempRelease)
     const artifactHashes = await collectArtifactHashes(tempRelease, [
-      args.runtimeEntry,
-      runtimeArtifactRoot,
-      'scripts',
-      'src',
-      'ops',
-      'default',
-      'node_modules/.bin/tsx',
+      ...REQUIRED_EXECUTION_SIDECAR_RELEASE_FILES_V2,
       'package.json',
       'pnpm-lock.yaml',
       'release-metadata',
     ])
-    const manifest = buildReleaseManifest({
+    await assertSourceStillClean(repoRoot, sourceCommit)
+    const builtAt = new Date()
+    const manifest = buildReleaseManifestV2({
       releaseId: sourceCommit,
       sourceCommit,
       dirtyStateHash,
@@ -284,12 +339,33 @@ export async function buildLocalRelease(
       pipelineRegistryHash: await sha256File(args.pipelineRegistryPath),
       dependencyLockHash: await sha256File(args.dependencyLockPath),
       strategyConfigHash: await sha256File(args.strategyConfigPath),
-      validationReceipts,
-      admissionDecisionId,
-      engineeringChecks: [...checkIds].sort(),
+      validationReceipts: releaseValidationReceipts,
+      sidecarEnvironment: {
+        receiptPath: SIDECAR_ENVIRONMENT_RECEIPT_PATH,
+        receiptHash: sidecarEnvironment.receiptHash,
+        contractPath: SIDECAR_RUNTIME_CONTRACT_PATH,
+        receipt: sidecarEnvironment.receipt,
+      },
+      admissionDecisionId: null,
+      engineeringChecks: [...D1_RELEASE_CHECK_IDS],
       liveExecutionArmed: false,
     })
     await writeImmutableReleaseManifest(tempRelease, manifest)
+    await assertExactD1MaterializedReleaseTree(tempRelease, [
+      ...Object.keys(artifactHashes),
+      'release_manifest.v2.json',
+    ])
+    // D1's launcher requires the selected release tree to be non-writable by
+    // a distinct service identity. The builder runs as the trusted publisher,
+    // so remove group/world write permissions before the atomic publication.
+    // Ownership separation and protection of ancestors remain service-manager
+    // deployment prerequisites and are checked by the formal launcher.
+    await hardenD1ReleaseTree(tempRelease)
+    const releaseRootStatus = await lstat(args.releaseRoot)
+    if (releaseRootStatus.isSymbolicLink() || !releaseRootStatus.isDirectory()) {
+      throw new Error('release_root_type_forbidden')
+    }
+    await chmod(args.releaseRoot, releaseRootStatus.mode & ~0o022)
     try {
       await rename(tempRelease, finalRelease)
     } catch (error) {
@@ -305,6 +381,47 @@ export async function buildLocalRelease(
   } catch (error) {
     await rm(tempRelease, { recursive: true, force: true }).catch(() => undefined)
     throw error
+  }
+}
+
+async function assertSourceStillClean(
+  repoRoot: string,
+  expectedCommit: string,
+): Promise<void> {
+  const { stdout: commitStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+    cwd: repoRoot,
+  })
+  if (commitStdout.trim() !== expectedCommit) {
+    throw new Error('release_source_changed_during_build')
+  }
+  const { stdout } = await execFileAsync(
+    'git',
+    ['status', '--porcelain=v1', '--untracked-files=all'],
+    { cwd: repoRoot, encoding: 'buffer' },
+  )
+  const dirtyBytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout)
+  if (dirtyBytes.length !== 0) throw new Error('release_source_changed_during_build')
+}
+
+export async function verifyExecutionSidecarProtoFreshness(
+  repoRoot: string,
+  pythonOverride?: string,
+): Promise<void> {
+  const configuredPython = pythonOverride?.trim()
+    || process.env.OPENALICE_NAUTILUS_PYTHON?.trim()
+  const python = configuredPython || 'python3'
+  try {
+    await execFileAsync(
+      python,
+      [
+        '-B',
+        join(repoRoot, 'sidecars/nautilus_paper/generate_proto.py'),
+        '--check',
+      ],
+      { cwd: repoRoot },
+    )
+  } catch {
+    throw new Error('execution_sidecar_proto_freshness_check_failed')
   }
 }
 
@@ -348,6 +465,47 @@ export async function copyReleaseTree(source: string, destination: string): Prom
     if (REGENERABLE_RELEASE_CACHE_NAMES.has(entry)) continue
     await copyReleaseTree(join(source, entry), join(destination, entry))
   }
+}
+
+export async function copyHashBoundD1Evidence(
+  source: string,
+  destination: string,
+  expectedSha256: string,
+  label: string,
+): Promise<void> {
+  await copyReleaseTree(source, destination)
+  if (await sha256File(destination) !== expectedSha256) {
+    throw new Error(`d1_release_evidence_changed_during_copy:${label}`)
+  }
+}
+
+export async function copyExecutionSidecarRuntimeTree(
+  repoRoot: string,
+  releaseRoot: string,
+): Promise<void> {
+  const sourceRoot = resolve(repoRoot)
+  const destinationRoot = resolve(releaseRoot)
+  for (const relativePath of EXECUTION_SIDECAR_RUNTIME_COPY_FILES) {
+    const source = resolve(sourceRoot, relativePath)
+    const destination = resolve(destinationRoot, relativePath)
+    assertWithin(sourceRoot, source)
+    assertWithin(destinationRoot, destination)
+    await copyReleaseTree(source, destination)
+  }
+}
+
+/** Remove group/world write permission without changing executable bits. */
+export async function hardenD1ReleaseTree(path: string): Promise<void> {
+  const status = await lstat(path)
+  if (status.isSymbolicLink()) throw new Error(`release_artifact_symlink_forbidden:${path}`)
+  if (status.isDirectory()) {
+    for (const entry of await readdir(path)) {
+      await hardenD1ReleaseTree(join(path, entry))
+    }
+  } else if (!status.isFile()) {
+    throw new Error(`release_artifact_type_forbidden:${path}`)
+  }
+  await chmod(path, status.mode & ~0o022)
 }
 
 /**
@@ -401,6 +559,72 @@ export async function collectArtifactHashes(
   return out
 }
 
+/**
+ * Inspect the actual temporary release tree before its hashes or manifest are
+ * created.  This deliberately does not use the hash collector because that
+ * collector skips regenerable caches; a cache injected by a deploy tool must
+ * fail the D1 build rather than silently disappear from the attestation.
+ */
+export async function assertNoForbiddenD1ReleaseTree(root: string): Promise<void> {
+  const resolvedRoot = await realpath(resolve(root))
+  await walk(resolvedRoot)
+
+  async function walk(current: string): Promise<void> {
+    const status = await lstat(current)
+    if (status.isSymbolicLink()) {
+      throw new Error(`release_artifact_symlink_forbidden:${current}`)
+    }
+    if (!status.isDirectory()) {
+      if (!status.isFile()) throw new Error(`release_artifact_type_forbidden:${current}`)
+      assertAllowed(current)
+      return
+    }
+    for (const entry of await readdir(current)) {
+      await walk(resolve(current, entry))
+    }
+  }
+
+  function assertAllowed(path: string): void {
+    const relativePath = relative(resolvedRoot, path).replaceAll('\\', '/')
+    const reason = d1ForbiddenReleasePath(relativePath)
+    if (reason) throw new Error(`d1_release_forbidden_artifact:${relativePath}:${reason}`)
+  }
+}
+
+/** Seal only the exact hash-bound closure plus the V2 manifest itself. */
+export async function assertExactD1MaterializedReleaseTree(
+  root: string,
+  declaredPaths: Iterable<string>,
+): Promise<void> {
+  const resolvedRoot = await realpath(resolve(root))
+  const declared = new Set(declaredPaths)
+  await walk(resolvedRoot)
+
+  async function walk(directory: string): Promise<boolean> {
+    let hasDeclaredDescendant = false
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const child = resolve(directory, entry.name)
+      const childRelative = relative(resolvedRoot, child).replaceAll('\\', '/')
+      if (entry.isSymbolicLink()) {
+        throw new Error(`release_artifact_symlink_forbidden:${childRelative}`)
+      }
+      if (entry.isDirectory()) {
+        if (await walk(child)) hasDeclaredDescendant = true
+        continue
+      }
+      if (!entry.isFile()) throw new Error(`release_artifact_type_forbidden:${childRelative}`)
+      if (!declared.has(childRelative)) {
+        throw new Error(`d1_release_materialized_artifact_not_declared:${childRelative}`)
+      }
+      hasDeclaredDescendant = true
+    }
+    if (directory !== resolvedRoot && !hasDeclaredDescendant) {
+      throw new Error(`d1_release_materialized_directory_not_declared:${relative(resolvedRoot, directory)}`)
+    }
+    return hasDeclaredDescendant
+  }
+}
+
 async function collectFiles(root: string, path: string, files: Set<string>): Promise<void> {
   const stat = await lstat(path)
   if (stat.isSymbolicLink()) throw new Error(`release_artifact_symlink_forbidden:${path}`)
@@ -414,18 +638,6 @@ async function collectFiles(root: string, path: string, files: Set<string>): Pro
     const child = resolve(path, entry)
     assertWithin(root, child)
     await collectFiles(root, child, files)
-  }
-}
-
-async function discoverReceiptPaths(dir: string): Promise<string[]> {
-  try {
-    return (await readdir(dir))
-      .filter((name) => name.endsWith('.validation_receipt.v1.json'))
-      .map((name) => join(dir, name))
-      .sort()
-  } catch (error) {
-    if (isEnoent(error)) return []
-    throw error
   }
 }
 
@@ -452,6 +664,13 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (['1', 'true', 'yes', 'on'].includes(value.toLowerCase())) return true
   if (['0', 'false', 'no', 'off'].includes(value.toLowerCase())) return false
   throw new Error(`invalid boolean: ${value}`)
+}
+
+function hasExactD1CheckIds(values: readonly string[]): boolean {
+  if (values.length !== D1_RELEASE_CHECK_IDS.length) return false
+  const actual = new Set(values)
+  return actual.size === D1_RELEASE_CHECK_IDS.length
+    && D1_RELEASE_CHECK_IDS.every((checkId) => actual.has(checkId))
 }
 
 function assertWithin(parent: string, child: string): void {

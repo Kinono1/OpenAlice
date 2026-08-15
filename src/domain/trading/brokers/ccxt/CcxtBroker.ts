@@ -55,14 +55,8 @@ import {
   defaultCancelOrderById,
 } from './overrides.js'
 
-const CCXT_CONTROLLED_WRITE_SCOPE = Symbol('openalice.ccxt.controlled_write_scope')
 const CCXT_WRITE_GUARD_ERROR =
-  'SECURITY: ccxt broker direct write is forbidden outside controlled execution bridge in non-test runtime'
-
-export interface CcxtControlledWriteScope {
-  readonly [CCXT_CONTROLLED_WRITE_SCOPE]: true
-  readonly reason: string
-}
+  'SECURITY: ccxt broker direct write is forbidden in non-test runtime'
 
 /** Map IBKR orderType codes to CCXT order type strings. */
 function ibkrOrderTypeToCcxt(orderType: string): string {
@@ -324,7 +318,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private exchangeName: string
   private initialized = false
   private overrides: CcxtExchangeOverrides
-  private controlledWriteDepth = 0
+  private readonly testRuntimeNativeWritesAllowed: boolean
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
@@ -336,6 +330,9 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
     this.sandbox = config.sandbox
     this.demoTrading = !!config.demoTrading
+    // Capture once at construction; later environment mutation cannot turn a
+    // production broker instance into a native writer.
+    this.testRuntimeNativeWritesAllowed = process.env.NODE_ENV === 'test'
 
     const exchanges = ccxt as unknown as Record<string, new (opts: Record<string, unknown>) => Exchange>
     const ExchangeClass = exchanges[config.exchange]
@@ -379,28 +376,6 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   isPaperEnvironment(): boolean {
     return this.sandbox || this.demoTrading
-  }
-
-  createControlledWriteScope(reason: string): CcxtControlledWriteScope {
-    return {
-      [CCXT_CONTROLLED_WRITE_SCOPE]: true,
-      reason,
-    }
-  }
-
-  async withControlledWriteScope<T>(
-    scope: CcxtControlledWriteScope,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    if (!scope?.[CCXT_CONTROLLED_WRITE_SCOPE]) {
-      throw new BrokerError('CONFIG', 'Invalid CCXT controlled write scope')
-    }
-    this.controlledWriteDepth += 1
-    try {
-      return await fn()
-    } finally {
-      this.controlledWriteDepth -= 1
-    }
   }
 
   // ---- Lifecycle ----
@@ -1301,7 +1276,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   }
 
   private checkDirectWriteAllowed(operation: string): PlaceOrderResult | null {
-    if (process.env.NODE_ENV === 'test' || this.controlledWriteDepth > 0) {
+    if (this.testRuntimeNativeWritesAllowed) {
       return null
     }
 

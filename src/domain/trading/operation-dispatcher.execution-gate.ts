@@ -3,6 +3,7 @@ import { sha256Canonical } from '../../sidecar/contracts.js'
 import {
   issueAndVerifyExecutionPermit,
   type ExecutionPermitAction,
+  type ExecutionPermitRequest,
   type ExecutionPermitV1,
 } from './execution-permit.js'
 import type {
@@ -22,8 +23,16 @@ export interface BrokerWriteAuthorizationInput {
   completedChecks: string[]
 }
 
+export type BrokerWriteAuthorizationContext =
+  | {
+      kind: 'execution_permit_v1'
+      permit: ExecutionPermitV1
+      request: ExecutionPermitRequest
+    }
+  | { kind: 'test_bypass' }
+
 export type BrokerWriteAuthorization =
-  | { allowed: true; permit: ExecutionPermitV1 | null }
+  | { allowed: true; context: BrokerWriteAuthorizationContext }
   | { allowed: false; reasonCodes: string[] }
 
 export const executionReceiptV1Schema = z.object({
@@ -54,7 +63,7 @@ export async function authorizeBrokerWrite(
   input: BrokerWriteAuthorizationInput,
 ): Promise<BrokerWriteAuthorization> {
   if (options.allowTestExecutionPermitBypass && process.env.NODE_ENV === 'test') {
-    return { allowed: true, permit: null }
+    return { allowed: true, context: { kind: 'test_bypass' } }
   }
   if (!options.executionAuthorityProvider) {
     const reasonCodes = ['execution_authority_provider_missing']
@@ -67,8 +76,9 @@ export async function authorizeBrokerWrite(
     return { allowed: false, reasonCodes }
   }
 
+  const now = new Date()
   const freshness = await verifyFreshExecutionState(engine, input.symbol, {
-    now: new Date(),
+    now,
     maxMarketDataAgeMs: options.maxExecutionMarketDataAgeMs,
   })
   if (!freshness.ok) {
@@ -76,35 +86,46 @@ export async function authorizeBrokerWrite(
     return { allowed: false, reasonCodes: freshness.reasonCodes }
   }
 
+  const request: ExecutionPermitRequest = {
+    intentId: input.intentId,
+    action: input.action,
+    riskReducing: input.riskReducing,
+    accountId: options.accountId,
+    accountMode: options.accountMode,
+    symbol: input.symbol,
+    ...(input.side ? { side: input.side } : {}),
+    ...(input.notionalUsd !== undefined ? { notionalUsd: input.notionalUsd } : {}),
+    ticketId: input.ticketId,
+    idempotencyKey: input.idempotencyKey,
+    completedChecks: sortedUnique([
+      ...input.completedChecks,
+      'account_fresh',
+      'authority_fresh',
+      'market_data_fresh',
+      'positions_fresh',
+    ]),
+    now,
+    ...(options.executionPermitTtlMs !== undefined
+      ? { ttlMs: options.executionPermitTtlMs }
+      : {}),
+  }
   const decision = await issueAndVerifyExecutionPermit(
     options.executionAuthorityProvider,
-    {
-      intentId: input.intentId,
-      action: input.action,
-      riskReducing: input.riskReducing,
-      accountId: options.accountId,
-      accountMode: options.accountMode,
-      symbol: input.symbol,
-      side: input.side,
-      notionalUsd: input.notionalUsd,
-      ticketId: input.ticketId,
-      idempotencyKey: input.idempotencyKey,
-      completedChecks: sortedUnique([
-        ...input.completedChecks,
-        'account_fresh',
-        'authority_fresh',
-        'market_data_fresh',
-        'positions_fresh',
-      ]),
-      ttlMs: options.executionPermitTtlMs,
-    },
+    request,
   )
   if (!decision.allowed) {
     await recordExecutionReceipt(options, input, 'rejected', decision.reasonCodes)
     return decision
   }
   await recordExecutionReceipt(options, input, 'permitted', [], decision.permit)
-  return { allowed: true, permit: decision.permit }
+  return {
+    allowed: true,
+    context: {
+      kind: 'execution_permit_v1',
+      permit: decision.permit,
+      request,
+    },
+  }
 }
 
 export async function recordExecutionReceipt(

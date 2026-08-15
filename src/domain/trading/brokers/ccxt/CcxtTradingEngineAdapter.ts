@@ -36,7 +36,7 @@ import { DecisionTicketStore } from '../../decision-ticket.js'
 import { getExchangeCapability } from '../../exchange-capabilities.js'
 import { TradeIdempotencyStore } from '../../idempotency-store.js'
 import { IntentLedger } from '../../intent-ledger.js'
-import type { TradeIntent } from '../../intent-ledger.js'
+import type { IntentResult, TradeIntent } from '../../intent-ledger.js'
 import { KillSwitch } from '../../kill-switch.js'
 import type { Operation as GitOperation } from '../../git/types.js'
 import type { Order as GitOrder } from '@traderalice/ibkr'
@@ -63,7 +63,14 @@ import {
 import {
   createEnvironmentExecutionAuthorityProvider,
   type CryptoExecutionMode,
+  type ExecutionAuthorityProvider,
 } from '../../execution-permit.js'
+import type {
+  AuthorizedBrokerWriter,
+  BrokerWriteRoute,
+} from '../../broker-write-router.js'
+import type { ExecutionSidecarReadModel } from '../../execution-sidecar-read-model.js'
+import type { ExecutionLifecycleReadModel } from '../../execution-lifecycle-read-model.js'
 
 export type { CryptoExecutionMode } from '../../execution-permit.js'
 export type KillSwitchDefaultPolicy = 'block_new_only' | 'block_all'
@@ -119,7 +126,26 @@ export interface CcxtExecutionRuntime {
   strategyRuntimeIntegrationEnabled: boolean
   strategyFreezeActive: boolean
   strategyMaxActionDuringFreeze?: 'reduce' | 'exit' | 'no-trade' | 'hold'
+  brokerWriteRoute: BrokerWriteRoute | 'disabled'
 }
+
+export type CcxtBrokerWriteAssembly =
+  | {
+      route: 'sidecar'
+      writer: AuthorizedBrokerWriter
+      readModel?: ExecutionSidecarReadModel
+      /** Diagnostic replay only; never authorizes terminal idempotency release. */
+      lifecycleReadModel?: ExecutionLifecycleReadModel
+      /** The exact authority source shared by the V1 gate and V2 signer. */
+      executionAuthorityProvider?: ExecutionAuthorityProvider
+      /** Releases the UDS client during account removal or reconnect. */
+      close?: () => void | Promise<void>
+    }
+  | {
+      route: 'native'
+      /** Native mutation exists only for isolated tests, never production. */
+      testOnly: true
+    }
 
 export const DEFAULT_CRYPTO_EXECUTION_CONFIG: CryptoExecutionConfig = {
   mode: 'paper_only',
@@ -202,6 +228,9 @@ function toGitOrder(contract: Contract, req: CryptoPlaceOrderRequest): Order {
   if (req.type === 'limit' && typeof req.price === 'number' && req.price > 0) {
     order.lmtPrice = req.price
   }
+  if (req.timeInForce) {
+    order.tif = req.timeInForce
+  }
 
   return order
 }
@@ -234,7 +263,7 @@ function toCryptoTicker(symbol: string, quote: Quote): CryptoTicker {
   }
 }
 
-function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
+export function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
   switch (op.action) {
     case 'placeOrder': {
       if (!isSupportedCcxtOrderType(op.order)) {
@@ -266,6 +295,7 @@ function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
           size,
           usd_size,
           price,
+          timeInForce: toDispatcherTimeInForce(op.order.tif),
           reduceOnly: false,
         },
       }
@@ -303,12 +333,50 @@ function mapGitOperationToCrypto(op: GitOperation): CryptoOperation | null {
   }
 }
 
+function toDispatcherTimeInForce(
+  value: string,
+): CryptoPlaceOrderRequest['timeInForce'] {
+  return value === 'GTC' || value === 'IOC' || value === 'FOK'
+    ? value
+    : undefined
+}
+
 function canBypassDisabledDispatcher(op: GitOperation): boolean {
   return op.action === 'syncOrders'
 }
 
 function isTestRuntime(): boolean {
   return process.env.NODE_ENV === 'test'
+}
+
+function resolveCcxtBrokerWriteAssembly(
+  input: { broker: CcxtBroker; brokerWriteAssembly?: CcxtBrokerWriteAssembly },
+  config: CryptoExecutionConfig,
+): CcxtBrokerWriteAssembly {
+  const assembly = input.brokerWriteAssembly
+  if (!assembly) {
+    if (isTestRuntime()) return { route: 'native', testOnly: true }
+    throw new Error('SECURITY: production CCXT execution requires an explicit sidecar writer')
+  }
+  if (assembly.route === 'native') {
+    if (!assembly.testOnly || !isTestRuntime()) {
+      throw new Error('SECURITY: native CCXT broker writes are test-only')
+    }
+    return assembly
+  }
+  if (!assembly.writer) {
+    throw new Error('SECURITY: sidecar writer is required')
+  }
+  if (!isTestRuntime() && typeof assembly.executionAuthorityProvider !== 'function') {
+    throw new Error('SECURITY: production execution sidecar requires a shared authority provider')
+  }
+  if (config.mode !== 'paper_only') {
+    throw new Error('SECURITY: execution sidecar MVP is paper-only')
+  }
+  if (input.broker.meta.exchange !== 'okx') {
+    throw new Error('SECURITY: execution sidecar MVP requires an OKX broker identity')
+  }
+  return assembly
 }
 
 function estimateRequestedNotionalUsd(
@@ -611,21 +679,56 @@ async function reconcilePendingTradingState(input: {
   intentLedger: IntentLedger
   idempotencyStore: TradeIdempotencyStore
   eventLog?: EventLog
+  brokerWriteAssembly: CcxtBrokerWriteAssembly
 }): Promise<void> {
   const entries = await input.intentLedger.readAll()
   const intents = new Map<string, TradeIntent>()
-  const resolvedIntentIds = new Set<string>()
+  const latestResults = new Map<string, IntentResult>()
   for (const entry of entries) {
     if (entry.type === 'intent') {
       const intent = entry.data as TradeIntent
       intents.set(intent.intentId, intent)
     } else if (entry.type === 'result') {
-      resolvedIntentIds.add(entry.data.intentId)
+      const result = entry.data as IntentResult
+      latestResults.set(result.intentId, result)
     }
   }
 
   for (const intent of intents.values()) {
-    if (resolvedIntentIds.has(intent.intentId)) {
+    const latestResult = latestResults.get(intent.intentId)
+    if (latestResult && latestResult.status !== 'unknown') {
+      continue
+    }
+    if (input.brokerWriteAssembly.route === 'sidecar') {
+      const commandId = latestResult?.commandId
+      let durableAdmission: 'found' | 'missing' | 'unavailable' | 'not_queried' = 'not_queried'
+      if (commandId && input.brokerWriteAssembly.readModel) {
+        try {
+          const admission = await input.brokerWriteAssembly.readModel.getCommand(commandId)
+          durableAdmission = admission.found ? 'found' : 'missing'
+        } catch {
+          durableAdmission = 'unavailable'
+        }
+      }
+      if (intent.idempotencyKey) {
+        await input.idempotencyStore.markUnresolved({
+          key: intent.idempotencyKey,
+          error: latestResult?.error ?? 'startup_sidecar_reconcile_pending',
+          symbol: intent.symbol,
+          ticketId: intent.ticketId,
+          commandId,
+          permitV2Id: latestResult?.permitV2Id,
+          acceptedSequence: latestResult?.acceptedSequence,
+          clientOrderId: latestResult?.clientOrderId ?? intent.clientOrderId,
+        })
+      }
+      await input.eventLog?.append('execution.sidecar_reconcile_pending', {
+        intentId: intent.intentId,
+        idempotencyKey: intent.idempotencyKey,
+        commandId,
+        durableAdmission,
+        brokerOutcomeTerminal: false,
+      }).catch(() => {})
       continue
     }
     let foundOrderId: string | null = null
@@ -644,7 +747,22 @@ async function reconcilePendingTradingState(input: {
 
   const records = await input.idempotencyStore.listRecords()
   for (const record of records) {
-    if (record.status !== 'in_progress') {
+    if (record.status !== 'in_progress' && record.status !== 'unresolved') {
+      continue
+    }
+    if (input.brokerWriteAssembly.route === 'sidecar') {
+      if (record.status === 'in_progress') {
+        await input.idempotencyStore.markUnresolved({
+          key: record.key,
+          error: record.error ?? 'startup_sidecar_reconcile_pending',
+          symbol: record.symbol,
+          ticketId: record.ticketId,
+          commandId: record.commandId,
+          permitV2Id: record.permitV2Id,
+          acceptedSequence: record.acceptedSequence,
+          clientOrderId: record.clientOrderId,
+        })
+      }
       continue
     }
     let foundOrderId: string | null = null
@@ -661,14 +779,10 @@ async function reconcilePendingTradingState(input: {
 }
 
 export class CcxtTradingEngineAdapter implements ICryptoTradingEngine {
-  private readonly writeScope: ReturnType<CcxtBroker['createControlledWriteScope']>
-
   constructor(
     private readonly broker: CcxtBroker,
     private readonly productionRiskPreflightPolicy?: ProductionRiskPreflightPolicyLike | null,
-  ) {
-    this.writeScope = broker.createControlledWriteScope('ccxt_trading_engine_adapter')
-  }
+  ) {}
 
   async placeOrder(
     req: CryptoPlaceOrderRequest,
@@ -707,14 +821,11 @@ export class CcxtTradingEngineAdapter implements ICryptoTradingEngine {
       }
     }
 
-    const result = await this.broker.withControlledWriteScope(
-      this.writeScope,
-      () => this.broker.placeOrder(
-        contract,
-        toGitOrder(contract, req),
-        undefined,
-        Object.keys(extraParams).length > 0 ? extraParams : undefined,
-      ),
+    const result = await this.broker.placeOrder(
+      contract,
+      toGitOrder(contract, req),
+      undefined,
+      Object.keys(extraParams).length > 0 ? extraParams : undefined,
     )
 
     const orderStatus = toCryptoOrderStatus(result)
@@ -788,10 +899,7 @@ export class CcxtTradingEngineAdapter implements ICryptoTradingEngine {
   }
 
   async cancelOrder(orderId: string): Promise<boolean> {
-    const result = await this.broker.withControlledWriteScope(
-      this.writeScope,
-      () => this.broker.cancelOrder(orderId),
-    )
+    const result = await this.broker.cancelOrder(orderId)
     return result.success
   }
 
@@ -849,9 +957,20 @@ export async function createCcxtExecutionBridge(input: {
   eventLog?: EventLog
   cryptoExecution?: Partial<CryptoExecutionConfig>
   strategyConfig?: StrategyConfig
+  brokerWriteAssembly?: CcxtBrokerWriteAssembly
 }): Promise<CcxtExecutionBridge> {
   const config = resolveCryptoExecutionConfig(input.cryptoExecution)
+  const brokerWriteAssembly = config.enableCryptoDispatcher
+    ? resolveCcxtBrokerWriteAssembly(input, config)
+    : undefined
   const executionPermitTestBypass = isTestRuntime()
+  const executionAuthorityProvider = executionPermitTestBypass
+    ? undefined
+    : brokerWriteAssembly?.route === 'sidecar'
+      ? brokerWriteAssembly.executionAuthorityProvider
+      : createEnvironmentExecutionAuthorityProvider({
+          admissionDecisionPath: config.admissionDecisionPath,
+        })
   const effectiveRequireDecisionTicket = executionPermitTestBypass
     ? config.requireDecisionTicket
     : true
@@ -892,6 +1011,7 @@ export async function createCcxtExecutionBridge(input: {
     strategyRuntimeIntegrationEnabled,
     strategyFreezeActive: evaluateStrategyFreeze()?.active ?? false,
     strategyMaxActionDuringFreeze: evaluateStrategyFreeze()?.maxActionDuringFreeze,
+    brokerWriteRoute: brokerWriteAssembly?.route ?? 'disabled',
   }
 
   if (!config.enableCryptoDispatcher) {
@@ -928,6 +1048,7 @@ export async function createCcxtExecutionBridge(input: {
     intentLedger,
     idempotencyStore,
     eventLog: input.eventLog,
+    brokerWriteAssembly: brokerWriteAssembly!,
   })
   const ticketStore = new DecisionTicketStore({
     required: effectiveRequireDecisionTicket,
@@ -949,14 +1070,14 @@ export async function createCcxtExecutionBridge(input: {
     operationTimeoutMs: config.operationTimeoutMs,
     eventLog: input.eventLog,
     productionRiskPreflightPolicy: config.productionRiskPreflightPolicy,
-    executionAuthorityProvider: executionPermitTestBypass
-      ? undefined
-      : createEnvironmentExecutionAuthorityProvider({
-          admissionDecisionPath: config.admissionDecisionPath,
-        }),
+    executionAuthorityProvider,
     accountId: input.accountId,
     accountMode: config.mode,
     allowTestExecutionPermitBypass: executionPermitTestBypass,
+    brokerWriteRoute: brokerWriteAssembly!.route,
+    authorizedBrokerWriter: brokerWriteAssembly!.route === 'sidecar'
+      ? brokerWriteAssembly!.writer
+      : undefined,
     afterPlaceOrder: async ({ request, expectedPrice, result }) => {
       const observation = slippageProtection.observe({
         symbol: request.symbol,
@@ -1195,6 +1316,9 @@ export async function createCcxtExecutionBridge(input: {
       ticketStore.destroy()
       await intentLedger.close()
       killSwitchStore.close()
+      if (brokerWriteAssembly?.route === 'sidecar') {
+        await brokerWriteAssembly.close?.()
+      }
     },
   }
 }

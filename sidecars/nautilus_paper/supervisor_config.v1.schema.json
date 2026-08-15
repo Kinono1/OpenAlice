@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openalice_paper_supervisor_config.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mode", "runRoot", "ledgerPath", "simulatorDatabasePath", "statusPath", "policyPath", "permitPublicKeyPath", "capabilityAuthorityPrivateKeyPath", "receiptSigningPrivateKeyPath", "sourceAttestationPrivateKeyPath", "runId", "schemaHash", "releaseManifestHash", "proofValiditySeconds", "leaseName", "ttlSeconds", "queueSize", "startupTimeoutSeconds", "shutdownTimeoutSeconds"],
+  "properties": {
+    "schemaVersion": {"const": "openalice_paper_supervisor_config.v1"},
+    "mode": {"const": "PAPER_LOCAL"},
+    "runRoot": {"type": "string", "pattern": "^/"},
+    "ledgerPath": {"type": "string", "pattern": "^/"},
+    "simulatorDatabasePath": {"type": "string", "pattern": "^/"},
+    "statusPath": {"type": "string", "pattern": "^/"},
+    "policyPath": {"type": "string", "pattern": "^/"},
+    "permitPublicKeyPath": {"type": "string", "pattern": "^/"},
+    "capabilityAuthorityPrivateKeyPath": {"type": "string", "pattern": "^/"},
+    "receiptSigningPrivateKeyPath": {"type": "string", "pattern": "^/"},
+    "sourceAttestationPrivateKeyPath": {"type": "string", "pattern": "^/"},
+    "runId": {"type": "string", "minLength": 1, "maxLength": 300},
+    "schemaHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "releaseManifestHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "proofValiditySeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 3600},
+    "leaseName": {"type": "string", "minLength": 1, "maxLength": 200},
+    "ttlSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 3600},
+    "queueSize": {"type": "integer", "minimum": 1, "maximum": 4096},
+    "startupTimeoutSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 120},
+    "shutdownTimeoutSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 120}
+  }
+}

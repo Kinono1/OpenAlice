@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "openalice_nautilus_artifacts.v1",
+  "resolvedAt": "2026-08-15T01:35:00.000+08:00",
+  "package": "nautilus_trader",
+  "version": "1.231.0",
+  "developmentStatus": "Beta",
+  "requiresPython": ">=3.12,<3.15",
+  "license": "LGPL-3.0-or-later",
+  "releaseUrl": "https://github.com/nautechsystems/nautilus_trader/releases/tag/v1.231.0",
+  "indexMetadataUrl": "https://pypi.org/pypi/nautilus_trader/1.231.0/json",
+  "wheels": [
+    {
+      "platform": "macOS-26-arm64",
+      "python": "cp313",
+      "filename": "nautilus_trader-1.231.0-cp313-cp313-macosx_26_0_arm64.whl",
+      "sha256": "b9312bd17cb068bd9407cf360103f7b23c09aaf6118a6321da3def2fe8edaa3d"
+    },
+    {
+      "platform": "manylinux_2_35-x86_64",
+      "python": "cp313",
+      "filename": "nautilus_trader-1.231.0-cp313-cp313-manylinux_2_35_x86_64.whl",
+      "sha256": "429ea61c33a32cd8498d39e0ea95ebaa12b8dbfc25c71fbaba845f2b05e8ab91"
+    },
+    {
+      "platform": "manylinux_2_35-aarch64",
+      "python": "cp313",
+      "filename": "nautilus_trader-1.231.0-cp313-cp313-manylinux_2_35_aarch64.whl",
+      "sha256": "e536d7c925b3c475bef4f3f8e75196944f6b8758710e41da1109b8b837001690"
+    }
+  ],
+  "admission": {
+    "allowedModes": [
+      "PAPER_LOCAL",
+      "PAPER_EXCHANGE"
+    ],
+    "liveTradingAllowed": false,
+    "liveExecutionArmed": false,
+    "installState": "not_installed",
+    "notes": "Hashes pin only the top-level wheel artifacts. Transitive dependency locking and release-attestation verification remain required before installation or execution."
+  }
+}

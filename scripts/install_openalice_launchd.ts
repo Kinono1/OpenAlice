@@ -1,5 +1,4 @@
-import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
@@ -8,7 +7,7 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 const DEFAULT_LLM_API_KEY_ENV = 'DEEPSEEK_API_KEY'
 
-interface CliArgs {
+export interface CliArgs {
   label: string
   plistPath: string
   scriptPath: string
@@ -57,26 +56,37 @@ interface LaunchdConfig {
   openaliceLegacyWipRoot?: string
   openaliceResearchWebPort?: string
   openaliceResearchMcpPort?: string
+  openalicePaperLocalSupervisorConfig?: string
+  openaliceNode?: string
+  openaliceNodeSha256?: string
+  openalicePaperLocalMjsSha256?: string
+  openaliceNautilusPython?: string
+  openaliceReleasePublisherUid?: string
+  launcherKind?: LaunchSourceKind
+}
+
+type LaunchSourceKind = 'legacy' | 'paper_local'
+
+export interface LaunchdInstallationPlan {
+  status: 'ready' | 'plan_only'
+  sourceKind: LaunchSourceKind
+  config: LaunchdConfig
+  plist: string
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
-  const config = buildLaunchdConfig({
-    label: args.label,
-    scriptPath: args.scriptPath,
-    workingDirectory: args.workingDirectory,
-    logPath: args.logPath,
-    errorLogPath: args.errorLogPath,
-  })
-  const plist = renderLaunchdPlist(config)
+  const plan = await prepareLaunchdInstallationPlan(args)
 
   if (args.dryRun) {
     console.log(
       JSON.stringify(
         {
+          status: plan.status,
           plistPath: resolve(args.plistPath),
-          config,
-          plist,
+          sourceKind: plan.sourceKind,
+          config: plan.config,
+          plist: plan.plist,
         },
         null,
         2,
@@ -85,17 +95,56 @@ async function main(): Promise<void> {
     return
   }
 
+  if (plan.status === 'plan_only') {
+    throw new Error('paper_local_two_identity_deployment_required')
+  }
+
   await mkdir(dirname(resolve(args.plistPath)), { recursive: true })
   await mkdir(dirname(resolve(args.logPath)), { recursive: true })
   await mkdir(dirname(resolve(args.errorLogPath)), { recursive: true })
   await materializeStableLaunchWrapper(args.scriptPath, args.sourceReleasePath)
-  await writeFile(resolve(args.plistPath), plist, 'utf-8')
+  await writeFile(resolve(args.plistPath), plan.plist, 'utf-8')
 
   if (args.launch) {
     await reloadLaunchAgent(args.label, resolve(args.plistPath))
   }
 
   console.log(resolve(args.plistPath))
+}
+
+/**
+ * Generic launchd installation is allowed to preview a D1 V2 release, but
+ * cannot materialize or launch it.  A separate two-identity deployer must
+ * produce the publisher/service receipts before any V2 mutation is allowed.
+ */
+export async function prepareLaunchdInstallationPlan(
+  args: CliArgs,
+): Promise<LaunchdInstallationPlan> {
+  const sourceRoot = resolve(args.sourceReleasePath ?? '.')
+  const sourceKind = await classifyLaunchSource(
+    sourceRoot,
+    args.sourceReleasePath !== undefined,
+  )
+  if (
+    basename(args.scriptPath) === 'launch_nautilus_paper.sh'
+    && sourceKind !== 'paper_local'
+  ) {
+    throw new Error('paper_local_release_source_required')
+  }
+  const config = buildLaunchdConfig({
+    label: args.label,
+    scriptPath: args.scriptPath,
+    workingDirectory: args.workingDirectory,
+    logPath: args.logPath,
+    errorLogPath: args.errorLogPath,
+    launcherKind: sourceKind,
+  })
+  return {
+    status: sourceKind === 'paper_local' ? 'plan_only' : 'ready',
+    sourceKind,
+    config,
+    plist: renderLaunchdPlist(config),
+  }
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -154,16 +203,40 @@ function buildLaunchdConfig(input: {
   workingDirectory?: string
   logPath: string
   errorLogPath: string
+  launcherKind?: LaunchSourceKind
 }): LaunchdConfig {
   const scriptPath = resolve(input.scriptPath)
+  const launcherKind = requireConsistentLauncherKind(scriptPath, input.launcherKind)
   const workingDirectory = resolve(input.workingDirectory ?? join(dirname(scriptPath), '..'))
   const homeEnv = process.env.HOME ?? '/Users/kino'
-  return {
+  const common = {
     label: input.label,
     scriptPath,
     workingDirectory,
     logPath: resolve(input.logPath),
     errorLogPath: resolve(input.errorLogPath),
+  }
+  if (launcherKind === 'paper_local') {
+    // PAPER_LOCAL must never inherit the general application's provider,
+    // proxy, credential-loader, data-root, or research-monitor environment.
+    // The shell consumes only these explicit non-secret pins and then starts
+    // Node through its own env -i boundary.
+    return {
+      ...common,
+      pathEnv: '/usr/bin:/bin',
+      homeEnv: '/var/empty',
+      openaliceReleaseDir: process.env.OPENALICE_RELEASE_DIR,
+      openalicePaperLocalSupervisorConfig: process.env.OPENALICE_PAPER_LOCAL_SUPERVISOR_CONFIG,
+      openaliceNode: process.env.OPENALICE_NODE,
+      openaliceNodeSha256: process.env.OPENALICE_NODE_SHA256,
+      openalicePaperLocalMjsSha256: process.env.OPENALICE_PAPER_LOCAL_MJS_SHA256,
+      openaliceNautilusPython: process.env.OPENALICE_NAUTILUS_PYTHON,
+      openaliceReleasePublisherUid: process.env.OPENALICE_RELEASE_PUBLISHER_UID,
+      launcherKind,
+    }
+  }
+  return {
+    ...common,
     pathEnv: process.env.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     homeEnv,
     nodeExtraCaCerts: process.env.NODE_EXTRA_CA_CERTS,
@@ -195,10 +268,21 @@ function buildLaunchdConfig(input: {
     openaliceLegacyWipRoot: process.env.OPENALICE_LEGACY_WIP_ROOT,
     openaliceResearchWebPort: process.env.OPENALICE_RESEARCH_WEB_PORT,
     openaliceResearchMcpPort: process.env.OPENALICE_RESEARCH_MCP_PORT,
+    openalicePaperLocalSupervisorConfig: process.env.OPENALICE_PAPER_LOCAL_SUPERVISOR_CONFIG,
+    openaliceNode: process.env.OPENALICE_NODE,
+    openaliceNodeSha256: process.env.OPENALICE_NODE_SHA256,
+    openalicePaperLocalMjsSha256: process.env.OPENALICE_PAPER_LOCAL_MJS_SHA256,
+    openaliceNautilusPython: process.env.OPENALICE_NAUTILUS_PYTHON,
+    openaliceReleasePublisherUid: process.env.OPENALICE_RELEASE_PUBLISHER_UID,
+    launcherKind,
   }
 }
 
 function renderLaunchdPlist(config: LaunchdConfig): string {
+  const launcherKind = requireConsistentLauncherKind(config.scriptPath, config.launcherKind)
+  const programInterpreter = launcherKind === 'paper_local'
+    ? '/bin/sh'
+    : '/opt/homebrew/bin/bash'
   const envEntries = [
     ['PATH', config.pathEnv],
     ['HOME', config.homeEnv],
@@ -231,6 +315,12 @@ function renderLaunchdPlist(config: LaunchdConfig): string {
     ['OPENALICE_LEGACY_WIP_ROOT', config.openaliceLegacyWipRoot],
     ['OPENALICE_RESEARCH_WEB_PORT', config.openaliceResearchWebPort],
     ['OPENALICE_RESEARCH_MCP_PORT', config.openaliceResearchMcpPort],
+    ['OPENALICE_PAPER_LOCAL_SUPERVISOR_CONFIG', config.openalicePaperLocalSupervisorConfig],
+    ['OPENALICE_NODE', config.openaliceNode],
+    ['OPENALICE_NODE_SHA256', config.openaliceNodeSha256],
+    ['OPENALICE_PAPER_LOCAL_MJS_SHA256', config.openalicePaperLocalMjsSha256],
+    ['OPENALICE_NAUTILUS_PYTHON', config.openaliceNautilusPython],
+    ['OPENALICE_RELEASE_PUBLISHER_UID', config.openaliceReleasePublisherUid],
   ].filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
 
   for (const [key, value] of envEntries) {
@@ -249,7 +339,7 @@ function renderLaunchdPlist(config: LaunchdConfig): string {
   <string>${escapeXml(config.label)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/bash</string>
+    <string>${programInterpreter}</string>
     <string>${escapeXml(config.scriptPath)}</string>
   </array>
   <key>WorkingDirectory</key>
@@ -279,10 +369,21 @@ async function materializeStableLaunchWrapper(
   // A research cutover may keep the stable wrapper outside the frozen legacy
   // worktree.  Materialize any explicitly named stable wrapper, but never
   // overwrite a legacy `scripts/launch_openalice_main.sh` entrypoint.
-  if (basename(target) !== 'launch_openalice_current.sh') return
+  const targetName = basename(target)
+  const sourceRoot = resolve(sourceReleasePath ?? '.')
+  const sourceKind = await classifyLaunchSource(sourceRoot, sourceReleasePath !== undefined)
+  // Generic installation never materializes a V2 pair.  This is deliberately
+  // checked before inspecting or creating the target directory so that the
+  // exported API has the same zero-side-effect boundary as the CLI path.
+  if (sourceKind === 'paper_local') {
+    throw new Error('paper_local_two_identity_deployment_required')
+  }
+  if (!['launch_openalice_current.sh', 'launch_nautilus_paper.sh'].includes(targetName)) return
+  if (targetName !== 'launch_openalice_current.sh') {
+    throw new Error('legacy_stable_wrapper_required')
+  }
   const binDir = dirname(target)
   await mkdir(binDir, { recursive: true })
-  const sourceRoot = resolve(sourceReleasePath ?? '.')
   const files = [
     [join(sourceRoot, 'ops/release/launch_current.sh'), target],
     [join(sourceRoot, 'ops/release/launch_current.mjs'), resolve(binDir, 'launch_current.mjs')],
@@ -291,6 +392,60 @@ async function materializeStableLaunchWrapper(
   for (const [source, destination] of files) {
     await copyFile(source, destination)
     await chmod(destination, 0o555)
+  }
+}
+
+/**
+ * The generic API may keep its historic legacy default, but PAPER_LOCAL has
+ * no safe default: omitting its kind (or passing the wrong one) would turn a
+ * V2 wrapper into a Homebrew-bash launchd program.
+ */
+function requireConsistentLauncherKind(
+  scriptPath: string,
+  launcherKind: LaunchSourceKind | undefined,
+): LaunchSourceKind {
+  const targetName = basename(resolve(scriptPath))
+  if (targetName === 'launch_nautilus_paper.sh') {
+    if (launcherKind !== 'paper_local') {
+      throw new Error('paper_local_launcher_kind_required')
+    }
+    return 'paper_local'
+  }
+  if (launcherKind === 'paper_local') {
+    throw new Error('paper_local_stable_wrapper_required')
+  }
+  return 'legacy'
+}
+
+/**
+ * The selected immutable release controls the stable wrapper family.  A V2
+ * PAPER_LOCAL release must never be materialized behind launch_current.
+ * An unversioned local source is retained only for the legacy installer path;
+ * a specifically supplied release source must declare one manifest version.
+ */
+async function classifyLaunchSource(
+  sourceRoot: string,
+  explicitlySupplied: boolean,
+): Promise<LaunchSourceKind> {
+  const v1Path = join(sourceRoot, 'release_manifest.v1.json')
+  const v2Path = join(sourceRoot, 'release_manifest.v2.json')
+  const [v1, v2] = await Promise.all([readManifestVersion(v1Path), readManifestVersion(v2Path)])
+  if (v1 && v2) throw new Error('release_manifest_multiple_versions')
+  if (v2 === 'release_manifest.v2') return 'paper_local'
+  if (v1 === 'release_manifest.v1') return 'legacy'
+  if (v1 || v2 || explicitlySupplied) throw new Error('release_manifest_missing_or_invalid')
+  return 'legacy'
+}
+
+async function readManifestVersion(path: string): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as { schemaVersion?: unknown }
+    return typeof parsed.schemaVersion === 'string' ? parsed.schemaVersion : 'invalid'
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null
+    }
+    throw new Error('release_manifest_missing_or_invalid')
   }
 }
 

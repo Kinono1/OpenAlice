@@ -1,4 +1,9 @@
 import { defineConfig } from 'tsup'
+import { copyFile, mkdir } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const EXECUTION_PROTO_SOURCE = resolve('src/sidecar/proto/openalice_execution_v1.proto')
+const EXECUTION_PROTO_DESTINATION = resolve('dist/proto/openalice_execution_v1.proto')
 
 /**
  * Keep Node's protocol-qualified built-ins intact in the immutable runtime.
@@ -10,4 +15,10 @@ import { defineConfig } from 'tsup'
  */
 export default defineConfig({
   removeNodeProtocol: false,
+  async onSuccess() {
+    // execution-grpc-transport resolves this file relative to the emitted ESM
+    // bundle.  Treat it as a required runtime asset, not a source-only file.
+    await mkdir(resolve('dist/proto'), { recursive: true })
+    await copyFile(EXECUTION_PROTO_SOURCE, EXECUTION_PROTO_DESTINATION)
+  },
 })

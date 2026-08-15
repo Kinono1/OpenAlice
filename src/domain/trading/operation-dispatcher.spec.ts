@@ -3,6 +3,8 @@ import { createCryptoOperationDispatcher, executeCommit } from './operation-disp
 import type { ICryptoTradingEngine, CryptoPosition } from './operation-dispatcher.types.js'
 import type { Operation } from './operation-dispatcher.types.js'
 import { DecisionTicketStore } from './decision-ticket.js'
+import { executeSimpleAction } from './operation-dispatcher.simple-actions.js'
+import type { AuthorizedBrokerWriter } from './broker-write-router.js'
 import {
   READY_DENY_ONLY_PRODUCTION_RISK_POLICY,
 } from './production-risk-preflight.js'
@@ -129,6 +131,17 @@ describe('createCryptoOperationDispatcher', () => {
   beforeEach(() => {
     engine = createMockEngine()
     dispatch = createTestDispatcher(engine)
+  })
+
+  it('fails closed when the exported simple write helper lacks authorization and a writer', async () => {
+    const result = await executeSimpleAction(engine, {
+      action: 'cancelOrder', params: { orderId: 'ord-001' },
+    })
+    expect(result).toEqual({
+      success: false,
+      error: 'broker write authorization and writer required',
+    })
+    expect(engine.cancelOrder).not.toHaveBeenCalled()
   })
 
   describe('placeOrder', () => {
@@ -290,6 +303,231 @@ describe('createCryptoOperationDispatcher', () => {
         }),
       )
     })
+
+    it('poisons the place-order queue when a waiter times out, preventing later writers', async () => {
+      vi.useFakeTimers()
+      let releaseFirstRiskContext!: () => void
+      const firstRiskContext = new Promise<void>(resolve => {
+        releaseFirstRiskContext = resolve
+      })
+      const getRiskContext = vi.fn()
+        .mockImplementationOnce(async () => firstRiskContext)
+        .mockResolvedValue(undefined)
+      engine = createMockEngine()
+      dispatch = createTestDispatcher(engine, {
+        operationTimeoutMs: 1,
+        getRiskContext,
+      })
+
+      const order = (idempotencyKey: string): Operation => ({
+        action: 'placeOrder',
+        params: {
+          symbol: 'BTC/USD', side: 'buy', type: 'market', idempotencyKey,
+        },
+      })
+
+      try {
+        const first = dispatch(order('queue-poison-a'))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(getRiskContext).toHaveBeenCalledTimes(1)
+
+        const second = dispatch(order('queue-poison-b'))
+        const third = dispatch(order('queue-poison-c'))
+        await vi.advanceTimersByTimeAsync(10_001)
+        await expect(second).resolves.toEqual(expect.objectContaining({
+          success: false,
+          error: 'place-order lock queue timeout — queue poisoned; restart required before submitting another order',
+        }))
+
+        await expect(third).resolves.toEqual(expect.objectContaining({
+          success: false,
+          error: 'place-order lock queue poisoned — restart required before submitting another order',
+        }))
+        expect(engine.placeOrder).not.toHaveBeenCalled()
+
+        releaseFirstRiskContext()
+        await first
+        expect(engine.placeOrder).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('opens the dispatcher circuit when a sidecar unresolved record cannot persist', async () => {
+      let rejectUnresolved!: (error: Error) => void
+      const unresolvedWrite = new Promise<void>((_resolve, reject) => {
+        rejectUnresolved = reject
+      })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      const writer: AuthorizedBrokerWriter = {
+        placeOrder: vi.fn().mockResolvedValue({
+          kind: 'command_accepted',
+          commandId: 'a'.repeat(64),
+        }),
+        cancelOrder: vi.fn(),
+        adjustLeverage: vi.fn(),
+      }
+      const idempotencyStore = {
+        reserve: vi.fn().mockResolvedValue({ acquired: true, record: {} }),
+        finalize: vi.fn().mockResolvedValue(undefined),
+        markUnresolved: vi.fn().mockReturnValue(unresolvedWrite),
+      }
+      const dispatcherOptions = {
+        brokerWriteRoute: 'sidecar',
+        authorizedBrokerWriter: writer,
+        idempotencyStore: idempotencyStore as never,
+        accountId: 'unresolved-persistence-circuit-account',
+      } as const
+      dispatch = createTestDispatcher(engine, dispatcherOptions)
+      const order = (idempotencyKey: string): Operation => ({
+        action: 'placeOrder',
+        params: {
+          symbol: 'BTC/USD', side: 'buy', type: 'market', idempotencyKey,
+        },
+      })
+
+      try {
+        const first = dispatch(order('unresolved-persistence-fails-1'))
+        await vi.waitFor(() => {
+          expect(idempotencyStore.markUnresolved).toHaveBeenCalledTimes(1)
+        })
+        const concurrentDispatcher = createTestDispatcher(engine, dispatcherOptions)
+        const second = concurrentDispatcher(order('unresolved-persistence-fails-2'))
+        await Promise.resolve()
+        expect(writer.placeOrder).toHaveBeenCalledTimes(1)
+
+        rejectUnresolved(new Error('idempotency persistence credential must not reach caller'))
+        await expect(first).resolves.toEqual(expect.objectContaining({
+          success: false,
+          unknown: true,
+          pending: false,
+          brokerWriteOutcome: 'submission_unknown',
+          error: 'SECURITY: sidecar place-order circuit open; restart required before submitting another order',
+        }))
+        await expect(second).resolves.toEqual(expect.objectContaining({
+          success: false,
+          error: 'SECURITY: sidecar place-order circuit open; restart required before submitting another order',
+        }))
+        const replacementWriter: AuthorizedBrokerWriter = {
+          placeOrder: vi.fn().mockResolvedValue({
+            kind: 'command_accepted',
+            commandId: 'c'.repeat(64),
+          }),
+          cancelOrder: vi.fn(),
+          adjustLeverage: vi.fn(),
+        }
+        const futureDispatcher = createTestDispatcher(engine, {
+          ...dispatcherOptions,
+          authorizedBrokerWriter: replacementWriter,
+        })
+        await expect(futureDispatcher(order('unresolved-persistence-fails-3'))).resolves.toEqual(
+          expect.objectContaining({
+            success: false,
+            error: 'SECURITY: sidecar place-order circuit open; restart required before submitting another order',
+          }),
+        )
+        expect(replacementWriter.placeOrder).not.toHaveBeenCalled()
+        expect(writer.placeOrder).toHaveBeenCalledTimes(1)
+        expect(engine.placeOrder).not.toHaveBeenCalled()
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(
+          'idempotency persistence credential must not reach caller',
+        )
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    it('keeps the dispatcher usable when a sidecar unresolved record persists', async () => {
+      const writer: AuthorizedBrokerWriter = {
+        placeOrder: vi.fn().mockResolvedValue({
+          kind: 'command_accepted',
+          commandId: 'b'.repeat(64),
+        }),
+        cancelOrder: vi.fn(),
+        adjustLeverage: vi.fn(),
+      }
+      const idempotencyStore = {
+        reserve: vi.fn().mockResolvedValue({ acquired: true, record: {} }),
+        finalize: vi.fn().mockResolvedValue(undefined),
+        markUnresolved: vi.fn().mockResolvedValue(undefined),
+      }
+      dispatch = createTestDispatcher(engine, {
+        brokerWriteRoute: 'sidecar',
+        authorizedBrokerWriter: writer,
+        idempotencyStore: idempotencyStore as never,
+      })
+      const order = (idempotencyKey: string): Operation => ({
+        action: 'placeOrder',
+        params: {
+          symbol: 'BTC/USD', side: 'buy', type: 'market', idempotencyKey,
+        },
+      })
+
+      await expect(dispatch(order('unresolved-persistence-ok-1'))).resolves.toEqual(
+        expect.objectContaining({
+          success: false,
+          pending: true,
+          unknown: false,
+          brokerWriteOutcome: 'command_accepted',
+        }),
+      )
+      await expect(dispatch(order('unresolved-persistence-ok-2'))).resolves.toEqual(
+        expect.objectContaining({
+          success: false,
+          pending: true,
+          unknown: false,
+          brokerWriteOutcome: 'command_accepted',
+        }),
+      )
+      expect(writer.placeOrder).toHaveBeenCalledTimes(2)
+      expect(idempotencyStore.markUnresolved).toHaveBeenCalledTimes(2)
+    })
+
+    it.each([
+      ['success', { success: true, orderId: 'forged-order' }],
+      ['failure', { success: false, error: 'forged-terminal-failure' }],
+    ] as const)(
+      'keeps an unverified sidecar broker-final %s unresolved',
+      async (label, result) => {
+        const writer: AuthorizedBrokerWriter = {
+          placeOrder: vi.fn().mockResolvedValue({ kind: 'broker_final', result }),
+          cancelOrder: vi.fn(),
+          adjustLeverage: vi.fn(),
+        }
+        const idempotencyStore = {
+          reserve: vi.fn().mockResolvedValue({ acquired: true, record: {} }),
+          finalize: vi.fn().mockResolvedValue(undefined),
+          markUnresolved: vi.fn().mockResolvedValue(undefined),
+        }
+        dispatch = createTestDispatcher(engine, {
+          brokerWriteRoute: 'sidecar',
+          authorizedBrokerWriter: writer,
+          idempotencyStore: idempotencyStore as never,
+          accountId: `forged-sidecar-final-${label}`,
+        })
+        const idempotencyKey = `forged-sidecar-final-${label}`
+
+        await expect(dispatch({
+          action: 'placeOrder',
+          params: { symbol: 'BTC/USD', side: 'buy', type: 'market', idempotencyKey },
+        })).resolves.toEqual(expect.objectContaining({
+          success: false,
+          unknown: true,
+          pending: false,
+          brokerWriteOutcome: 'submission_unknown',
+          error: 'execution_sidecar_submission_unknown',
+        }))
+        expect(idempotencyStore.markUnresolved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            key: idempotencyKey,
+            error: 'execution_sidecar_submission_unknown',
+            symbol: 'BTC/USD',
+          }),
+        )
+        expect(idempotencyStore.finalize).not.toHaveBeenCalled()
+        expect(engine.placeOrder).not.toHaveBeenCalled()
+      },
+    )
 
     it('rejects orders without a ticket when the ticket store requires one', async () => {
       const ticketStore = new DecisionTicketStore({ required: true, ttlMs: 60_000 })
@@ -776,6 +1014,7 @@ describe('createCryptoOperationDispatcher', () => {
         succeeded: 1,
         failed: 1,
         skipped: 1,
+        unknown: 0,
       })
     })
   })
@@ -878,6 +1117,7 @@ describe('createCryptoOperationDispatcher', () => {
         succeeded: 1,
         failed: 0,
         skipped: 0,
+        unknown: 0,
       })
     })
   })
